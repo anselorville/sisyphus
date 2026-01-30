@@ -72,6 +72,43 @@ Set the following environment variables:
 - `GLM_ASR_MODEL`: Path to GLM-ASR model (optional, defaults to HuggingFace)
 - `QWEN_TTS_MODEL`: Path to Qwen-TTS model (optional, defaults to HuggingFace)
 
+### CUDA Setup
+
+- Install Visual C++ Redistributable: https://aka.ms/vs/17/release/vc_redist.x64.exe
+- Install CUDA-enabled PyTorch in `inference/venv`:
+  ```bash
+  cd inference/venv/Scripts
+  pip install torch==2.4.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+  python -c "import torch; print('CUDA:', torch.cuda.is_available())"
+  ```
+
+### Model Runtime Dependencies
+
+GLM-ASR and Qwen3-TTS require different Transformers versions.
+Use separate virtual environments and launch TTS with `TTS_PYTHON`.
+
+```bash
+# ASR env (transformers 5.x)
+pip install git+https://github.com/huggingface/transformers
+
+# TTS env (transformers 4.57.x)
+pip install -r inference/requirements-tts.txt
+```
+
+### Model Configuration
+
+Create `inference/models.yaml` to point to local model paths and GPU settings.
+See `docs/MODELS.md` for a full example.
+
+### Performance Benchmarks (Expected)
+
+| Component | CPU | CUDA 12.6 | Gain |
+| --- | --- | --- | --- |
+| ASR inference | ~3.5s | ~200-500ms | 6-25x |
+| TTS synthesis | ~2.3s | ~100-200ms | 10-23x |
+| Voice cloning | N/A | ~300-500ms | New |
+| End-to-end | ~5.8s | ~400-700ms | 10-15x |
+
 ## Development
 
 - **Backend code**: `src-tauri/src/`

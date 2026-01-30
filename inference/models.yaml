@@ -1,0 +1,11 @@
+asr:
+  model_path: "F:\\GitRepository\\GLM-ASR-Nano-2512"
+  device: auto
+  fp16: true
+
+tts:
+  base_model_path: "F:\\GitRepository\\Qwen3-TTS-12Hz-1.7B-Base"
+  custom_model_path: "F:\\GitRepository\\Qwen3-TTS-12Hz-1.7B-CustomVoice"
+  device: auto
+  fp16: true
+  default_voice: custom_voice

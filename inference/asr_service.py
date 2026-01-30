@@ -1,8 +1,11 @@
 import asyncio
-import websockets
 import json
-import numpy as np
+import os
 from typing import Optional
+
+import numpy as np
+import websockets
+import yaml
 
 class ASRService:
     def __init__(self, host: str = "127.0.0.1", port: int = 8765):
@@ -10,28 +13,79 @@ class ASRService:
         self.port = port
         self.model = None
         self.processor = None
+        self.device = "cpu"
+        self.use_fp16 = False
+        self.use_kv_cache = True
+        self.model_path = "THUDM/glm-asr-nano-2512"
         self.sample_rate = 16000
         self.frame_size = 640
         self.accumulated_audio = []
         self.window_duration = 2.5
         self.overlap_duration = 0.5
         self.overlap_samples = int(self.sample_rate * self.overlap_duration)
+
+    def load_config(self) -> None:
+        config_path = os.path.join(os.path.dirname(__file__), "models.yaml")
+        config = {}
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as handle:
+                config = yaml.safe_load(handle) or {}
+
+        asr_config = config.get("asr", {})
+        self.model_path = asr_config.get("model_path", self.model_path)
+        requested_device = asr_config.get("device", "auto")
+        self.use_fp16 = bool(asr_config.get("fp16", True))
+        self.use_kv_cache = bool(asr_config.get("kv_cache", True))
+
+        import torch
+
+        if requested_device == "auto":
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        else:
+            self.device = requested_device
+
+        if self.device == "cuda" and not torch.cuda.is_available():
+            print("CUDA requested but not available, falling back to CPU")
+            self.device = "cpu"
+
+        if self.device != "cuda":
+            self.use_fp16 = False
         
     async def load_model(self):
         try:
-            from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
-            
-            model_name = "THUDM/glm-asr-nano-2512"
-            print(f"Loading ASR model: {model_name}")
-            
-            self.processor = AutoProcessor.from_pretrained(model_name)
-            self.model = AutoModelForSpeechSeq2Seq.from_pretrained(model_name)
-            
+            from transformers import AutoModelForSeq2SeqLM, AutoProcessor
+
+            self.load_config()
+
+            print(f"Loading ASR model: {self.model_path}")
+
             import torch
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            self.model.to(device)
-            
-            print(f"ASR model loaded successfully on {device}")
+
+            dtype = torch.float16 if self.use_fp16 else torch.float32
+
+            self.processor = AutoProcessor.from_pretrained(
+                self.model_path, trust_remote_code=True
+            )
+            self.model = AutoModelForSeq2SeqLM.from_pretrained(
+                self.model_path,
+                dtype=dtype,
+                low_cpu_mem_usage=True,
+                trust_remote_code=True,
+            )
+
+            if hasattr(self.model, "config") and hasattr(self.model.config, "use_cache"):
+                self.model.config.use_cache = self.use_kv_cache
+            if hasattr(self.model, "generation_config") and hasattr(
+                self.model.generation_config, "use_cache"
+            ):
+                self.model.generation_config.use_cache = self.use_kv_cache
+
+            self.model.to(self.device)
+
+            print(
+                "ASR model loaded successfully on "
+                f"{self.device} (fp16={self.use_fp16}, kv_cache={self.use_kv_cache})"
+            )
             return True
         except Exception as e:
             print(f"Error loading ASR model: {e}")
@@ -52,14 +106,19 @@ class ASRService:
         
         try:
             import torch
-            
-            inputs = self.processor(audio_array, sampling_rate=self.sample_rate, return_tensors="pt")
-            input_features = inputs.input_features.to(self.model.device)
-            
-            with torch.no_grad():
-                predicted_ids = self.model.generate(input_features)
-            
-            transcription = self.processor.batch_decode(predicted_ids, skip_special_tokens=True)[0]
+
+            inputs = self.processor.apply_transcription_request(audio_array)
+            inputs = inputs.to(self.model.device, dtype=self.model.dtype)
+
+            with torch.inference_mode():
+                predicted_ids = self.model.generate(
+                    **inputs, use_cache=self.use_kv_cache, do_sample=False, max_new_tokens=500
+                )
+
+            decoded = self.processor.batch_decode(
+                predicted_ids[:, inputs.input_ids.shape[1] :], skip_special_tokens=True
+            )
+            transcription = decoded[0]
             
             return {
                 "partial": "",
