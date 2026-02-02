@@ -3,12 +3,15 @@ mod conversation;
 mod inference;
 mod llm;
 
-use audio::capture::AudioCapture;
-use audio::playback::AudioPlayback;
-use conversation::ConversationState;
-use llm::LlmClient;
-use std::sync::Arc;
-use tauri::Manager;
+use audio::capture::{is_recording, start_recording, stop_recording};
+use audio::playback::{init_playback, is_playback_active, queue_playback_audio, start_playback, stop_playback};
+use conversation::{
+    add_assistant_message, add_user_message, get_conversation_history, get_conversation_status,
+    is_conversation_active, transition_conversation_status, ConversationState,
+};
+use inference::client::{test_asr_connection, test_tts_connection};
+use llm::{send_llm_request, stream_llm_response, LlmClient};
+use std::sync::{Arc, Mutex};
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -17,17 +20,23 @@ fn greet(name: &str) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let audio_capture = Arc::new(Mutex::new(AudioCapture::new().expect("Failed to create audio capture")));
-    let audio_playback = Arc::new(Mutex::new(AudioPlayback::new()));
     let conversation_state = Arc::new(Mutex::new(ConversationState::new()));
-    let llm_client = Arc::new(Mutex::new(LlmClient::new().expect("Failed to create LLM client")));
+    let llm_client = Arc::new(Mutex::new(
+        LlmClient::new().unwrap_or_else(|e| {
+            eprintln!("Warning: Failed to create LLM client: {}. LLM features will not work.", e);
+            panic!("LLM client required");
+        }),
+    ));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .manage(audio_capture)
-        .manage(audio_playback)
         .manage(conversation_state)
         .manage(llm_client)
+        .setup(|app| {
+            // Initialize playback with app handle for event emission
+            init_playback(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             greet,
             start_recording,
