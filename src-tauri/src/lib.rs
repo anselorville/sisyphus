@@ -20,6 +20,11 @@ fn greet(name: &str) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 加载 .env 文件（如果存在）
+    if let Err(e) = dotenvy::dotenv() {
+        eprintln!("Warning: Failed to load .env file: {}. Using system environment variables.", e);
+    }
+
     let conversation_state = Arc::new(Mutex::new(ConversationState::new()));
     let llm_client = Arc::new(Mutex::new(
         LlmClient::new().unwrap_or_else(|e| {

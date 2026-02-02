@@ -1,5 +1,6 @@
 use anyhow::Result;
 use async_openai::{
+    config::OpenAIConfig,
     types::{ChatCompletionRequestMessageArgs, CreateChatCompletionRequestArgs, Role as OpenAIRole},
     Client,
 };
@@ -37,23 +38,36 @@ struct TtsRequest {
 }
 
 pub struct LlmClient {
-    client: Client<async_openai::config::OpenAIConfig>,
+    client: Client<OpenAIConfig>,
+    model: String,
 }
 
 impl LlmClient {
     pub fn new() -> Result<Self> {
-        let api_key = env::var("OPENAI_API_KEY")
-            .or_else(|_| env::var("LLM_API_KEY"))
+        // 加载 API Key（支持两种环境变量名）
+        let api_key = env::var("LLM_API_KEY")
+            .or_else(|_| env::var("OPENAI_API_KEY"))
             .map_err(|_| {
                 anyhow::anyhow!(
-                    "LLM API key not found in environment variables (OPENAI_API_KEY or LLM_API_KEY)"
+                    "LLM API key not found in environment variables (LLM_API_KEY or OPENAI_API_KEY)"
                 )
             })?;
 
-        let config = async_openai::config::OpenAIConfig::default().with_api_key(api_key);
+        // 加载 Base URL（支持 OpenAI-compatible API）
+        let base_url = env::var("LLM_BASE_URL")
+            .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+
+        // 加载模型名称
+        let model = env::var("LLM_MODEL").unwrap_or_else(|_| "gpt-3.5-turbo".to_string());
+
+        // 配置 OpenAI 客户端
+        let config = OpenAIConfig::default()
+            .with_api_key(api_key)
+            .with_api_base(base_url);
+
         let client = Client::with_config(config);
 
-        Ok(Self { client })
+        Ok(Self { client, model })
     }
 
     pub async fn stream_completion(
@@ -67,7 +81,7 @@ impl LlmClient {
         let mut last_emit_time = std::time::Instant::now();
 
         let request = CreateChatCompletionRequestArgs::default()
-            .model("gpt-3.5-turbo")
+            .model(&self.model)
             .messages(messages)
             .temperature(0.7)
             .max_tokens(200_u16)
@@ -160,16 +174,16 @@ pub async fn send_llm_request(
     user_message: String,
 ) -> Result<String, String> {
     // Clone the client to release the lock before await
-    let client = {
+    let (client, model) = {
         let guard = state.lock().unwrap();
-        guard.client.clone()
+        (guard.client.clone(), guard.model.clone())
     };
 
     let user_msg =
         create_user_message(user_message).map_err(|e| format!("Failed to build message: {}", e))?;
     let messages = vec![user_msg];
 
-    let temp_client = LlmClient { client };
+    let temp_client = LlmClient { client, model };
     match temp_client.stream_completion(messages).await {
         Ok((full_response, _)) => Ok(full_response),
         Err(e) => Err(format!("LLM request failed: {}", e)),
@@ -188,11 +202,15 @@ pub async fn stream_llm_response(
     conv_state: tauri::State<'_, Arc<Mutex<ConversationState>>>,
     user_message: String,
 ) -> Result<(), String> {
-    // Clone the client and history to release locks before await
-    let (client, history) = {
+    // Clone the client, model and history to release locks before await
+    let (client, model, history) = {
         let llm_guard = llm_state.lock().unwrap();
         let conv_guard = conv_state.lock().unwrap();
-        (llm_guard.client.clone(), conv_guard.get_history().clone())
+        (
+            llm_guard.client.clone(),
+            llm_guard.model.clone(),
+            conv_guard.get_history().clone(),
+        )
     };
 
     let mut messages: Vec<async_openai::types::ChatCompletionRequestMessage> = history
@@ -219,13 +237,13 @@ pub async fn stream_llm_response(
         }
     };
 
-    // Emit state change to Speaking
+    // Emit state change to Thinking
     let _ = app.emit(
         "voice_assistant:state_changed",
         serde_json::json!({ "state": "Thinking" }),
     );
 
-    let temp_client = LlmClient { client };
+    let temp_client = LlmClient { client, model };
     match temp_client.stream_completion(messages).await {
         Ok((full_response, chunks)) => {
             // Emit state change to Speaking

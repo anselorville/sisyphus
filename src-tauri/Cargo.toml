@@ -30,4 +30,5 @@ futures-util = "0.3"
 # silero-vad-rs = "0.1"  # TODO: 需要配置 ONNX Runtime TLS，暂时禁用
 cpal = "0.15"
 anyhow = "1.0"
+dotenvy = "0.15"
 

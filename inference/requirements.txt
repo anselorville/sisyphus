@@ -1,5 +1,0 @@
-websockets>=12.0
-transformers @ git+https://github.com/huggingface/transformers
-numpy>=1.24.0
-librosa>=0.10.0
-pyyaml>=6.0
