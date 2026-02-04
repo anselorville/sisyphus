@@ -209,7 +209,7 @@ sisyphus/
 - [x] Python 虚拟环境已创建（venv 和 venv-tts）
 - [x] CUDA 环境已配置（torch 2.4.0+cu124）
 - [x] 模型已下载（GLM-ASR-Nano-2512, Qwen3-TTS-12Hz-1.7B）
-- [ ] OpenAI API Key 已设置（环境变量）
+- [x] OpenAI API Key 已设置（环境变量）
 - [x] Rust 编译通过（cargo build 成功）
 
 ### 步骤 1: 启动 Python 推理服务
