@@ -220,7 +220,7 @@ pub async fn stream_llm_response(
 
     // Connect to TTS WebSocket
     let tts_conn = connect_async(TTS_HOST).await;
-    let (mut ws_stream, _) = match tts_conn {
+    let (ws_stream, _) = match tts_conn {
         Ok(conn) => conn,
         Err(e) => {
             eprintln!("Failed to connect to TTS: {}", e);
@@ -231,6 +231,34 @@ pub async fn stream_llm_response(
             return Err(format!("TTS connection failed: {}", e));
         }
     };
+    let (mut ws_writer, mut ws_reader) = ws_stream.split();
+
+    // Receive TTS audio continuously while LLM stream is still generating text.
+    // This prevents the server-side send buffer from stalling and triggering ping timeouts.
+    let tts_receiver = tauri::async_runtime::spawn(async move {
+        while let Some(msg_result) = ws_reader.next().await {
+            match msg_result {
+                Ok(WsMessage::Binary(audio_data)) => {
+                    if let Err(e) = queue_playback_audio(audio_data.to_vec()) {
+                        eprintln!("Failed to queue audio: {}", e);
+                    }
+                }
+                Ok(WsMessage::Text(text)) => {
+                    if let Ok(status) = serde_json::from_str::<serde_json::Value>(&text) {
+                        if status.get("type").and_then(|v| v.as_str()) == Some("complete") {
+                            break;
+                        }
+                    }
+                }
+                Ok(WsMessage::Close(_)) => break,
+                Err(e) => {
+                    eprintln!("TTS WebSocket error: {}", e);
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
 
     // Emit state change to Thinking
     let _ = app.emit(
@@ -312,7 +340,7 @@ pub async fn stream_llm_response(
                             };
 
                             if let Ok(json) = serde_json::to_string(&tts_request) {
-                                let _ = ws_stream.send(WsMessage::Text(json)).await;
+                                let _ = ws_writer.send(WsMessage::Text(json.into())).await;
                             }
 
                             text_id += 1;
@@ -345,46 +373,17 @@ pub async fn stream_llm_response(
         };
 
         if let Ok(json) = serde_json::to_string(&tts_request) {
-            let _ = ws_stream.send(WsMessage::Text(json)).await;
+            let _ = ws_writer.send(WsMessage::Text(json.into())).await;
         }
     }
 
     // Send end signal to TTS
     let end_request = serde_json::json!({ "type": "end" });
-    let _ = ws_stream
-        .send(WsMessage::Text(end_request.to_string()))
+    let _ = ws_writer
+        .send(WsMessage::Text(end_request.to_string().into()))
         .await;
-
-    // Receive audio from TTS and queue for playback
-    while let Some(msg_result) = ws_stream.next().await {
-        match msg_result {
-            Ok(WsMessage::Binary(audio_data)) => {
-                // Queue audio for playback
-                if let Err(e) = queue_playback_audio(audio_data) {
-                    eprintln!("Failed to queue audio: {}", e);
-                }
-            }
-            Ok(WsMessage::Text(text)) => {
-                // TTS might send status messages
-                if let Ok(status) = serde_json::from_str::<serde_json::Value>(&text) {
-                    if status.get("type").and_then(|v| v.as_str()) == Some("complete") {
-                        break;
-                    }
-                }
-            }
-            Ok(WsMessage::Close(_)) => {
-                break;
-            }
-            Err(e) => {
-                eprintln!("TTS WebSocket error: {}", e);
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    // Close TTS connection
-    let _ = ws_stream.close(None).await;
+    let _ = ws_writer.send(WsMessage::Close(None)).await;
+    let _ = tts_receiver.await;
 
     // Emit final complete event (empty content, just signal completion)
     let _ = app.emit(

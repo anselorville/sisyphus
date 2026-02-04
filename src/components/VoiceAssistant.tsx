@@ -176,14 +176,15 @@ export function VoiceAssistant() {
   }, [reset]);
 
   const handleStopRecording = useCallback(async () => {
-    // Only process if we're in Listening state
+    // Only process if we're in an active recording/finalizing state
     const currentStatus = useConversation.getState().status;
-    if (currentStatus !== 'Listening') {
-      console.log('Ignoring stop - not in Listening state:', currentStatus);
+    if (currentStatus !== 'Listening' && currentStatus !== 'FinalizingASR') {
+      console.log('Ignoring stop - not in stoppable state:', currentStatus);
       return;
     }
 
     try {
+      setStatus('FinalizingASR');
       await invoke('stop_recording');
 
       // Get the current transcript and send to LLM
@@ -223,9 +224,8 @@ export function VoiceAssistant() {
 
   if (!mounted) return null;
 
-  const isRecordingDisabled = status === 'Listening' || status === 'Thinking' || status === 'Speaking';
-  // Only allow Stop during Listening to prevent duplicate submissions
-  const isStopDisabled = status !== 'Listening';
+  const isRecordingDisabled = status !== 'Idle';
+  const isStopDisabled = status !== 'Listening' && status !== 'FinalizingASR';
 
   return (
     <div style={{ padding: '20px', fontFamily: 'sans-serif' }}>

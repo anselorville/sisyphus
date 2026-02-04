@@ -242,13 +242,9 @@ async fn run_asr_session(
 
                             let _ = app.emit("voice_assistant:user_transcript", &transcript);
 
-                            // If we got a final result, transition state
-                            if final_text.is_some() {
-                                let _ = app.emit(
-                                    "voice_assistant:state_changed",
-                                    serde_json::json!({ "state": "FinalizingASR" }),
-                                );
-                            }
+                            // Do not force state transitions here.
+                            // ASR can emit multiple "final" segments during one recording,
+                            // and emitting FinalizingASR from here can lock the frontend stop flow.
                         }
                     }
                     Ok(Message::Close(_)) => {

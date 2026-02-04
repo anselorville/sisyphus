@@ -79,6 +79,12 @@ class ASRService:
                 self.model.generation_config, "use_cache"
             ):
                 self.model.generation_config.use_cache = self.use_kv_cache
+            if hasattr(self.model, "generation_config"):
+                generation_config = self.model.generation_config
+                if getattr(generation_config, "pad_token_id", None) is None:
+                    eos_token_id = getattr(generation_config, "eos_token_id", None)
+                    if eos_token_id is not None:
+                        generation_config.pad_token_id = eos_token_id
 
             self.model.to(self.device)
 
@@ -112,7 +118,11 @@ class ASRService:
 
             with torch.inference_mode():
                 predicted_ids = self.model.generate(
-                    **inputs, use_cache=self.use_kv_cache, do_sample=False, max_new_tokens=500
+                    **inputs,
+                    use_cache=self.use_kv_cache,
+                    do_sample=False,
+                    max_new_tokens=500,
+                    pad_token_id=getattr(self.model.generation_config, "pad_token_id", None),
                 )
 
             decoded = self.processor.batch_decode(

@@ -160,6 +160,13 @@ fn resample_for_playback(input: &[i16], target_rate: u32, target_channels: u16) 
     }
 }
 
+fn bytes_to_i16_samples(bytes: &[u8]) -> Vec<i16> {
+    bytes
+        .chunks_exact(2)
+        .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect()
+}
+
 static DEBUG_FRAME_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 #[tauri::command]
@@ -168,12 +175,7 @@ pub fn queue_playback_audio(audio_data: Vec<u8>) -> Result<(), String> {
     let frame_num = DEBUG_FRAME_COUNT.fetch_add(1, Ordering::SeqCst);
     if frame_num < 3 {
         // Show first few samples as i16
-        let samples: &[i16] = unsafe {
-            std::slice::from_raw_parts(
-                audio_data.as_ptr() as *const i16,
-                audio_data.len().min(20) / 2,
-            )
-        };
+        let samples = bytes_to_i16_samples(&audio_data[..audio_data.len().min(20)]);
         println!(
             "TTS frame {}: {} bytes, first samples: {:?}",
             frame_num,
@@ -272,15 +274,11 @@ fn start_playback_internal() -> Result<(), String> {
                 let mut queue = queue.lock().unwrap();
                 while !queue.is_empty() && output_idx < data.len() {
                     if let Some(audio_bytes) = queue.pop_front() {
-                        let samples: &[i16] = unsafe {
-                            std::slice::from_raw_parts(
-                                audio_bytes.as_ptr() as *const i16,
-                                audio_bytes.len() / 2,
-                            )
-                        };
+                        let samples = bytes_to_i16_samples(&audio_bytes);
 
                         // Resample to target format
-                        let resampled_samples = resample_for_playback(samples, target_rate, target_channels);
+                        let resampled_samples =
+                            resample_for_playback(&samples, target_rate, target_channels);
 
                         for sample in resampled_samples {
                             if output_idx < data.len() {

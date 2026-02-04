@@ -210,8 +210,9 @@ class TTSService:
                 if isinstance(message, str):
                     try:
                         control = json.loads(message)
-                        
-                        if control.get("type") == "text_chunk":
+                        message_type = control.get("type")
+
+                        if message_type == "text_chunk":
                             text = control.get("text", "")
                             text_id = control.get("text_id", 0)
                             voice = control.get("voice")
@@ -241,6 +242,9 @@ class TTSService:
                                     await websocket.send(frame)
                             else:
                                 print(f"No frames generated for text_id={text_id}")
+                        elif message_type == "end":
+                            await websocket.send(json.dumps({"type": "complete"}))
+                            break
                     except json.JSONDecodeError as e:
                         print(f"Invalid JSON message: {e}")
                     except Exception as e:
