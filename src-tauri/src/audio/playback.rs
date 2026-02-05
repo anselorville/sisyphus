@@ -171,6 +171,7 @@ static DEBUG_FRAME_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::At
 
 #[tauri::command]
 pub fn queue_playback_audio(audio_data: Vec<u8>) -> Result<(), String> {
+    println!("DEBUG: Queueing audio bytes: {}", audio_data.len());
     // Debug: print info for first few frames
     let frame_num = DEBUG_FRAME_COUNT.fetch_add(1, Ordering::SeqCst);
     if frame_num < 3 {
