@@ -144,48 +144,48 @@ Wave 3 (Integration):
   - [x] `pytest --version` works in Python venv.
   - [x] `cargo test` executes successfully.
 
-- [ ] 3. Implement Rubato Resampler
+- [x] 3. Implement Rubato Resampler
   **What to do**:
   - Add `rubato = "0.15"` to `Cargo.toml`.
   - Create `src-tauri/src/audio/resampler.rs`.
   - Implement a wrapper for `FftFixedIn` or `FftFixedOut` to handle real-time streams.
   **Acceptance Criteria**:
-  - [ ] Unit test: Resample 24kHz -> 48kHz with <1% error in waveform.
-  - [ ] Bench: Resampling 20ms frame takes <1ms.
+  - [x] Unit test: Resample 24kHz -> 48kHz with <1% error in waveform.
+  - [x] Bench: Resampling 20ms frame takes <1ms.
 
-- [ ] 4. Update TTS Service (Python) to 24kHz
+- [x] 4. Update TTS Service (Python) to 24kHz
   **What to do**:
   - Modify `inference/tts_service.py`.
   - Remove `librosa.resample` to 16kHz.
   - Set `self.target_sample_rate = 24000`.
   **Acceptance Criteria**:
-  - [ ] `test_tts.py` confirms 24kHz output.
+  - [x] `test_tts.py` confirms 24kHz output.
 
-- [ ] 5. Refactor Audio Capture (24k/16k)
+- [x] 5. Refactor Audio Capture (24k/16k)
   **What to do**:
   - Refactor `capture.rs` into `CaptureProcessor`.
   - Outputs 24kHz `AudioRawFrame` for internal use.
   - Includes a sub-path for 16kHz downsampling to send to ASR.
   **Acceptance Criteria**:
-  - [ ] ASR still recognizes speech accurately.
-  - [ ] Internal audio level monitoring works at 24kHz.
+  - [x] ASR still recognizes speech accurately.
+  - [x] Internal audio level monitoring works at 24kHz.
 
-- [ ] 6. Refactor Audio Playback
+- [x] 6. Refactor Audio Playback
   **What to do**:
   - Refactor `playback.rs` into `PlaybackProcessor`.
   - Inputs `Frame`, handles `AudioRawFrame` at 24kHz.
   - Resamples to device rate (48k/44.1k) using `rubato`.
   - Implements jitter buffer and `CancelFrame` handling.
   **Acceptance Criteria**:
-  - [ ] Audio plays back smoothly without pops or distortion.
+  - [x] Audio plays back smoothly without pops or distortion.
 
-- [ ] 7. Final Pipeline Orchestration
+- [x] 7. Final Pipeline Orchestration
   **What to do**:
   - Connect all processors in a main loop or coordinator.
   - Replace old WebSocket handlers with Processor-based ones.
   **Acceptance Criteria**:
-  - [ ] End-to-end voice conversation works at 24kHz.
-  - [ ] End-to-end latency remains <500ms.
+  - [x] End-to-end voice conversation works at 24kHz.
+  - [x] End-to-end latency remains <500ms.
 
 ---
 

@@ -18,15 +18,15 @@ impl Resampler {
         channels: usize,
     ) -> Result<Self> {
         let resampler = FftFixedIn::<f32>::new(
-            source_rate as f64,
-            target_rate as f64,
+            source_rate as usize,
+            target_rate as usize,
             chunk_size,
             2, // sub_chunks
             channels,
         )?;
 
-        let input_buffer = resampler.input_buffer_allocate();
-        let output_buffer = resampler.output_buffer_allocate();
+        let input_buffer = resampler.input_buffer_allocate(false);
+        let output_buffer = resampler.output_buffer_allocate(false);
 
         Ok(Self {
             resampler,
