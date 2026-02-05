@@ -22,8 +22,8 @@ class TTSService:
         self.base_model_path = "Qwen/Qwen-Audio-TTS"
         self.custom_model_path = "Qwen/Qwen-Audio-TTS"
         self.sample_rate = 24000  # TTS model native sample rate
-        self.target_sample_rate = 16000  # Target for Rust playback
-        self.frame_size = 640  # 640 bytes = 320 samples @ 16kHz = 20ms
+        self.target_sample_rate = 24000  # Target for Rust playback (Standardized at 24kHz)
+        self.frame_size = 960  # 960 bytes = 480 samples @ 24kHz = 20ms
 
     def load_config(self) -> None:
         config_path = os.path.join(os.path.dirname(__file__), "models.yaml")
@@ -143,18 +143,7 @@ class TTSService:
                 output_sample_rate = sr
             
             print(f"TTS model output sample rate: {output_sample_rate}Hz, target: {self.target_sample_rate}Hz")
-            print(f"Audio waveform shape before resample: {audio_waveform.shape}, min: {audio_waveform.min():.4f}, max: {audio_waveform.max():.4f}")
-
-            # Always resample to target rate for consistency
-            if output_sample_rate != self.target_sample_rate:
-                import librosa
-                print(f"Resampling from {output_sample_rate}Hz to {self.target_sample_rate}Hz")
-                audio_waveform = librosa.resample(
-                    audio_waveform,
-                    orig_sr=output_sample_rate,
-                    target_sr=self.target_sample_rate
-                )
-                print(f"Audio waveform shape after resample: {audio_waveform.shape}")
+            print(f"Audio waveform shape: {audio_waveform.shape}, min: {audio_waveform.min():.4f}, max: {audio_waveform.max():.4f}")
 
             # Normalize audio to prevent clipping
             max_val = np.abs(audio_waveform).max()

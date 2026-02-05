@@ -2,6 +2,7 @@ mod audio;
 mod conversation;
 mod inference;
 mod llm;
+mod pipeline;
 
 use audio::capture::{is_recording, start_recording, stop_recording};
 use audio::playback::{init_playback, is_playback_active, queue_playback_audio, start_playback, stop_playback};

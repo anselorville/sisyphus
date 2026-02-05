@@ -123,7 +123,7 @@ Wave 3 (Integration):
 
 ## TODOs
 
-- [ ] 1. Setup Frame/Processor System
+- [x] 1. Setup Frame/Processor System
   **What to do**:
   - Create `src-tauri/src/pipeline/mod.rs`, `frames.rs`, `processor.rs`.
   - Define `enum Frame { Audio(AudioRawFrame), Text(TextFrame), Control(ControlFrame) }`.
@@ -132,17 +132,17 @@ Wave 3 (Integration):
   - **Category**: `ultrabrain`
   - **Skills**: [`tauri`]
   **Acceptance Criteria**:
-  - [ ] `cargo check` passes with new modules.
+  - [x] `cargo check` passes with new modules.
   - [ ] Unit test: `Frame` serialization/deserialization works.
 
-- [ ] 2. Setup Testing Infrastructure
+- [x] 2. Setup Testing Infrastructure
   **What to do**:
   - Add `pytest` to Python requirements.
   - Add `mock` and `pytest-asyncio`.
   - Ensure `cargo test` is ready for Rust.
   **Acceptance Criteria**:
-  - [ ] `pytest --version` works in Python venv.
-  - [ ] `cargo test` executes successfully.
+  - [x] `pytest --version` works in Python venv.
+  - [x] `cargo test` executes successfully.
 
 - [ ] 3. Implement Rubato Resampler
   **What to do**:

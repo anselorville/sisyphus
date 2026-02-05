@@ -93,3 +93,6 @@ urllib3==2.6.3
 uvicorn==0.40.0
 websockets==16.0
 numpy==1.26.4
+pytest
+pytest-asyncio
+mock
