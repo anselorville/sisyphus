@@ -33,9 +33,16 @@ class ASRService:
 
         asr_config = config.get("asr", {})
         self.model_path = asr_config.get("model_path", self.model_path)
+        self.sample_rate = int(asr_config.get("sample_rate", self.sample_rate))
+        self.window_duration = float(asr_config.get("window_duration", self.window_duration))
+        self.overlap_duration = float(asr_config.get("overlap_duration", self.overlap_duration))
+        self.frame_size = int(asr_config.get("frame_size", self.frame_size))
         requested_device = asr_config.get("device", "auto")
         self.use_fp16 = bool(asr_config.get("fp16", True))
         self.use_kv_cache = bool(asr_config.get("kv_cache", True))
+
+        # Recalculate overlap samples based on updated sample rate
+        self.overlap_samples = int(self.sample_rate * self.overlap_duration)
 
         import torch
 
@@ -81,14 +88,8 @@ class ASRService:
                 self.model.generation_config.use_cache = self.use_kv_cache
             if hasattr(self.model, "generation_config"):
                 generation_config = self.model.generation_config
-                # Ensure pad_token_id is a single integer
-                if isinstance(getattr(generation_config, "pad_token_id", None), (list, tuple)):
-                    generation_config.pad_token_id = generation_config.pad_token_id[0]
-                
                 if getattr(generation_config, "pad_token_id", None) is None:
                     eos_token_id = getattr(generation_config, "eos_token_id", None)
-                    if isinstance(eos_token_id, (list, tuple)):
-                        eos_token_id = eos_token_id[0]
                     if eos_token_id is not None:
                         generation_config.pad_token_id = eos_token_id
 
@@ -108,7 +109,7 @@ class ASRService:
         pcm_array = np.frombuffer(pcm_data, dtype=np.int16)
         return pcm_array.astype(np.float32) / 32768.0
     
-    async def transcribe(self, audio_array: np.ndarray, is_final: bool = False) -> dict:
+    async def transcribe(self, audio_array: np.ndarray) -> dict:
         if self.model is None or self.processor is None:
             return {
                 "partial": "",
@@ -119,23 +120,8 @@ class ASRService:
         try:
             import torch
 
-            # For very short audio, pad it to at least 0.1s to avoid processor errors
-            if len(audio_array) < self.sample_rate * 0.1:
-                padding = np.zeros(int(self.sample_rate * 0.1) - len(audio_array))
-                audio_array = np.concatenate([audio_array, padding])
-
             inputs = self.processor.apply_transcription_request(audio_array)
             inputs = inputs.to(self.model.device, dtype=self.model.dtype)
-
-            pad_id = getattr(self.model.generation_config, "pad_token_id", None)
-            if isinstance(pad_id, (list, tuple)):
-                pad_id = pad_id[0]
-            
-            # Explicitly force EOS as PAD if still list or None to avoid comparison errors in transformers
-            if pad_id is None or isinstance(pad_id, (list, tuple)):
-                pad_id = getattr(self.model.generation_config, "eos_token_id", 0)
-                if isinstance(pad_id, (list, tuple)):
-                    pad_id = pad_id[0]
 
             with torch.inference_mode():
                 predicted_ids = self.model.generate(
@@ -143,7 +129,7 @@ class ASRService:
                     use_cache=self.use_kv_cache,
                     do_sample=False,
                     max_new_tokens=500,
-                    pad_token_id=pad_id,
+                    pad_token_id=getattr(self.model.generation_config, "pad_token_id", None),
                 )
 
             decoded = self.processor.batch_decode(
@@ -152,15 +138,15 @@ class ASRService:
             transcription = decoded[0]
             
             return {
-                "partial": "" if is_final else transcription,
-                "final": transcription if is_final else None,
+                "partial": "",
+                "final": transcription,
                 "confidence": 0.95
             }
         except Exception as e:
             print(f"Transcription error: {e}")
             return {
                 "partial": "",
-                "final": "[Transcription error]" if is_final else None,
+                "final": "[Transcription error]",
                 "confidence": 0.0
             }
     
@@ -178,57 +164,30 @@ class ASRService:
             else:
                 self.accumulated_audio = []
             
-            result = await self.transcribe(audio_window, is_final=False)
+            result = await self.transcribe(audio_window)
             result["type"] = "asr_result"
             return result
         
         return None
-
-    async def flush(self) -> Optional[dict]:
-        if not self.accumulated_audio:
-            return None
-        
-        print(f"Flushing remaining {len(self.accumulated_audio)} samples")
-        audio_window = np.array(self.accumulated_audio)
-        self.accumulated_audio = []
-        
-        result = await self.transcribe(audio_window, is_final=True)
-        result["type"] = "asr_result"
-        return result
     
     async def handle_connection(self, websocket):
         print(f"New ASR connection from {websocket.remote_address}")
-        self.accumulated_audio = []
         
         try:
             async for message in websocket:
                 if isinstance(message, bytes):
-                    # print(f"Received {len(message)} bytes of audio")
                     result = await self.process_audio_frame(message)
                     if result:
-                        print(f"Sending partial/window result: {result.get('partial', '')}")
                         await websocket.send(json.dumps(result))
                 elif isinstance(message, str):
-                    print(f"Received control message: {message}")
                     control = json.loads(message)
                     if control.get("type") == "reset":
                         self.accumulated_audio = []
                         print("Audio buffer reset")
-                    elif control.get("type") == "stop":
-                        print("Stop command received, flushing buffer...")
-                        result = await self.flush()
-                        if result:
-                            print(f"Sending final flush result: {result.get('final', '')}")
-                            await websocket.send(json.dumps(result))
-                        else:
-                            print("Flush returned no result (empty buffer)")
-                        print("Audio buffer flushed due to stop command")
         except websockets.exceptions.ConnectionClosed:
             print(f"ASR connection closed: {websocket.remote_address}")
         except Exception as e:
             print(f"ASR connection error: {e}")
-            import traceback
-            traceback.print_exc()
     
     async def start(self):
         print(f"Starting ASR WebSocket server on {self.host}:{self.port}")

@@ -15,8 +15,21 @@ use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 use crate::audio::playback::queue_playback_audio;
 use crate::conversation::{ConversationState, Message, Role};
 
-const MIN_CHUNK_TOKENS: usize = 20;
 const TTS_HOST: &str = "ws://127.0.0.1:8766";
+
+fn get_min_chunk_tokens() -> usize {
+    env::var("LLM_TTS_MIN_CHUNK_TOKENS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(20)
+}
+
+fn get_max_chunk_ms() -> u64 {
+    env::var("LLM_TTS_MAX_CHUNK_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(300)
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LlmChunk {
@@ -102,7 +115,7 @@ impl LlmClient {
 
                             let elapsed_ms = last_emit_time.elapsed().as_millis() as u64;
 
-                            let should_emit = token_count >= MIN_CHUNK_TOKENS
+                            let should_emit = token_count >= get_min_chunk_tokens()
                                 || (token_count >= 10 && has_punctuation)
                                 || elapsed_ms >= 200;
 
@@ -236,34 +249,28 @@ pub async fn stream_llm_response(
     // Receive TTS audio continuously while LLM stream is still generating text.
     // This prevents the server-side send buffer from stalling and triggering ping timeouts.
     let tts_receiver = tauri::async_runtime::spawn(async move {
-        println!("TTS: Receiver loop started");
         while let Some(msg_result) = ws_reader.next().await {
             match msg_result {
                 Ok(WsMessage::Binary(audio_data)) => {
                     if let Err(e) = queue_playback_audio(audio_data.to_vec()) {
-                        println!("Failed to queue audio: {}", e);
+                        eprintln!("Failed to queue audio: {}", e);
                     }
                 }
                 Ok(WsMessage::Text(text)) => {
                     if let Ok(status) = serde_json::from_str::<serde_json::Value>(&text) {
                         if status.get("type").and_then(|v| v.as_str()) == Some("complete") {
-                            println!("TTS: Received complete signal");
                             break;
                         }
                     }
                 }
-                Ok(WsMessage::Close(frame)) => {
-                    println!("TTS: Received Close frame: {:?}", frame);
-                    break;
-                }
+                Ok(WsMessage::Close(_)) => break,
                 Err(e) => {
-                    println!("TTS WebSocket error: {}", e);
+                    eprintln!("TTS WebSocket error: {}", e);
                     break;
                 }
                 _ => {}
             }
         }
-        println!("TTS: Receiver loop finished");
     });
 
     // Emit state change to Thinking
@@ -286,8 +293,6 @@ pub async fn stream_llm_response(
         .create_stream(request)
         .await
         .map_err(|e| format!("Failed to create LLM stream: {}", e))?;
-
-    println!("DEBUG: LLM Stream started");
 
     let mut full_response = String::new();
     let mut current_chunk = String::new();
@@ -327,9 +332,9 @@ pub async fn stream_llm_response(
                         let elapsed_ms = last_emit_time.elapsed().as_millis() as u64;
 
                         // Emit chunk when: enough tokens, or punctuation, or time elapsed
-                        let should_emit = token_count >= MIN_CHUNK_TOKENS
+                        let should_emit = token_count >= get_min_chunk_tokens()
                             || (token_count >= 5 && has_punctuation)
-                            || elapsed_ms >= 300;
+                            || elapsed_ms >= get_max_chunk_ms();
 
                         if should_emit && !current_chunk.is_empty() {
                             let chunk = LlmChunk {
@@ -386,16 +391,12 @@ pub async fn stream_llm_response(
     }
 
     // Send end signal to TTS
-    println!("DEBUG: LLM Stream finished, sending end to TTS");
     let end_request = serde_json::json!({ "type": "end" });
     let _ = ws_writer
         .send(WsMessage::Text(end_request.to_string().into()))
         .await;
-    
-    match tts_receiver.await {
-        Ok(_) => println!("TTS: Receiver task joined successfully"),
-        Err(e) => println!("TTS: Receiver task failed/panicked: {:?}", e),
-    }
+    let _ = ws_writer.send(WsMessage::Close(None)).await;
+    let _ = tts_receiver.await;
 
     // Emit final complete event (empty content, just signal completion)
     let _ = app.emit(
