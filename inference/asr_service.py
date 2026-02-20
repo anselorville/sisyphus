@@ -91,7 +91,7 @@ class ASRService:
                 if getattr(generation_config, "pad_token_id", None) is None:
                     eos_token_id = getattr(generation_config, "eos_token_id", None)
                     if eos_token_id is not None:
-                        generation_config.pad_token_id = eos_token_id
+                        generation_config.pad_token_id = eos_token_id[0] if isinstance(eos_token_id, list) else eos_token_id
 
             self.model.to(self.device)
 
@@ -129,7 +129,7 @@ class ASRService:
                     use_cache=self.use_kv_cache,
                     do_sample=False,
                     max_new_tokens=500,
-                    pad_token_id=getattr(self.model.generation_config, "pad_token_id", None),
+                    pad_token_id=(lambda p: p[0] if isinstance(p, list) else p)(getattr(self.model.generation_config, "pad_token_id", None)),
                 )
 
             decoded = self.processor.batch_decode(
