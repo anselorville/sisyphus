@@ -1,0 +1,5 @@
+This directory holds the archived prototype of the voice-assistant project: a Tauri + Rust desktop shell (`src-tauri/`) paired with a React/Vite frontend (`src/`, `index.html`, `vite.config.ts`, etc.) and standalone Python ASR/TTS inference services (`inference/`). It has been superseded by the Pipecat-based rewrite living at the repository root, which targets a browser client first and a Raspberry Pi travel translator later.
+
+The prototype never had a fully validated end-to-end run — ASR, TTS, and the Tauri audio pipeline were each exercised individually but not confirmed working together as a complete voice loop. It's kept around for reference: the TTS voice experiments in `test/` (Qwen-TTS voice cloning and design scripts with sample WAV outputs), the Tauri event-naming conventions used between the Rust backend and the React frontend, and the audio capture/playback pipeline design notes scattered across `src-tauri/src/audio/` and the docs (`PROJECT_CURRENT_STATUS.md`, `ENV_SETUP_SUMMARY.md`, `docs/ENV_CONFIGURATION.md`, `docs/MODELS.md`).
+
+Do not build on this code directly; treat it as a design reference while implementing the new Pipecat pipeline.

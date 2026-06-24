@@ -13,6 +13,9 @@ venv/
 venv-tts/
 venv-asr/
 __pycache__/
+*.pyc
+.venv/
+.python-version
 dist
 dist-ssr
 *.local

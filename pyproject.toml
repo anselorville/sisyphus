@@ -1,0 +1,21 @@
+[project]
+name = "sisyphus-translator"
+version = "0.1.0"
+description = "Real-time Chinese<->European-language speech translator built on Pipecat."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # NOTE: confirmed against PyPI (pipecat-ai 1.4.0) at the time this file was
+    # written. Extras below match the package's published `provides_extra` list:
+    # silero, deepgram, cartesia, anthropic, webrtc. Re-verify with
+    # `uv add "pipecat-ai[...]"` before relying on this, in case the extras or
+    # version pinning need adjusting for your environment.
+    "pipecat-ai[silero,deepgram,cartesia,anthropic,webrtc]>=1.4.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
