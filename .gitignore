@@ -33,3 +33,8 @@ dist-ssr
 
 .env
 .codegraph/
+
+# Downloaded local-model artifacts (faster-whisper cache, Piper voice
+# models, etc.) -- runtime data, not source. See app/config.py
+# (PIPER_DOWNLOAD_DIR) and README.md for the offline/local fallback path.
+models/

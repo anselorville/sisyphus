@@ -2,9 +2,16 @@
 
 Pipeline shape:
 
-    transport.input() -> STT (Deepgram) -> [transcript tap] -> user aggregator
-        -> LLM (Anthropic, translation-only prompt) -> [translation tap]
-        -> TTS (Cartesia) -> transport.output() -> assistant aggregator
+    transport.input() -> STT -> [transcript tap] -> user aggregator
+        -> LLM (translation-only prompt) -> [translation tap]
+        -> TTS -> transport.output() -> assistant aggregator
+
+The STT/LLM/TTS services are either the cloud trio (Deepgram, Anthropic,
+Cartesia) or the local/offline trio (Whisper via faster-whisper, Ollama, and
+Piper -- see app/local_services.py), chosen once at pipeline-build time by
+`should_use_local_services()` based on a startup connectivity check (or an
+explicit `FORCE_OFFLINE`/`FORCE_ONLINE` override). The pipeline *shape* is
+identical either way -- only the concrete service instances differ.
 
 The LLM step is deliberately constrained to *translation only*: the system
 prompt instructs it to detect the spoken language and translate it into the
@@ -24,6 +31,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import Frame, OutputTransportMessageUrgentFrame, TranscriptionFrame, TTSTextFrame
 from pipecat.pipeline.pipeline import Pipeline
@@ -37,11 +45,16 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.anthropic.llm import AnthropicLLMService, AnthropicLLMSettings
 from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService
+from pipecat.services.llm_service import LLMService
+from pipecat.services.stt_service import STTService
+from pipecat.services.tts_service import TTSService
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 from app.config import Settings
+from app.connectivity import has_internet_connection
+from app.local_services import build_local_llm, build_local_stt, build_local_tts
 
 # Cartesia voice: "British Reading Lady", a stable default voice available on
 # every Cartesia account. Override by editing this constant if you have a
@@ -101,10 +114,72 @@ class TranscriptTapProcessor(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
+def should_use_local_services(settings: Settings) -> bool:
+    """Decide cloud vs. local services for this run, at startup only.
+
+    Precedence:
+    1. `FORCE_OFFLINE=true` -> always local (for testing without physically
+       disconnecting the network).
+    2. `FORCE_ONLINE=true` -> always cloud (for testing the cloud path even
+       on a flaky connection, or to skip the connectivity probe).
+    3. Otherwise, probe for a working internet connection
+       (`app.connectivity.has_internet_connection`) and use local services
+       if and only if that probe fails.
+
+    This selection happens once, at pipeline-build time, for the lifetime of
+    the connection. There is no mid-conversation re-checking or switching --
+    that is explicitly out of scope for this phase.
+    """
+    if settings.force_offline:
+        logger.info("FORCE_OFFLINE=true -- using local/offline services")
+        return True
+    if settings.force_online:
+        logger.info("FORCE_ONLINE=true -- using cloud services")
+        return False
+
+    online = has_internet_connection()
+    if online:
+        logger.info("Internet connection detected -- using cloud services")
+    else:
+        logger.warning("No internet connection detected -- falling back to local/offline services")
+    return not online
+
+
+def _build_cloud_services(settings: Settings, system_prompt: str) -> tuple[STTService, LLMService, TTSService]:
+    """Build the cloud STT/LLM/TTS service trio (Deepgram/Anthropic/Cartesia)."""
+    stt = DeepgramSTTService(api_key=settings.deepgram_api_key)
+
+    llm = AnthropicLLMService(
+        api_key=settings.anthropic_api_key,
+        settings=AnthropicLLMSettings(system_instruction=system_prompt),
+    )
+
+    tts = CartesiaTTSService(
+        api_key=settings.cartesia_api_key,
+        settings=CartesiaTTSService.Settings(voice=DEFAULT_CARTESIA_VOICE_ID),
+    )
+
+    return stt, llm, tts
+
+
+def _build_local_service_trio(settings: Settings, system_prompt: str) -> tuple[STTService, LLMService, TTSService]:
+    """Build the local/offline STT/LLM/TTS service trio (Whisper/Ollama/Piper)."""
+    stt = build_local_stt(settings)
+    llm = build_local_llm(settings, system_prompt)
+    tts = build_local_tts(settings)
+    return stt, llm, tts
+
+
 def build_pipeline(
     webrtc_connection: SmallWebRTCConnection, settings: Settings
 ) -> tuple[Pipeline, LLMContext]:
     """Construct the full translator pipeline for a single WebRTC connection.
+
+    Picks cloud vs. local STT/LLM/TTS services once, at build time, via
+    `should_use_local_services()` -- see that function's docstring for the
+    selection logic (connectivity probe + FORCE_OFFLINE/FORCE_ONLINE
+    overrides). The pipeline *shape* is identical either way: only the
+    concrete service instances differ.
 
     Returns the assembled `Pipeline` plus the `LLMContext` (handy for callers
     that want to seed/inspect conversation state, though this translator does
@@ -119,18 +194,12 @@ def build_pipeline(
         ),
     )
 
-    stt = DeepgramSTTService(api_key=settings.deepgram_api_key)
-
-    tts = CartesiaTTSService(
-        api_key=settings.cartesia_api_key,
-        settings=CartesiaTTSService.Settings(voice=DEFAULT_CARTESIA_VOICE_ID),
-    )
-
     system_prompt = build_translation_system_prompt(settings.source_lang, settings.target_lang)
-    llm = AnthropicLLMService(
-        api_key=settings.anthropic_api_key,
-        settings=AnthropicLLMSettings(system_instruction=system_prompt),
-    )
+
+    if should_use_local_services(settings):
+        stt, llm, tts = _build_local_service_trio(settings, system_prompt)
+    else:
+        stt, llm, tts = _build_cloud_services(settings, system_prompt)
 
     context = LLMContext()
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
@@ -147,7 +216,7 @@ def build_pipeline(
             stt,  # Speech -> text (source language)
             original_tap,  # Tap: forward original transcript to client
             user_aggregator,  # Build user turn for the LLM
-            llm,  # Translate (Anthropic)
+            llm,  # Translate (Anthropic, or local Ollama model when offline)
             translation_tap,  # Tap: forward translated text to client
             tts,  # Translated text -> speech
             transport.output(),  # Speech audio out

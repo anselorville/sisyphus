@@ -36,6 +36,30 @@ class Settings:
     webrtc_host: str
     webrtc_port: int
 
+    # --- Offline/local fallback configuration ---
+    # See app/connectivity.py for the startup connectivity check and
+    # app/local_services.py for how these are used to build the local
+    # STT/LLM/TTS services. None of these have required values: they all
+    # have sensible defaults appropriate for a Raspberry Pi 5 target, and are
+    # only relevant when the local path is actually selected (no internet,
+    # or FORCE_OFFLINE=true).
+    force_offline: bool
+    force_online: bool
+    whisper_model: str
+    ollama_base_url: str
+    ollama_model: str
+    piper_voice: str
+    piper_download_dir: str
+
+
+def _parse_bool_env(name: str) -> bool:
+    """Parse a boolean-ish environment variable (case-insensitive).
+
+    Recognizes "true"/"1"/"yes"/"on" as True; anything else (including
+    unset/empty) is False.
+    """
+    return os.environ.get(name, "").strip().lower() in ("true", "1", "yes", "on")
+
 
 def load_settings() -> Settings:
     """Read and validate configuration from the environment.
@@ -59,6 +83,14 @@ def load_settings() -> Settings:
             f"WEBRTC_PORT must be an integer, got: {os.environ.get('WEBRTC_PORT')!r}"
         ) from exc
 
+    force_offline = _parse_bool_env("FORCE_OFFLINE")
+    force_online = _parse_bool_env("FORCE_ONLINE")
+    if force_offline and force_online:
+        raise RuntimeError(
+            "FORCE_OFFLINE and FORCE_ONLINE cannot both be set to true -- "
+            "pick at most one (or neither, to auto-detect)."
+        )
+
     return Settings(
         anthropic_api_key=os.environ["ANTHROPIC_API_KEY"],
         deepgram_api_key=os.environ["DEEPGRAM_API_KEY"],
@@ -67,4 +99,21 @@ def load_settings() -> Settings:
         target_lang=os.environ.get("TARGET_LANG", "English"),
         webrtc_host=os.environ.get("WEBRTC_HOST", "0.0.0.0"),
         webrtc_port=webrtc_port,
+        force_offline=force_offline,
+        force_online=force_online,
+        # "small" is a reasonable multilingual faster-whisper model for a Pi
+        # 5: noticeably better accuracy than "base"/"tiny" while still
+        # CPU-feasible. Tune down to "base"/"tiny" (faster, less accurate) or
+        # up to "medium" (slower, more accurate) once tested on real hardware.
+        whisper_model=os.environ.get("WHISPER_MODEL", "small"),
+        # Ollama's default local server address and OpenAI-compatible API path.
+        ollama_base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+        # A small instruct model realistically capable of running on a Pi 5.
+        # The user must `ollama pull` this (or whatever they override it
+        # with) themselves -- see README.md.
+        ollama_model=os.environ.get("OLLAMA_MODEL", "qwen2.5:1.5b"),
+        # Piper voice model identifier (downloaded automatically on first use
+        # if not already present in piper_download_dir).
+        piper_voice=os.environ.get("PIPER_VOICE", "en_US-lessac-medium"),
+        piper_download_dir=os.environ.get("PIPER_DOWNLOAD_DIR", "./models/piper"),
     )
