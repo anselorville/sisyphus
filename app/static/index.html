@@ -56,6 +56,17 @@
   .entry.original .label { color: #2a6fb0; }
   .entry.translation .label { color: #2a9d65; }
   .entry .text { font-size: 1rem; }
+  .entry .direction {
+    display: inline-block;
+    margin-left: 0.5rem;
+    padding: 0.05rem 0.45rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    background: #eef3fb;
+    color: #2a6fb0;
+  }
   audio { display: none; }
 </style>
 </head>
@@ -84,12 +95,24 @@
       statusEl.className = cls;
     }
 
-    function addTranscriptEntry(kind, text) {
+    function addTranscriptEntry(kind, text, direction) {
       const entry = document.createElement("div");
       entry.className = `entry ${kind}`;
       const label = document.createElement("div");
       label.className = "label";
       label.textContent = kind === "original" ? "Heard" : "Translated";
+      // Direction indicator (e.g. "ZH -> FR") -- only set on the
+      // "translation" entry, since that's when the server has determined
+      // which of the two configured languages was auto-detected and which
+      // it translated into. See the `direction` field on the "transcript"
+      // data-channel message in app/pipeline.py (TranslationDirectionStripper
+      // / TranscriptTapProcessor).
+      if (direction) {
+        const dirEl = document.createElement("span");
+        dirEl.className = "direction";
+        dirEl.textContent = direction.replace("->", " → ");
+        label.appendChild(dirEl);
+      }
       const body = document.createElement("div");
       body.className = "text";
       body.textContent = text;
@@ -139,7 +162,7 @@
         try {
           const msg = JSON.parse(event.data);
           if (msg.type === "transcript" && msg.text) {
-            addTranscriptEntry(msg.kind, msg.text);
+            addTranscriptEntry(msg.kind, msg.text, msg.direction);
           }
         } catch (err) {
           // Ignore malformed/non-JSON messages.
