@@ -11,7 +11,15 @@ dependencies = [
     # `uv add "pipecat-ai[...]"` before relying on this, in case the extras or
     # version pinning need adjusting for your environment.
     "pipecat-ai[silero,deepgram,cartesia,anthropic,webrtc]>=1.4.0",
+    # SmallWebRTCTransport's signaling endpoint (/api/offer) is served over
+    # HTTP via FastAPI/uvicorn; pipecat-ai does not pull these in itself.
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "python-dotenv>=1.0.0",
 ]
+
+[project.scripts]
+sisyphus-translator = "app.server:main"
 
 [build-system]
 requires = ["hatchling"]
