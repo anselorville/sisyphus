@@ -1,0 +1,19 @@
+.meter {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 24px;
+}
+
+.bar {
+  width: 4px;
+  height: 100%;
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-color-neutral-300);
+  transform-origin: center;
+  transition: transform var(--ds-duration-base) var(--ds-ease-bounce), background-color var(--ds-duration-base) var(--ds-ease-standard);
+}
+
+.bar[data-active="true"] {
+  background: var(--ds-color-secondary);
+}
