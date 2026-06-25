@@ -20,11 +20,16 @@ uv sync
 cp .env.example .env
 ```
 
-Edit `.env` and fill in:
+Edit `.env`. Which keys you need depends on which engine you're running --
+see "Engines" below. For the default `cloud` engine, fill in:
 
 - `ANTHROPIC_API_KEY` - translation LLM
 - `DEEPGRAM_API_KEY` - streaming speech-to-text
 - `CARTESIA_API_KEY` - streaming text-to-speech
+
+These three are only validated (and required) at the moment the cloud engine
+is actually selected and built -- running with `ENGINE=offline` or
+`ENGINE=omlx` needs none of them.
 
 Optionally adjust:
 
@@ -92,7 +97,110 @@ off mid-sentence when you talk over it requires real API keys and a
 microphone, which wasn't available in this phase -- that live check is
 remaining work for whoever has working credentials.
 
-## Offline/local fallback
+## Engines
+
+There are three engines, all running the exact same pipeline *shape* (VAD ->
+STT -> translation LLM -> TTS) -- only the concrete STT/LLM/TTS service
+instances differ:
+
+| Engine    | STT                  | Translation LLM           | TTS                        | Pi-portable? | When to use |
+|-----------|----------------------|----------------------------|------------------------------|--------------|-------------|
+| `cloud`   | Deepgram (streaming) | Anthropic Claude           | Cartesia (streaming)         | Yes (needs internet) | Production / has internet |
+| `offline` | `faster-whisper` (`WhisperSTTService`) | Local model via Ollama (`OLLamaLLMService`) | Piper (`PiperTTSService`) | **Yes** -- the real Raspberry Pi target | No internet, on the eventual Pi hardware |
+| `omlx`    | oMLX server (`/v1/audio/transcriptions`) | oMLX server (`/v1/chat/completions`) | oMLX server (`/v1/audio/speech`) | **No -- Apple Silicon/MLX only** | Fast local dev/test on a Mac, zero cloud spend, zero network dependency |
+
+Select the engine via `ENGINE` in `.env`:
+
+```
+ENGINE=auto      # (default) probe for internet at startup; cloud if found, offline if not
+ENGINE=cloud     # always cloud (Deepgram + Anthropic + Cartesia)
+ENGINE=offline   # always the Pi-portable local fallback (faster-whisper + Ollama + Piper)
+ENGINE=omlx      # always the Mac-only oMLX dev/test engine
+```
+
+The legacy `FORCE_OFFLINE=true` / `FORCE_ONLINE=true` flags still work (they
+map to `ENGINE=offline` / `ENGINE=cloud` internally) if `ENGINE` itself is
+unset; setting both is a startup error. `ENGINE`, if set, always takes
+precedence over them.
+
+**Important: `omlx` is not, and will never be, the Raspberry Pi target.** It
+depends on [MLX](https://github.com/ml-explore/mlx), Apple's array framework
+for Apple Silicon -- there is no Linux/Raspberry Pi backend for it, and there
+will not be one. It exists purely so you can iterate on this product quickly
+on a Mac (no cloud API spend, no network dependency, fast local models)
+without confusing that workflow for actual Pi-portability work, which remains
+squarely the `offline` engine's job (faster-whisper + Ollama + Piper, all of
+which do run on Linux/ARM).
+
+### oMLX setup (Mac-only dev engine)
+
+Requires a local [oMLX](https://github.com/) server already running on this
+machine (`http://127.0.0.1:6789` by default) with three models loaded:
+
+- A chat/LLM model (default `Qwen3.5-4B-MLX-4bit`) served via its
+  OpenAI-compatible `/v1/chat/completions`.
+- An STT model (default `nemotron-3.5-asr-streaming-0.6b`) served via
+  `/v1/audio/transcriptions` -- despite the "streaming" in its name, this is
+  a batch/segment endpoint (whole-utterance-in, transcript-out), not a
+  websocket stream; oMLX does not expose a streaming variant.
+- A TTS model (default `VoxCPM2-8bit`) served via `/v1/audio/speech`.
+
+Set in `.env`:
+
+```
+ENGINE=omlx
+OMLX_BASE_URL=http://127.0.0.1:6789/v1
+OMLX_API_KEY=<your local oMLX key>
+OMLX_LLM_MODEL=Qwen3.5-4B-MLX-4bit
+OMLX_STT_MODEL=nemotron-3.5-asr-streaming-0.6b
+OMLX_TTS_MODEL=VoxCPM2-8bit
+```
+
+Implementation notes (see `app/mlx_services.py` for the full reasoning):
+
+- LLM reuses Pipecat's existing generic OpenAI-compatible service class
+  (`pipecat.services.openai.llm.OpenAILLMService`) pointed at the oMLX
+  `base_url`/`api_key` -- no custom subclass needed.
+- STT needed a one-method subclass (`MlxSTTService`, extending
+  `pipecat.services.openai.stt.OpenAISTTService`). That base class always
+  sends a fixed `language` field (defaulting to English if unconfigured)
+  with no supported way to omit it for auto-detection. Verified live: a
+  Chinese test utterance transcribed correctly with `language` omitted or
+  set to `zh`, but came back as an empty string with `language=en` (the
+  base class's own default) -- a silent failure that would break half of
+  every bidirectional conversation. `MlxSTTService` overrides
+  `_transcribe()` to drop the `language` field entirely and let oMLX
+  auto-detect.
+- TTS needed a small custom subclass (`MlxTTSService`). oMLX's
+  `/v1/audio/speech` always returns a WAV-wrapped response at VoxCPM2's
+  native 48kHz, regardless of the requested `response_format` -- it does not
+  support OpenAI's real "headerless raw PCM at a fixed 24kHz" behavior that
+  Pipecat's `OpenAITTSService` hardcodes. `MlxTTSService` makes the same
+  REST call but strips the WAV header and resamples via Pipecat's own
+  `TTSService._stream_audio_frames_from_iterator(strip_wav_header=True)`
+  helper.
+- The loaded LLM (`Qwen3.5-4B-MLX-4bit`) emits verbose chain-of-thought
+  `reasoning_content` by default -- measured at **~51 seconds** for a single
+  two-line translation. Passing `chat_template_kwargs: {"enable_thinking":
+  false}` in the request body (wired up via `OpenAILLMService.Settings.extra`)
+  disables this and brings the same request down to **~1.6 seconds**. This is
+  not optional for a real-time pipeline and is hardcoded in
+  `build_mlx_llm()`.
+
+Measured latencies (single requests, this Mac, all three models already
+loaded/warm):
+
+| Call | Latency | Notes |
+|------|---------|-------|
+| LLM translation (`/v1/chat/completions`, thinking disabled) | ~1.6s | Chinese->French, 15 completion tokens |
+| STT (`/v1/audio/transcriptions`) | ~0.7s | Short (~3s) test utterance |
+| TTS (`/v1/audio/speech`) | ~8.6s | 39-character French sentence -> 1.76s of audio |
+
+TTS is the long pole. If "fast response" matters more than what's here,
+revisit `streaming_interval`/`stream: true` (oMLX's `/v1/audio/speech`
+supports both -- not wired up yet, see `app/mlx_services.py`).
+
+## Offline/local fallback (Raspberry Pi target)
 
 This is meant to eventually run as a travel translator on a Raspberry Pi,
 where wifi/data is often unavailable (rural Europe, etc.). For that, every
@@ -131,23 +239,14 @@ per entry in `CARTESIA_VOICE_IDS` -- see the `TODO(orchestrator...)` comment
 there. Adding a new `TARGET_LANG` entirely is a small addition to both
 `CARTESIA_VOICE_IDS` and `_LANGUAGE_CODES`, no other code changes.
 
-**Selection is automatic, at startup only.** `app/server.py` builds one
-pipeline per WebRTC connection; at that point, `app/pipeline.py` checks for
-a working internet connection (`app/connectivity.py`, a fast TCP probe to
-`1.1.1.1:53` with a 2s timeout) and uses the local trio if none is found.
-There is no mid-conversation switching -- once a pipeline is built for a
-connection, it keeps using whichever trio it started with.
-
-To force a choice (e.g. to test the offline path without disconnecting your
-network), set in `.env`:
-
-```
-FORCE_OFFLINE=true   # always use local services
-# or
-FORCE_ONLINE=true    # always use cloud services, skip the connectivity probe
-```
-
-(Setting both is a startup error.)
+**Selection happens once, at pipeline-build time.** `app/server.py` builds
+one pipeline per WebRTC connection; at that point, `app/pipeline.py`'s
+`select_engine()` resolves `ENGINE` (see "Engines" above) -- under
+`ENGINE=auto`, it checks for a working internet connection
+(`app/connectivity.py`, a fast TCP probe to `1.1.1.1:53` with a 2s timeout)
+and uses the offline trio if none is found. There is no mid-conversation
+switching -- once a pipeline is built for a connection, it keeps using
+whichever trio it started with.
 
 ### Setting up the local stack
 
@@ -199,9 +298,14 @@ access.
 
 ## What's implemented
 
-- `app/config.py` - env var loading/validation (via `python-dotenv`),
-  including the local-fallback settings (`WHISPER_MODEL`, `OLLAMA_*`,
-  `PIPER_*`, `FORCE_OFFLINE`/`FORCE_ONLINE`).
+- `app/config.py` - env var loading (via `python-dotenv`), engine selection
+  (`ENGINE`, with `FORCE_OFFLINE`/`FORCE_ONLINE` backward compat --
+  `_resolve_engine()`), and the offline-fallback (`WHISPER_MODEL`,
+  `OLLAMA_*`, `PIPER_*`) and oMLX (`OMLX_*`) settings. Cloud API keys
+  (`ANTHROPIC_API_KEY`/`DEEPGRAM_API_KEY`/`CARTESIA_API_KEY`) are read here
+  but deliberately *not* validated here -- only `app/pipeline.py`'s
+  cloud-service builder validates their presence, and only once the cloud
+  engine is actually selected.
 - `app/pipeline.py` - Pipecat pipeline construction (transport, VAD, STT,
   bidirectional translation-only LLM prompt, TTS) plus: a
   `TranslationDirectionStripper` that parses/strips the LLM's `[XX->YY]`
@@ -209,13 +313,18 @@ access.
   transcript/translation text (plus the detected `direction`) to the browser
   over the WebRTC data channel, explicit barge-in configuration
   (`enable_interruptions=True`), and the Cartesia per-language voice
-  selection. Picks cloud vs. local services once at build time via
-  `should_use_local_services()`.
-- `app/local_services.py` - constructs the local/offline STT (Whisper),
-  translation (Ollama), and TTS (Piper) service instances, mirroring how the
-  cloud equivalents are built in `app/pipeline.py`.
-- `app/connectivity.py` - the startup internet-connectivity probe used to
-  pick cloud vs. local automatically.
+  selection. Picks cloud vs. offline vs. omlx services once at build time via
+  `select_engine()`.
+- `app/local_services.py` - constructs the offline/Pi-portable STT
+  (Whisper), translation (Ollama), and TTS (Piper) service instances,
+  mirroring how the cloud equivalents are built in `app/pipeline.py`.
+- `app/mlx_services.py` - constructs the oMLX (Mac-only dev/test) STT, LLM,
+  and TTS service instances; includes the custom `MlxSTTService` (drops the
+  always-on `language` field that broke non-English auto-detection) and
+  `MlxTTSService` (strips/resamples oMLX's WAV-wrapped 48kHz response) --
+  see "Engines" above for why each was needed, and why LLM didn't need one.
+- `app/connectivity.py` - the startup internet-connectivity probe used by
+  `ENGINE=auto` to pick cloud vs. offline automatically.
 - `app/server.py` - FastAPI/uvicorn app serving the client page and the
   `/api/offer` WebRTC signaling endpoint (`SmallWebRTCTransport`).
 - `app/static/index.html` - minimal single-page client (connect button,

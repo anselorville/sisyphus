@@ -6,12 +6,23 @@ Pipeline shape:
         -> LLM (bidirectional translation prompt) -> [direction stripper]
         -> TTS -> [translation tap] -> transport.output() -> assistant aggregator
 
-The STT/LLM/TTS services are either the cloud trio (Deepgram, Anthropic,
-Cartesia) or the local/offline trio (Whisper via faster-whisper, Ollama, and
-Piper -- see app/local_services.py), chosen once at pipeline-build time by
-`should_use_local_services()` based on a startup connectivity check (or an
-explicit `FORCE_OFFLINE`/`FORCE_ONLINE` override). The pipeline *shape* is
-identical either way -- only the concrete service instances differ.
+The STT/LLM/TTS services are one of three trios, chosen once at
+pipeline-build time by `select_engine()`:
+
+- "cloud": Deepgram + Anthropic + Cartesia.
+- "offline": Whisper (faster-whisper) + Ollama + Piper -- see
+  app/local_services.py. The Raspberry Pi-portable fallback.
+- "omlx": a local oMLX server (OpenAI-API-compatible) -- see
+  app/mlx_services.py. Mac-only (Apple Silicon/MLX), dev/test only, never
+  auto-selected -- NOT Pi-portable.
+
+`ENGINE` (env var: "auto"/"cloud"/"offline"/"omlx", default "auto")
+controls this; "auto" reproduces the original behavior of probing for
+internet connectivity at pipeline-build time and picking cloud vs. offline
+accordingly (the legacy `FORCE_OFFLINE`/`FORCE_ONLINE` booleans still work,
+mapped internally to `ENGINE=offline`/`ENGINE=cloud` -- see
+app/config.py's `_resolve_engine`). The pipeline *shape* is identical
+across all three -- only the concrete service instances differ.
 
 The LLM step is deliberately constrained to *translation only*: the system
 prompt instructs it to detect which of the two configured languages
@@ -63,9 +74,10 @@ from pipecat.turns.user_start.transcription_user_turn_start_strategy import (
 from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
-from app.config import Settings
+from app.config import CLOUD_REQUIRED_KEYS, Settings
 from app.connectivity import has_internet_connection
 from app.local_services import build_local_llm, build_local_stt, build_local_tts
+from app.mlx_services import build_mlx_llm, build_mlx_stt, build_mlx_tts
 
 # Cartesia voice per TARGET_LANG, keyed by the *short* language code we parse
 # out of SOURCE_LANG/TARGET_LANG (see `_lang_code`).
@@ -346,46 +358,70 @@ class TranscriptTapProcessor(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
-def should_use_local_services(settings: Settings) -> bool:
-    """Decide cloud vs. local services for this run, at startup only.
+def select_engine(settings: Settings) -> str:
+    """Decide which engine ("cloud", "offline", or "omlx") to use for this
+    run, at startup only.
 
-    Precedence:
-    1. `FORCE_OFFLINE=true` -> always local (for testing without physically
-       disconnecting the network).
-    2. `FORCE_ONLINE=true` -> always cloud (for testing the cloud path even
-       on a flaky connection, or to skip the connectivity probe).
-    3. Otherwise, probe for a working internet connection
-       (`app.connectivity.has_internet_connection`) and use local services
-       if and only if that probe fails.
+    `settings.engine` is one of `app.config.VALID_ENGINES`
+    ("auto"/"cloud"/"offline"/"omlx"), already resolved from `ENGINE` (or
+    the legacy `FORCE_OFFLINE`/`FORCE_ONLINE` booleans) by
+    `app.config.load_settings()`. "cloud"/"offline"/"omlx" are returned
+    as-is; "auto" probes for a working internet connection
+    (`app.connectivity.has_internet_connection`) and resolves to "offline"
+    if and only if that probe fails, otherwise "cloud" -- this reproduces
+    the original auto-detect behavior. "omlx" is never auto-selected: it
+    must be requested explicitly via `ENGINE=omlx`, since it depends on a
+    local oMLX server that isn't assumed to be running.
 
     This selection happens once, at pipeline-build time, for the lifetime of
     the connection. There is no mid-conversation re-checking or switching --
     that is explicitly out of scope for this phase.
     """
-    if settings.force_offline:
-        logger.info("FORCE_OFFLINE=true -- using local/offline services")
-        return True
-    if settings.force_online:
-        logger.info("FORCE_ONLINE=true -- using cloud services")
-        return False
+    if settings.engine != "auto":
+        logger.info(f"ENGINE={settings.engine} -- using {settings.engine} services")
+        return settings.engine
 
     online = has_internet_connection()
     if online:
         logger.info("Internet connection detected -- using cloud services")
+        return "cloud"
     else:
         logger.warning("No internet connection detected -- falling back to local/offline services")
-    return not online
+        return "offline"
 
 
 def _build_cloud_services(settings: Settings, system_prompt: str) -> tuple[STTService, LLMService, TTSService]:
     """Build the cloud STT/LLM/TTS service trio (Deepgram/Anthropic/Cartesia).
+
+    Validates that all three cloud API keys (`CLOUD_REQUIRED_KEYS`) are
+    present -- deferred from `app.config.load_settings()` to exactly this
+    point, since these keys are only actually required once the cloud
+    engine path is selected and about to be built (see app/config.py's
+    module docstring for why settings load no longer validates them
+    eagerly).
 
     The Cartesia voice is picked per `settings.target_lang` (see
     `CARTESIA_VOICE_IDS`/`cartesia_voice_for_language`) -- a single
     hardcoded English voice would mispronounce/garble non-English
     TARGET_LANG values. The `language` setting is set the same way so
     Cartesia's multilingual Sonic model phonemizes the text correctly.
+
+    Raises:
+        RuntimeError: if any of `CLOUD_REQUIRED_KEYS` is missing.
     """
+    missing = [
+        key
+        for key in CLOUD_REQUIRED_KEYS
+        if not getattr(settings, key.lower(), None)
+    ]
+    if missing:
+        raise RuntimeError(
+            "Cloud engine selected, but missing required environment "
+            f"variable(s): {', '.join(missing)}. Copy .env.example to .env "
+            "and fill in the missing API key(s), export them in your shell, "
+            "or set ENGINE=offline/omlx to use a non-cloud engine instead."
+        )
+
     stt = DeepgramSTTService(api_key=settings.deepgram_api_key)
 
     llm = AnthropicLLMService(
@@ -413,16 +449,30 @@ def _build_local_service_trio(settings: Settings, system_prompt: str) -> tuple[S
     return stt, llm, tts
 
 
+def _build_mlx_service_trio(settings: Settings, system_prompt: str) -> tuple[STTService, LLMService, TTSService]:
+    """Build the oMLX STT/LLM/TTS service trio (see app/mlx_services.py).
+
+    Mac-only dev/test engine, NOT Pi-portable (depends on Apple's MLX
+    framework). Requires a local oMLX server already running at
+    `settings.omlx_base_url` with the three configured models loaded.
+    """
+    stt = build_mlx_stt(settings)
+    llm = build_mlx_llm(settings, system_prompt)
+    tts = build_mlx_tts(settings)
+    return stt, llm, tts
+
+
 def build_pipeline(
     webrtc_connection: SmallWebRTCConnection, settings: Settings
 ) -> tuple[Pipeline, LLMContext]:
     """Construct the full translator pipeline for a single WebRTC connection.
 
-    Picks cloud vs. local STT/LLM/TTS services once, at build time, via
-    `should_use_local_services()` -- see that function's docstring for the
-    selection logic (connectivity probe + FORCE_OFFLINE/FORCE_ONLINE
-    overrides). The pipeline *shape* is identical either way: only the
-    concrete service instances differ.
+    Picks cloud vs. offline vs. omlx STT/LLM/TTS services once, at build
+    time, via `select_engine()` -- see that function's docstring for the
+    selection logic (ENGINE env var, or a connectivity probe + legacy
+    FORCE_OFFLINE/FORCE_ONLINE overrides when ENGINE=auto). The pipeline
+    *shape* is identical across all three: only the concrete service
+    instances differ.
 
     Returns the assembled `Pipeline` plus the `LLMContext` (handy for callers
     that want to seed/inspect conversation state, though this translator does
@@ -439,8 +489,11 @@ def build_pipeline(
 
     system_prompt = build_translation_system_prompt(settings.source_lang, settings.target_lang)
 
-    if should_use_local_services(settings):
+    engine = select_engine(settings)
+    if engine == "offline":
         stt, llm, tts = _build_local_service_trio(settings, system_prompt)
+    elif engine == "omlx":
+        stt, llm, tts = _build_mlx_service_trio(settings, system_prompt)
     else:
         stt, llm, tts = _build_cloud_services(settings, system_prompt)
 

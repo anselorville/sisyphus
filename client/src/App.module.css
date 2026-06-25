@@ -3,9 +3,62 @@
   height: 100%;
 }
 
-.settingsOverlay {
-  position: absolute;
-  top: var(--ds-space-4);
-  right: var(--ds-space-4);
-  z-index: 10;
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--ds-color-bg-app);
+}
+
+.content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ds-space-5);
+  padding: var(--ds-space-5) var(--ds-space-4);
+  border-top: 1px solid var(--ds-color-border);
+  background: var(--ds-color-bg-surface);
+}
+
+.faceToFaceButton {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--ds-radius-pill);
+  border: 1px solid var(--ds-color-border);
+  background: var(--ds-color-bg-surface);
+  color: var(--ds-color-text-secondary);
+  cursor: pointer;
+  transition:
+    background-color var(--ds-duration-base) var(--ds-ease-standard),
+    color var(--ds-duration-base) var(--ds-ease-standard),
+    transform var(--ds-duration-fast) var(--ds-ease-bounce);
+}
+
+.faceToFaceButton:hover {
+  background: var(--ds-color-bg-surface-muted);
+  color: var(--ds-color-primary-strong);
+}
+
+.faceToFaceButton:active {
+  transform: scale(0.94);
+}
+
+/* Balances the face-to-face button on the opposite side so the TalkButton
+   stays visually centered in the footer. */
+.footerSpacer {
+  flex: none;
+  width: 44px;
+  height: 44px;
 }

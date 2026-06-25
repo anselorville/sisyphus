@@ -1,14 +1,17 @@
 import { useEffect, useRef } from "react";
-import { MessageSquareText } from "lucide-react";
 import { TranscriptEntry } from "../TranscriptEntry";
+import { EmptyState, type EmptyStateVariant } from "../EmptyState";
 import type { TranscriptEvent } from "../../../hooks/useTranslatorConnection.types";
 import styles from "./TranscriptLog.module.css";
 
 export interface TranscriptLogProps {
   entries: TranscriptEvent[];
+  /** Empty-state variant to show when there are no entries yet. Defaults to "welcome". */
+  emptyVariant?: EmptyStateVariant;
+  emptyDetail?: string;
 }
 
-export function TranscriptLog({ entries }: TranscriptLogProps) {
+export function TranscriptLog({ entries, emptyVariant = "welcome", emptyDetail }: TranscriptLogProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -18,12 +21,7 @@ export function TranscriptLog({ entries }: TranscriptLogProps) {
   }, [entries]);
 
   if (entries.length === 0) {
-    return (
-      <div className={styles.empty}>
-        <MessageSquareText size={28} strokeWidth={1.5} />
-        <p>Connect and start speaking to see the transcript here.</p>
-      </div>
-    );
+    return <EmptyState variant={emptyVariant} detail={emptyDetail} />;
   }
 
   return (

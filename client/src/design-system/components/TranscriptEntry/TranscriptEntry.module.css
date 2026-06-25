@@ -4,6 +4,10 @@
   padding: var(--ds-space-2) 0;
 }
 
+.entry[data-kind="translation"] {
+  padding-bottom: var(--ds-space-4);
+}
+
 .bar {
   flex: 0 0 3px;
   border-radius: var(--ds-radius-sm);
@@ -40,12 +44,14 @@
 
 .text {
   margin: 0;
-  font-size: var(--ds-font-size-md);
+  font-size: var(--ds-font-size-sm);
   line-height: var(--ds-line-height-body);
   color: var(--ds-color-text-secondary);
 }
 
 .entry[data-kind="translation"] .text {
   color: var(--ds-color-text-primary);
-  font-weight: var(--ds-font-weight-medium);
+  font-size: var(--ds-font-size-xl);
+  font-weight: var(--ds-font-weight-bold);
+  line-height: var(--ds-line-height-tight);
 }
