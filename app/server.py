@@ -22,6 +22,7 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
@@ -51,6 +52,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+# The client is always a separate process/origin from this server (Tauri
+# webview or Vite dev server talking to the Python backend over HTTP), never
+# same-origin, so CORS must be open for the API to be reachable at all.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Resolved once at import/startup time, mirroring how `select_engine()` is
