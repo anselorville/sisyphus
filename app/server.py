@@ -28,7 +28,7 @@ from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.workers.runner import WorkerRunner
 
 from app.config import load_settings
-from app.pipeline import build_pipeline_worker
+from app.pipeline import build_pipeline_worker, select_engine
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -53,12 +53,38 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+# Resolved once at import/startup time, mirroring how `select_engine()` is
+# documented to behave for the pipeline itself (selection happens once, for
+# the lifetime of the process -- no mid-run re-checking). This avoids
+# re-probing connectivity (the `ENGINE=auto` case) on every `/api/status`
+# request; it does mean a status change (e.g. internet coming back online
+# after startup) requires a server restart to be reflected, which matches
+# the pipeline's own behavior.
+_startup_settings = load_settings()
+_resolved_engine = select_engine(_startup_settings)
+
 
 @app.get("/", include_in_schema=False)
 async def index():
     from fastapi.responses import FileResponse
 
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/api/status")
+async def status() -> dict[str, str]:
+    """Report the resolved translation engine and configured language pair.
+
+    The engine is resolved once at server startup (see `_resolved_engine`
+    above) via the same `select_engine()` used by the pipeline itself, so
+    this always reflects what connections will actually get -- never
+    duplicated/re-implemented selection logic.
+    """
+    return {
+        "engine": _resolved_engine,
+        "source_lang": _startup_settings.source_lang,
+        "target_lang": _startup_settings.target_lang,
+    }
 
 
 async def run_bot(webrtc_connection: SmallWebRTCConnection) -> None:

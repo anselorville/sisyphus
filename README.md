@@ -325,8 +325,12 @@ access.
   see "Engines" above for why each was needed, and why LLM didn't need one.
 - `app/connectivity.py` - the startup internet-connectivity probe used by
   `ENGINE=auto` to pick cloud vs. offline automatically.
-- `app/server.py` - FastAPI/uvicorn app serving the client page and the
-  `/api/offer` WebRTC signaling endpoint (`SmallWebRTCTransport`).
+- `app/server.py` - FastAPI/uvicorn app serving the client page, the
+  `/api/offer` WebRTC signaling endpoint (`SmallWebRTCTransport`), and
+  `GET /api/status` (returns `{"engine", "source_lang", "target_lang"}` --
+  the engine is resolved once at startup via the same `select_engine()` the
+  pipeline uses, so the React client's `EngineStatusChip` can reflect which
+  engine is actually live instead of guessing).
 - `app/static/index.html` - minimal single-page client (connect button,
   status indicator, transcript log), plain HTML/JS, no build step.
 

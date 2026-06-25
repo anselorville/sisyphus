@@ -11,12 +11,18 @@ import type { EngineMode } from "./design-system/components/EngineStatusChip";
 import { LANGUAGES, type LanguageOption } from "./data/languages";
 import { useTranslatorConnection } from "./hooks/useTranslatorConnection";
 import { useMicLevel } from "./hooks/useMicLevel";
+import type { ServerStatus } from "./hooks/useTranslatorConnection.types";
 import styles from "./App.module.css";
 
-// Backend does not yet expose which translation engine is active (cloud API
-// vs. offline Pi-portable fallback vs. local oMLX dev path) -- see
-// EngineStatusChip's doc comment. Hardcoded until that endpoint exists.
-const STATIC_ENGINE_MODE: EngineMode = "unknown";
+// Maps the server's `/api/status` "engine" value (one of "cloud"/"offline"/
+// "omlx") to EngineStatusChip's prop type. "omlx" -> "local-dev" since it's
+// the Mac-only local dev/test engine. Falls back to "unknown" if the status
+// hasn't loaded yet (or the fetch failed).
+function engineModeFromStatus(status: ServerStatus | null): EngineMode {
+  if (!status) return "unknown";
+  if (status.engine === "omlx") return "local-dev";
+  return status.engine;
+}
 
 const DEFAULT_SOURCE = LANGUAGES.find((lang) => lang.code === "ZH")!;
 const DEFAULT_TARGET = LANGUAGES.find((lang) => lang.code === "EN")!;
@@ -28,10 +34,12 @@ function App() {
     serverAddress,
     setServerAddress,
     localStream,
+    serverStatus,
     connect,
     disconnect,
   } = useTranslatorConnection();
   const micLevel = useMicLevel(localStream);
+  const engineMode = engineModeFromStatus(serverStatus);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [faceToFaceOpen, setFaceToFaceOpen] = useState(false);
@@ -64,7 +72,7 @@ function App() {
           serverAddress={serverAddress}
           onServerAddressChange={setServerAddress}
           connectionState={connectionState}
-          engineMode={STATIC_ENGINE_MODE}
+          engineMode={engineMode}
           onClose={() => setSettingsOpen(false)}
         />
       </div>

@@ -3,11 +3,11 @@ import { Cloud, HardDrive, Laptop, HelpCircle } from "lucide-react";
 import { Badge, type BadgeTone } from "../../primitives/Badge";
 
 /**
- * Which translation engine/backend is currently active. This is UI-only
- * scaffolding: the Python backend does not yet expose an endpoint reporting
- * which of these is live (cloud APIs vs. the offline Pi-portable fallback
- * vs. a Mac-dev-only local oMLX path). Until that exists this prop should be
- * fed a static/guessed value or omitted ("unknown").
+ * Which translation engine/backend is currently active (cloud APIs vs. the
+ * offline Pi-portable fallback vs. a Mac-dev-only local oMLX path). Sourced
+ * from the backend's `GET /api/status` endpoint (see app/server.py and
+ * `useTranslatorConnection`'s `serverStatus`) -- "unknown" is used while
+ * that fetch is pending or if it fails.
  */
 export type EngineMode = "cloud" | "offline" | "local-dev" | "unknown";
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getServerAddress, setServerAddress as persistServerAddress } from "../settings/serverAddress";
-import type { ConnectionState, TranscriptEvent } from "./useTranslatorConnection.types";
+import type { ConnectionState, ServerStatus, TranscriptEvent } from "./useTranslatorConnection.types";
 
 const ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
 const PING_INTERVAL_MS = 3000;
@@ -46,6 +46,7 @@ export interface UseTranslatorConnectionResult {
   serverAddress: string;
   setServerAddress: (value: string) => void;
   localStream: MediaStream | null;
+  serverStatus: ServerStatus | null;
   connect: () => Promise<void>;
   disconnect: () => void;
 }
@@ -55,6 +56,7 @@ export function useTranslatorConnection(): UseTranslatorConnectionResult {
   const [transcripts, setTranscripts] = useState<TranscriptEvent[]>([]);
   const [serverAddress, setServerAddressState] = useState<string>(() => getServerAddress());
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [serverStatus, setServerStatus] = useState<ServerStatus | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
@@ -157,12 +159,36 @@ export function useTranslatorConnection(): UseTranslatorConnectionResult {
 
   useEffect(() => teardown, [teardown]);
 
+  // Fetch which translation engine the server is actually running (cloud
+  // API vs. offline Pi-portable fallback vs. local oMLX dev path) so the UI
+  // can reflect reality instead of a hardcoded guess -- see
+  // EngineStatusChip. Re-fetched whenever serverAddress changes so pointing
+  // the client at a different server picks up that server's status.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${serverAddress}/api/status`)
+      .then((response) => {
+        if (!response.ok) throw new Error(`server responded ${response.status}`);
+        return response.json();
+      })
+      .then((data: ServerStatus) => {
+        if (!cancelled) setServerStatus(data);
+      })
+      .catch(() => {
+        if (!cancelled) setServerStatus(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [serverAddress]);
+
   return {
     connectionState,
     transcripts,
     serverAddress,
     setServerAddress,
     localStream,
+    serverStatus,
     connect,
     disconnect,
   };
