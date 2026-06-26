@@ -3,6 +3,7 @@ import { Button } from "../../primitives/Button";
 import { LanguagePicker } from "../LanguagePicker";
 import { ServerAddressInput } from "../ServerAddressInput";
 import { EngineStatusChip, type EngineMode } from "../EngineStatusChip";
+import { LocalModelsControl } from "../LocalModelsControl";
 import type { LanguageOption } from "../../../data/languages";
 import type { ConnectionState } from "../../../hooks/useTranslatorConnection.types";
 import styles from "./SettingsScreen.module.css";
@@ -78,6 +79,7 @@ export function SettingsScreen({
             (Mac dev) modes are all supported -- this reflects whichever the server is running.
           </p>
           <EngineStatusChip mode={engineMode} />
+          <LocalModelsControl serverAddress={serverAddress} />
         </section>
 
         <details className={styles.devSection}>

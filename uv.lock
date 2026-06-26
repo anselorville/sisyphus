@@ -2345,6 +2345,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "pipecat-ai", extra = ["anthropic", "deepgram", "piper", "webrtc", "whisper"] },
     { name = "python-dotenv" },
     { name = "uvicorn" },
@@ -2353,6 +2354,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115.0" },
+    { name = "httpx", specifier = ">=0.27.0" },
     { name = "pipecat-ai", extras = ["silero", "deepgram", "cartesia", "anthropic", "webrtc", "whisper", "piper"], specifier = ">=1.4.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "uvicorn", specifier = ">=0.30.0" },

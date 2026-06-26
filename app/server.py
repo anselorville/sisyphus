@@ -20,15 +20,16 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.workers.runner import WorkerRunner
 
-from app.config import load_settings
+from app.config import Settings, load_settings
 from app.pipeline import build_pipeline_worker, select_engine
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -95,6 +96,140 @@ async def status() -> dict[str, str]:
         "source_lang": _startup_settings.source_lang,
         "target_lang": _startup_settings.target_lang,
     }
+
+
+# Role labels for the 3 oMLX models this app cares about, keyed by their
+# configured model id (see Settings.omlx_llm_model/omlx_stt_model/
+# omlx_tts_model) -- used to shape the /api/local-engine/* responses.
+def _local_engine_roles(settings: Settings) -> dict[str, str]:
+    return {
+        settings.omlx_llm_model: "llm",
+        settings.omlx_stt_model: "stt",
+        settings.omlx_tts_model: "tts",
+    }
+
+
+def _require_omlx_configured(settings: Settings) -> None:
+    """Raise a 400 if oMLX isn't configured, rather than attempting a
+    request against an empty base_url. This matters because these endpoints
+    are reachable regardless of the currently-selected ENGINE -- a user on
+    ENGINE=cloud may have no oMLX config at all.
+    """
+    if not settings.omlx_base_url or not settings.omlx_api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="oMLX is not configured (OMLX_BASE_URL/OMLX_API_KEY) -- "
+            "local model management is unavailable.",
+        )
+
+
+async def _fetch_local_engine_status(settings: Settings) -> dict:
+    """Query oMLX's GET /v1/models/status and filter down to our 3 configured
+    model ids, tagging each with its role (llm/stt/tts).
+
+    Returns `{"available": True, "models": [{"id", "role", "loaded"}, ...]}`
+    on success. If oMLX is unreachable (not running, wrong URL, etc.), returns
+    `{"available": False, "models": [{"id", "role", "loaded": None}, ...]}`
+    rather than raising -- the server being down is an expected, recoverable
+    state (e.g. a user on ENGINE=cloud who never started oMLX at all).
+    """
+    roles = _local_engine_roles(settings)
+    try:
+        async with httpx.AsyncClient(
+            base_url=settings.omlx_base_url,
+            headers={"Authorization": f"Bearer {settings.omlx_api_key}"},
+            timeout=10.0,
+        ) as client:
+            response = await client.get("/models/status")
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPError as exc:
+        logger.warning(f"oMLX status check failed (server unreachable?): {exc}")
+        return {
+            "available": False,
+            "models": [{"id": model_id, "role": role, "loaded": None} for model_id, role in roles.items()],
+        }
+
+    by_id = {model["id"]: model for model in data.get("models", [])}
+    return {
+        "available": True,
+        "models": [
+            {
+                "id": model_id,
+                "role": role,
+                "loaded": bool(by_id[model_id]["loaded"]) if model_id in by_id else None,
+            }
+            for model_id, role in roles.items()
+        ],
+    }
+
+
+async def _set_local_engine_loaded(settings: Settings, *, loaded: bool) -> dict:
+    """POST load (loaded=True) or unload (loaded=False) for each of our 3
+    configured oMLX model ids, sequentially (loads can take several seconds
+    each and there's no existing job/polling infrastructure in this codebase
+    to make concurrency worth the complexity), then return the resulting
+    status in the same shape as `_fetch_local_engine_status`.
+    """
+    _require_omlx_configured(settings)
+    roles = _local_engine_roles(settings)
+    action = "load" if loaded else "unload"
+    async with httpx.AsyncClient(
+        base_url=settings.omlx_base_url,
+        headers={"Authorization": f"Bearer {settings.omlx_api_key}"},
+        timeout=60.0,
+    ) as client:
+        for model_id in roles:
+            try:
+                response = await client.post(f"/models/{model_id}/{action}")
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
+                logger.error(f"oMLX {action} failed for {model_id}: {exc}")
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Failed to {action} oMLX model {model_id!r}: {exc}",
+                ) from exc
+
+    return await _fetch_local_engine_status(settings)
+
+
+@app.get("/api/local-engine/status")
+async def local_engine_status() -> dict:
+    """Report load state of the 3 configured oMLX models (LLM/STT/TTS).
+
+    Works regardless of the currently-selected ENGINE. If oMLX itself isn't
+    configured (empty OMLX_BASE_URL/OMLX_API_KEY), `available` is False and
+    every model's `loaded` is null; same if oMLX is configured but
+    unreachable (server not running).
+    """
+    settings = load_settings()
+    if not settings.omlx_base_url or not settings.omlx_api_key:
+        roles = _local_engine_roles(settings)
+        return {
+            "available": False,
+            "models": [{"id": model_id, "role": role, "loaded": None} for model_id, role in roles.items()],
+        }
+    return await _fetch_local_engine_status(settings)
+
+
+@app.post("/api/local-engine/start")
+async def local_engine_start() -> dict:
+    """Load all 3 configured oMLX models (sequential POST .../load each).
+
+    Raises 400 if oMLX isn't configured, 502 if any individual load fails.
+    """
+    settings = load_settings()
+    return await _set_local_engine_loaded(settings, loaded=True)
+
+
+@app.post("/api/local-engine/stop")
+async def local_engine_stop() -> dict:
+    """Unload all 3 configured oMLX models (sequential POST .../unload each).
+
+    Raises 400 if oMLX isn't configured, 502 if any individual unload fails.
+    """
+    settings = load_settings()
+    return await _set_local_engine_loaded(settings, loaded=False)
 
 
 async def run_bot(webrtc_connection: SmallWebRTCConnection) -> None:

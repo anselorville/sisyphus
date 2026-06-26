@@ -1,4 +1,5 @@
 export { useTranslatorConnection } from "./useTranslatorConnection";
 export type { UseTranslatorConnectionResult } from "./useTranslatorConnection";
 export { useMicLevel } from "./useMicLevel";
-export type { ConnectionState, TranscriptEvent } from "./useTranslatorConnection.types";
+export { useLocalEngine } from "./useLocalEngine";
+export type { ConnectionState, TranscriptEvent, LocalEngineStatus, LocalEngineModel } from "./useTranslatorConnection.types";
