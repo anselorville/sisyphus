@@ -72,6 +72,7 @@ platform-conditional imports.
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from openai import AsyncOpenAI, BadRequestError
@@ -84,8 +85,17 @@ from pipecat.utils.tracing.service_decorators import traced_tts
 
 from app.config import Settings
 
+if TYPE_CHECKING:
+    from app.pipeline import TranslationDirectionStripper
 
-def build_mlx_llm(settings: Settings, system_prompt: str) -> OpenAILLMService:
+
+def build_mlx_llm(
+    settings: Settings,
+    system_prompt: str,
+    *,
+    temperature: float | None = None,
+    top_p: float | None = None,
+) -> OpenAILLMService:
     """Construct the oMLX translation LLM service (generic OpenAI-compatible
     Pipecat LLM service, pointed at the local oMLX server, using the same
     translation-only system prompt as the cloud/offline paths).
@@ -112,7 +122,17 @@ def build_mlx_llm(settings: Settings, system_prompt: str) -> OpenAILLMService:
     documented escape hatch for vendor-specific JSON fields like this one --
     its contents are merged into the raw request body without going through
     parameter validation.
+
+    `temperature`/`top_p` (from `Settings.llm`, the Model Lab feature -- see
+    app/model_settings.py) are forwarded only when given; the constructor's
+    own defaults (`NOT_GIVEN`, meaning "omit from the request") apply
+    otherwise.
     """
+    overrides: dict[str, float] = {}
+    if temperature is not None:
+        overrides["temperature"] = temperature
+    if top_p is not None:
+        overrides["top_p"] = top_p
     return OpenAILLMService(
         api_key=settings.omlx_api_key,
         base_url=settings.omlx_base_url,
@@ -120,6 +140,7 @@ def build_mlx_llm(settings: Settings, system_prompt: str) -> OpenAILLMService:
             model=settings.omlx_llm_model,
             system_instruction=system_prompt,
             extra={"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}},
+            **overrides,
         ),
     )
 
@@ -152,13 +173,26 @@ class MlxSTTService(OpenAISTTService):
     one-method override exists purely because `OpenAISTTService`'s
     single-fixed-language design doesn't fit a bidirectional pipeline at
     all -- there's no settings knob for "let the model auto-detect."
+
+    `language_hint` (optional, constructor-only -- from `Settings.stt.
+    language_hint`, the Model Lab feature, see app/model_settings.py): when
+    set, forces this exact language on every request instead of omitting
+    the field for auto-detect. Off by default (`None`) to preserve today's
+    verified-correct bidirectional auto-detect behavior; only meant for
+    cases where auto-detect struggles (e.g. very short utterances).
     """
+
+    def __init__(self, *, language_hint: str | None = None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._language_hint = language_hint
 
     async def _transcribe(self, audio: bytes):
         kwargs: dict = {
             "file": ("audio.wav", audio, "audio/wav"),
             "model": self._settings.model,
         }
+        if self._language_hint:
+            kwargs["language"] = self._language_hint
         if self._settings.prompt is not None:
             kwargs["prompt"] = self._settings.prompt
         if self._settings.temperature is not None:
@@ -166,7 +200,7 @@ class MlxSTTService(OpenAISTTService):
         return await self._client.audio.transcriptions.create(**kwargs)
 
 
-def build_mlx_stt(settings: Settings) -> MlxSTTService:
+def build_mlx_stt(settings: Settings, language_hint: str | None = None) -> MlxSTTService:
     """Construct the oMLX STT service (`MlxSTTService`, pointed at oMLX's
     `/v1/audio/transcriptions` endpoint).
 
@@ -179,6 +213,7 @@ def build_mlx_stt(settings: Settings) -> MlxSTTService:
     return MlxSTTService(
         api_key=settings.omlx_api_key,
         base_url=settings.omlx_base_url,
+        language_hint=language_hint,
         settings=OpenAISTTService.Settings(
             model=settings.omlx_stt_model,
         ),
@@ -211,6 +246,22 @@ class MlxTTSService(TTSService):
     websocket/streaming support is needed: oMLX's endpoint is a one-shot
     REST call per utterance, matching this pipeline's "translate one
     complete utterance, then speak it" shape exactly.
+
+    `tone_source` (optional): a reference to the pipeline's
+    `app.pipeline.TranslationDirectionStripper` instance, read synchronously
+    in `run_tts()` for its `last_tone` attribute -- the short free-text tone
+    hint the translation LLM infers per utterance (see
+    `app.pipeline.build_translation_system_prompt`'s Step 4) -- and forwarded
+    as the `instructions` field on oMLX's `/v1/audio/speech` request. Same
+    "hold a reference to an upstream processor, read its public attribute
+    synchronously" pattern as `TranscriptTapProcessor.direction_source` in
+    app/pipeline.py; safe for the same reason that pattern is safe there
+    (the pipeline processes one utterance at a time, no concurrent in-flight
+    translations). Verified live (this session) against the real oMLX
+    server: identical input text with vs. without a non-empty `instructions`
+    value produces audibly/measurably different output (different WAV
+    duration for the same text), confirming the field is load-bearing, not a
+    no-op.
     """
 
     def __init__(
@@ -219,11 +270,26 @@ class MlxTTSService(TTSService):
         api_key: str,
         base_url: str,
         model: str,
+        tone_source: "TranslationDirectionStripper | None" = None,
+        default_instructions: str | None = None,
+        speed: float | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
         **kwargs,
     ) -> None:
         super().__init__(push_start_frame=True, push_stop_frames=True, **kwargs)
         self._model = model
         self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self._tone_source = tone_source
+        # Model Lab overrides (app/model_settings.py): `default_instructions`
+        # is the static fallback used when there's no live per-utterance tone
+        # yet (e.g. the very first utterance of a session); `speed`/
+        # `temperature`/`top_p` are sent on every request when set. All
+        # `None` by default -- identical behavior to before this feature.
+        self._default_instructions = default_instructions
+        self._speed = speed
+        self._temperature = temperature
+        self._top_p = top_p
 
     def can_generate_metrics(self) -> bool:
         """oMLX TTS supports processing-time metrics."""
@@ -240,17 +306,81 @@ class MlxTTSService(TTSService):
         strip_wav_header=True)`, which strips the 44-byte RIFF header,
         detects the real (48kHz) source sample rate from it, and resamples
         to `self.sample_rate`.
+
+        If `self._tone_source` is set, reads its `last_tone` attribute
+        (synchronously -- see this class's docstring for why that's safe)
+        and forwards it as the `instructions` field, giving oMLX's TTS model
+        a free-text style/delivery hint derived from the translation LLM's
+        own per-utterance tone inference. Omits the field entirely when
+        there's no tone source or no tone has been inferred yet (e.g. the
+        very first utterance of a session, before any direction tag has
+        been parsed), rather than sending an empty string.
+
+        Also requests `stream=True` (with a short `streaming_interval`) via
+        `extra_body` -- oMLX's `AudioSpeechRequest` schema has these two
+        fields (confirmed via its live openapi.json), separate from
+        `with_streaming_response`/httpx's own response-streaming below
+        (which only controls how the *client* reads bytes off the wire, not
+        whether the *server* sends them incrementally).
+
+        IMPORTANT, verified live (this session): enabling `stream`/
+        `streaming_interval` does NOT reduce time-to-first-byte against this
+        oMLX/VoxCPM2 deployment. Direct measurement of raw chunk arrival
+        times (bypassing this class, see the orchestrator's
+        investigation) showed cases with `stream=true` and
+        `streaming_interval` of 0.1/1.0/unset all delivering 100% of the
+        audio bytes in a single burst at the very end of generation --
+        first-chunk and last-chunk arrival times differed by well under 1%
+        of total request duration in every case, for both a short ("Hello
+        there.") and a long (~270 character) test utterance. The WAV header
+        framing DOES change when `stream=true` (RIFF/data sizes become the
+        unknown-length `0xffffffff` sentinel instead of real byte counts --
+        harmless here, since `_stream_audio_frames_from_iterator`'s header
+        parsing only reads the sample-rate field at bytes 24-28 and
+        unconditionally strips the first 44 bytes, never relying on the
+        RIFF/data size fields), so the request *is* being honored
+        server-side in some way -- but it does not change delivery timing.
+        This is consistent with VoxCPM2 being a non-streaming TTS
+        architecture (full-sequence generation required before any audio
+        frame exists at all), unlike the STT model in this same oMLX
+        install (`nemotron-3.5-asr-streaming-0.6b`, whose name itself
+        advertises streaming support). The fields are still sent below
+        (harmless, and forward-compatible if oMLX ever adds real
+        incremental synthesis for this model), but do not expect any
+        latency win from them today -- the actual fix for perceived TTS
+        latency in this pipeline, if needed, is sentence-level chunking
+        upstream (already happening: see the multiple `Generating TTS`
+        log lines per LLM turn) rather than anything tunable in this
+        request.
         """
         logger.debug(f"{self}: Generating TTS [{text}]")
         voice = assert_given(self._settings.voice)
+        # Per-utterance tone (from the translation LLM) wins; falls back to
+        # the Model Lab's static `instructions_template` override when no
+        # tone has been inferred yet (e.g. the session's first utterance).
+        instructions = (self._tone_source.last_tone if self._tone_source else None) or self._default_instructions
+        if instructions:
+            logger.debug(f"{self}: Using tone instructions [{instructions}]")
         try:
             await self.start_tts_usage_metrics(text)
 
+            extra_kwargs: dict[str, Any] = {}
+            if instructions:
+                extra_kwargs["instructions"] = instructions
+            if self._speed is not None:
+                extra_kwargs["speed"] = self._speed
+            extra_body: dict[str, Any] = {"stream": True, "streaming_interval": 0.1}
+            if self._temperature is not None:
+                extra_body["temperature"] = self._temperature
+            if self._top_p is not None:
+                extra_body["top_p"] = self._top_p
             async with self._client.audio.speech.with_streaming_response.create(
                 input=text,
                 model=self._model,
                 voice=voice or "default",
                 response_format="wav",
+                extra_body=extra_body,
+                **extra_kwargs,
             ) as r:
                 if r.status_code != 200:
                     error = await r.text()
@@ -276,7 +406,16 @@ class MlxTTSService(TTSService):
             yield ErrorFrame(error=f"Unknown error occurred: {e}")
 
 
-def build_mlx_tts(settings: Settings) -> MlxTTSService:
+def build_mlx_tts(
+    settings: Settings,
+    tone_source: "TranslationDirectionStripper | None" = None,
+    *,
+    voice: str | None = None,
+    default_instructions: str | None = None,
+    speed: float | None = None,
+    temperature: float | None = None,
+    top_p: float | None = None,
+) -> MlxTTSService:
     """Construct the oMLX TTS service (custom `MlxTTSService`, pointed at
     oMLX's `/v1/audio/speech` endpoint, using the VoxCPM2 model).
 
@@ -295,10 +434,28 @@ def build_mlx_tts(settings: Settings) -> MlxTTSService:
     used by `MlxTTSService.run_tts` (the model id comes from this
     function's own `model=` constructor arg instead, and language is
     auto-detected oMLX-side), so `None` is correct, not a placeholder.
+
+    `tone_source` is forwarded to `MlxTTSService` so it can read the
+    translation LLM's per-utterance tone hint (see `MlxTTSService`'s
+    docstring) and pass it as the `instructions` field. `None` (the
+    default) disables this -- callers that don't care about tone (e.g. a
+    future caller that just wants oMLX TTS standalone) get the exact same
+    behavior as before this feature existed.
+
+    `voice`/`default_instructions`/`speed`/`temperature`/`top_p` (from
+    `Settings.tts`, the Model Lab feature -- see app/model_settings.py) are
+    Model-Lab overrides, all `None`/inert by default. `default_instructions`
+    is the static fallback `MlxTTSService.run_tts` uses when no live
+    per-utterance tone has been inferred yet.
     """
     return MlxTTSService(
         api_key=settings.omlx_api_key,
         base_url=settings.omlx_base_url,
         model=settings.omlx_tts_model,
-        settings=TTSSettings(voice="default", model=None, language=None),
+        tone_source=tone_source,
+        default_instructions=default_instructions,
+        speed=speed,
+        temperature=temperature,
+        top_p=top_p,
+        settings=TTSSettings(voice=voice or "default", model=None, language=None),
     )

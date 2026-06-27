@@ -53,36 +53,68 @@ if TYPE_CHECKING:
     from pipecat.services.whisper.stt import WhisperSTTService
 
 
-def build_local_stt(settings: Settings) -> "WhisperSTTService":
+def build_local_stt(settings: Settings, language_hint: str | None = None) -> "WhisperSTTService":
     """Construct the local/offline STT service (faster-whisper via Pipecat's
     WhisperSTTService).
 
-    Language is left unset (auto-detect) to match the cloud Deepgram path's
-    behavior in app/pipeline.py, since the translation prompt downstream
-    already handles whichever source language shows up.
+    Language is left unset (auto-detect) by default, to match the cloud
+    Deepgram path's behavior in app/pipeline.py, since the translation
+    prompt downstream already handles whichever source language shows up.
+    `language_hint` (from `Settings.stt.language_hint`, the Model Lab
+    feature -- see app/model_settings.py) forces a specific language when
+    given and recognized; an unrecognized code is ignored rather than
+    raising, since this is a best-effort hint, not a required field.
     """
     from pipecat.services.whisper.stt import WhisperSTTService
+    from pipecat.transcriptions.language import Language
+
+    language = None
+    if language_hint:
+        try:
+            language = Language(language_hint.strip().lower())
+        except ValueError:
+            pass
 
     return WhisperSTTService(
-        settings=WhisperSTTService.Settings(model=settings.whisper_model),
+        settings=WhisperSTTService.Settings(model=settings.whisper_model, language=language),
     )
 
 
-def build_local_llm(settings: Settings, system_prompt: str) -> "OLLamaLLMService":
+def build_local_llm(
+    settings: Settings,
+    system_prompt: str,
+    *,
+    temperature: float | None = None,
+    top_p: float | None = None,
+) -> "OLLamaLLMService":
     """Construct the local/offline translation LLM service (Ollama via
     Pipecat's OLLamaLLMService, using the same translation-only system
     prompt as the cloud Anthropic path).
 
     Requires a locally-running Ollama server (default
     http://localhost:11434) with `settings.ollama_model` already pulled.
+
+    `temperature`/`top_p` (from `Settings.llm`, the Model Lab feature -- see
+    app/model_settings.py) are forwarded when given; `OllamaLLMSettings`
+    extends `BaseOpenAILLMService.Settings`, which defaults both to a
+    NOT_GIVEN sentinel meaning "omit from the request" -- passing `None`
+    explicitly here would send a real `null`, so the kwargs are only
+    included when an override is actually set.
     """
     from pipecat.services.ollama.llm import OLLamaLLMService, OllamaLLMSettings
+
+    overrides: dict[str, float] = {}
+    if temperature is not None:
+        overrides["temperature"] = temperature
+    if top_p is not None:
+        overrides["top_p"] = top_p
 
     return OLLamaLLMService(
         base_url=settings.ollama_base_url,
         settings=OllamaLLMSettings(
             model=settings.ollama_model,
             system_instruction=system_prompt,
+            **overrides,
         ),
     )
 
@@ -93,6 +125,24 @@ def build_local_tts(settings: Settings) -> "PiperTTSService":
 
     Downloads the configured voice model into `settings.piper_download_dir`
     on first use if not already present there.
+
+    No tone/expressiveness wiring here (unlike `MlxTTSService.run_tts` in
+    app/mlx_services.py, or the Cartesia `EMOTION_TAG()` wrapper in
+    app/pipeline.py's `ToneAwareCartesiaTTSService`), and this is a
+    deliberate "leave it out" rather than an oversight: checked Pipecat's
+    `pipecat.services.piper.tts.PiperTTSService`/`PiperHttpTTSService`
+    (both `run_tts` implementations) and Piper's own `PiperVoice.synthesize`
+    call -- neither the Pipecat wrapper nor Piper's underlying request/API
+    shape (`{"text", "voice"}` for the HTTP server; `synthesize(text)` for
+    the in-process binding) exposes any style/emotion/instructions
+    parameter at all. Piper is a classical neural TTS model with no
+    expressiveness control surface in this library, unlike VoxCPM2's
+    `instructions` field (oMLX) or Cartesia's `<emotion>` tag. This path is
+    also the lowest priority of the three per the task's own framing (the
+    Pi-portable fallback, not where most live testing happens), so rather
+    than fabricate an unverifiable mechanism, the tone hint is simply
+    dropped on this path -- offline/Piper TTS stays exactly as flat as it
+    was before this feature.
     """
     from pipecat.services.piper.tts import PiperTTSService
 
