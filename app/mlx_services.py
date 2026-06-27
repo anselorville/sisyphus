@@ -93,14 +93,25 @@ def build_mlx_llm(settings: Settings, system_prompt: str) -> OpenAILLMService:
     Requires a running oMLX server at `settings.omlx_base_url` with
     `settings.omlx_llm_model` already loaded.
 
-    `chat_template_kwargs: {"enable_thinking": False}` is passed via
-    `Settings.extra` (merged verbatim into the request body by
-    `BaseOpenAILLMService`) to disable Qwen3.5's chain-of-thought
-    "thinking" mode. Verified live: with thinking enabled, a single
-    translation took ~51s (1598 reasoning tokens for a two-line answer);
-    with `enable_thinking: false`, the same request returned a correct
-    translation in well under a second. Real-time translation cannot afford
-    the former, so this is not optional.
+    `chat_template_kwargs: {"enable_thinking": False}` disables Qwen3.5's
+    chain-of-thought "thinking" mode. Verified live: with thinking enabled,
+    a single translation took ~51s (1598 reasoning tokens for a two-line
+    answer); with `enable_thinking: false`, the same request returned a
+    correct translation in well under a second. Real-time translation
+    cannot afford the former, so this is not optional.
+
+    This must be nested under `extra={"extra_body": {...}}`, NOT
+    `extra={"chat_template_kwargs": {...}}` directly: `Settings.extra` is
+    merged as top-level kwargs into the underlying `openai` SDK's
+    `chat.completions.create(**params)` call (see
+    `BaseOpenAILLMService.get_chat_completions`), and that call only
+    accepts kwargs it actually knows about -- `chat_template_kwargs` isn't
+    one of them and raises `TypeError: unexpected keyword argument`
+    (verified live: every single translation request failed instantly with
+    exactly this error until fixed). `extra_body` is the SDK's own
+    documented escape hatch for vendor-specific JSON fields like this one --
+    its contents are merged into the raw request body without going through
+    parameter validation.
     """
     return OpenAILLMService(
         api_key=settings.omlx_api_key,
@@ -108,7 +119,7 @@ def build_mlx_llm(settings: Settings, system_prompt: str) -> OpenAILLMService:
         settings=OpenAILLMService.Settings(
             model=settings.omlx_llm_model,
             system_instruction=system_prompt,
-            extra={"chat_template_kwargs": {"enable_thinking": False}},
+            extra={"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}},
         ),
     )
 
@@ -274,10 +285,20 @@ def build_mlx_tts(settings: Settings) -> MlxTTSService:
     selects VoxCPM2's stock voice. `ref_audio`/`ref_text` voice cloning is
     supported by oMLX's endpoint but not wired up here; revisit if/when
     voice selection becomes a real requirement (see module docstring).
+
+    `model=None, language=None` are passed explicitly (rather than left
+    unset) because `TTSSettings` is a store-mode settings object: any field
+    not explicitly given defaults to a `NOT_GIVEN` sentinel, and Pipecat's
+    own `AIService.start()` logs a validation error for every field still
+    `NOT_GIVEN` once the pipeline starts -- its own docs say to "use None
+    for unsupported fields" precisely to avoid that noise. Neither field is
+    used by `MlxTTSService.run_tts` (the model id comes from this
+    function's own `model=` constructor arg instead, and language is
+    auto-detected oMLX-side), so `None` is correct, not a placeholder.
     """
     return MlxTTSService(
         api_key=settings.omlx_api_key,
         base_url=settings.omlx_base_url,
         model=settings.omlx_tts_model,
-        settings=TTSSettings(voice="default"),
+        settings=TTSSettings(voice="default", model=None, language=None),
     )

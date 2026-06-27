@@ -10,15 +10,32 @@ function makeId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+// Host/LAN candidates (what this local-first product actually connects
+// over -- client and server are always on the same machine or same LAN,
+// never traversing a real NAT over the public internet) gather in
+// milliseconds. Full ICE gathering completion also waits on the
+// STUN-server (srflx) candidate, which can hang far longer than that --
+// or never resolve at all on a restrictive/offline network -- and
+// "complete" only fires once every candidate type is done. Without a
+// timeout, an unreachable STUN server silently hangs the whole connect()
+// flow before the SDP offer is ever sent (confirmed live: 8s+ stuck in
+// "gathering" with working host candidates already available). 2 seconds
+// is generous for host candidates and short enough not to make a real
+// offline session feel broken.
+const ICE_GATHERING_TIMEOUT_MS = 2000;
+
 function waitForIceGathering(pc: RTCPeerConnection): Promise<void> {
   if (pc.iceGatheringState === "complete") return Promise.resolve();
   return new Promise((resolve) => {
-    const check = () => {
-      if (pc.iceGatheringState === "complete") {
-        pc.removeEventListener("icegatheringstatechange", check);
-        resolve();
-      }
+    const finish = () => {
+      pc.removeEventListener("icegatheringstatechange", check);
+      clearTimeout(timer);
+      resolve();
     };
+    const check = () => {
+      if (pc.iceGatheringState === "complete") finish();
+    };
+    const timer = setTimeout(finish, ICE_GATHERING_TIMEOUT_MS);
     pc.addEventListener("icegatheringstatechange", check);
   });
 }

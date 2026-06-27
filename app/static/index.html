@@ -187,19 +187,29 @@
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      // Wait for ICE gathering to complete so the offer includes candidates.
+      // Wait for ICE gathering so the offer includes candidates -- but with
+      // a timeout. Host/LAN candidates (all this local-first product
+      // actually needs -- client and server are always on the same machine
+      // or LAN) gather in milliseconds; "complete" only fires once every
+      // candidate type is done, including the STUN (srflx) one, which can
+      // hang far longer than that -- or never resolve at all on a
+      // restrictive/offline network -- and silently block the offer from
+      // ever being sent. 2s is generous for host candidates.
       await new Promise((resolve) => {
         if (pc.iceGatheringState === "complete") {
           resolve();
-        } else {
-          const check = () => {
-            if (pc.iceGatheringState === "complete") {
-              pc.removeEventListener("icegatheringstatechange", check);
-              resolve();
-            }
-          };
-          pc.addEventListener("icegatheringstatechange", check);
+          return;
         }
+        const finish = () => {
+          pc.removeEventListener("icegatheringstatechange", check);
+          clearTimeout(timer);
+          resolve();
+        };
+        const check = () => {
+          if (pc.iceGatheringState === "complete") finish();
+        };
+        const timer = setTimeout(finish, 2000);
+        pc.addEventListener("icegatheringstatechange", check);
       });
 
       let response;
