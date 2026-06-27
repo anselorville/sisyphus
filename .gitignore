@@ -43,3 +43,6 @@ models/
 # User-tunable model parameter overrides (Model Lab) -- runtime-local state,
 # not source. See app/model_settings.py.
 model_settings.json
+
+# Personal research notes that may contain pasted API keys -- never commit.
+docs/refs/
