@@ -39,3 +39,7 @@ storybook-static
 # models, etc.) -- runtime data, not source. See app/config.py
 # (PIPER_DOWNLOAD_DIR) and README.md for the offline/local fallback path.
 models/
+
+# User-tunable model parameter overrides (Model Lab) -- runtime-local state,
+# not source. See app/model_settings.py.
+model_settings.json

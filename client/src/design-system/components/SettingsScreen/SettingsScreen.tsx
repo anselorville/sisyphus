@@ -1,4 +1,4 @@
-import { ArrowLeft, ChevronDown } from "lucide-react";
+import { ArrowLeft, ChevronDown, FlaskConical } from "lucide-react";
 import { Button } from "../../primitives/Button";
 import { LanguagePicker } from "../LanguagePicker";
 import { ServerAddressInput } from "../ServerAddressInput";
@@ -18,6 +18,7 @@ export interface SettingsScreenProps {
   connectionState: ConnectionState;
   engineMode: EngineMode;
   onClose: () => void;
+  onOpenModelLab: () => void;
 }
 
 /**
@@ -38,6 +39,7 @@ export function SettingsScreen({
   connectionState,
   engineMode,
   onClose,
+  onOpenModelLab,
 }: SettingsScreenProps) {
   const isLocked = connectionState === "connected" || connectionState === "connecting";
 
@@ -80,6 +82,17 @@ export function SettingsScreen({
           </p>
           <EngineStatusChip mode={engineMode} />
           <LocalModelsControl serverAddress={serverAddress} />
+        </section>
+
+        <section className={styles.section}>
+          <h2 className={styles.sectionTitle}>Model tuning</h2>
+          <p className={styles.sectionHint}>
+            Tune the ASR, LLM, and TTS models directly -- including the LLM's persona, since that's what decides
+            whether this product stays a translator or becomes something else entirely.
+          </p>
+          <Button variant="secondary" icon={<FlaskConical size={18} />} onClick={onOpenModelLab}>
+            Open Model Lab
+          </Button>
         </section>
 
         <details className={styles.devSection}>

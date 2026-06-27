@@ -24,6 +24,7 @@ const meta: Meta<typeof SettingsScreen> = {
     connectionState: "disconnected",
     engineMode: "cloud",
     onClose: () => {},
+    onOpenModelLab: () => {},
   },
 };
 

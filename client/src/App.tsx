@@ -5,6 +5,7 @@ import { TalkButton } from "./design-system/components/TalkButton";
 import { LanguagePairHeader } from "./design-system/components/LanguagePairHeader";
 import { ConnectionStatusBadge } from "./design-system/components/ConnectionStatusBadge";
 import { SettingsScreen } from "./design-system/components/SettingsScreen";
+import { ModelLabScreen } from "./design-system/components/ModelLabScreen";
 import { FaceToFaceView } from "./design-system/components/FaceToFaceView";
 import { EmptyState } from "./design-system/components/EmptyState";
 import type { EngineMode } from "./design-system/components/EngineStatusChip";
@@ -42,6 +43,7 @@ function App() {
   const engineMode = engineModeFromStatus(serverStatus);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [modelLabOpen, setModelLabOpen] = useState(false);
   const [faceToFaceOpen, setFaceToFaceOpen] = useState(false);
   const [source, setSource] = useState<LanguageOption>(DEFAULT_SOURCE);
   const [target, setTarget] = useState<LanguageOption>(DEFAULT_TARGET);
@@ -51,15 +53,36 @@ function App() {
     setTarget(source);
   }, [source, target]);
 
-  // Settings and face-to-face are mutually exclusive full-screen modes.
+  // Settings, Model Lab, and face-to-face are mutually exclusive full-screen modes.
   const openSettings = useCallback(() => {
     setFaceToFaceOpen(false);
+    setModelLabOpen(false);
     setSettingsOpen(true);
+  }, []);
+  const openModelLab = useCallback(() => {
+    setSettingsOpen(false);
+    setModelLabOpen(true);
   }, []);
   const toggleFaceToFace = useCallback(() => {
     setSettingsOpen(false);
+    setModelLabOpen(false);
     setFaceToFaceOpen((open) => !open);
   }, []);
+
+  if (modelLabOpen) {
+    return (
+      <div className={styles.root}>
+        <ModelLabScreen
+          serverAddress={serverAddress}
+          engineMode={engineMode}
+          onClose={() => {
+            setModelLabOpen(false);
+            setSettingsOpen(true);
+          }}
+        />
+      </div>
+    );
+  }
 
   if (settingsOpen) {
     return (
@@ -74,6 +97,7 @@ function App() {
           connectionState={connectionState}
           engineMode={engineMode}
           onClose={() => setSettingsOpen(false)}
+          onOpenModelLab={openModelLab}
         />
       </div>
     );

@@ -1,0 +1,273 @@
+.screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--ds-color-bg-app);
+}
+
+.header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  padding: var(--ds-space-3) var(--ds-space-4);
+  border-bottom: 1px solid var(--ds-color-border);
+  background: var(--ds-color-bg-surface);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--ds-font-size-lg);
+  font-weight: var(--ds-font-weight-extrabold);
+  color: var(--ds-color-text-primary);
+}
+
+.tabs {
+  flex: none;
+  display: flex;
+  gap: var(--ds-space-2);
+  padding: var(--ds-space-3) var(--ds-space-4) 0;
+  background: var(--ds-color-bg-surface);
+  border-bottom: 1px solid var(--ds-color-border);
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-1);
+  padding: var(--ds-space-2) var(--ds-space-3);
+  border: none;
+  background: transparent;
+  font-size: var(--ds-font-size-sm);
+  font-weight: var(--ds-font-weight-bold);
+  color: var(--ds-color-text-secondary);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color var(--ds-duration-base) var(--ds-ease-standard),
+    border-color var(--ds-duration-base) var(--ds-ease-standard);
+}
+
+.tab[data-active="true"] {
+  color: var(--ds-color-primary-strong);
+  border-bottom-color: var(--ds-color-primary);
+}
+
+.content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--ds-space-5) var(--ds-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-5);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-4);
+  padding: var(--ds-space-5);
+  background: var(--ds-color-bg-surface);
+  border: 1px solid var(--ds-color-border);
+  border-radius: var(--ds-radius-lg);
+  box-shadow: var(--ds-shadow-sm);
+}
+
+.card[data-marquee="true"] {
+  border-color: var(--ds-color-primary-subtle);
+  box-shadow: var(--ds-shadow-md);
+}
+
+.cardHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ds-space-3);
+}
+
+.cardHeaderIcon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--ds-color-primary-strong);
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: var(--ds-font-size-md);
+  font-weight: var(--ds-font-weight-bold);
+  color: var(--ds-color-text-primary);
+}
+
+.cardHint {
+  margin: var(--ds-space-1) 0 0;
+  font-size: var(--ds-font-size-sm);
+  color: var(--ds-color-text-secondary);
+  line-height: var(--ds-line-height-body);
+}
+
+.personaBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+  padding: var(--ds-space-4);
+  background: var(--ds-color-primary-subtle);
+  border-radius: var(--ds-radius-md);
+}
+
+.personaHeaderRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.personaLabel {
+  font-size: var(--ds-font-size-sm);
+  font-weight: var(--ds-font-weight-bold);
+  color: var(--ds-color-text-primary);
+}
+
+.resetLink {
+  border: none;
+  background: transparent;
+  color: var(--ds-color-primary-strong);
+  font-size: var(--ds-font-size-xs);
+  font-weight: var(--ds-font-weight-bold);
+  cursor: pointer;
+  padding: 0;
+}
+
+.resetLink:hover {
+  text-decoration: underline;
+}
+
+.personaTextarea {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--ds-font-family-base);
+  font-size: var(--ds-font-size-sm);
+  line-height: var(--ds-line-height-body);
+  color: var(--ds-color-text-primary);
+  background: var(--ds-color-bg-surface);
+  border: 1px solid var(--ds-color-border);
+  border-radius: var(--ds-radius-sm);
+  padding: var(--ds-space-3);
+  box-sizing: border-box;
+}
+
+.personaTextarea:focus {
+  outline: none;
+  border-color: var(--ds-color-primary);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-1);
+}
+
+.fieldLabel {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  font-size: var(--ds-font-size-sm);
+  font-weight: var(--ds-font-weight-bold);
+  color: var(--ds-color-text-primary);
+}
+
+.fieldValueBadge {
+  font-size: var(--ds-font-size-xs);
+  font-weight: var(--ds-font-weight-medium);
+  color: var(--ds-color-text-secondary);
+}
+
+.fieldHelp {
+  margin: 0;
+  font-size: var(--ds-font-size-xs);
+  color: var(--ds-color-text-secondary);
+  line-height: var(--ds-line-height-body);
+}
+
+.textInput,
+.select {
+  height: 40px;
+  padding: 0 var(--ds-space-3);
+  border: 1px solid var(--ds-color-border);
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-color-bg-surface);
+  font-size: var(--ds-font-size-sm);
+  color: var(--ds-color-text-primary);
+}
+
+.textInput:focus,
+.select:focus {
+  outline: none;
+  border-color: var(--ds-color-primary);
+}
+
+.textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--ds-font-family-base);
+  font-size: var(--ds-font-size-sm);
+  line-height: var(--ds-line-height-body);
+  color: var(--ds-color-text-primary);
+  background: var(--ds-color-bg-surface);
+  border: 1px solid var(--ds-color-border);
+  border-radius: var(--ds-radius-sm);
+  padding: var(--ds-space-3);
+  box-sizing: border-box;
+}
+
+.textarea:focus {
+  outline: none;
+  border-color: var(--ds-color-primary);
+}
+
+.slider {
+  width: 100%;
+  accent-color: var(--ds-color-primary);
+}
+
+.liveNote {
+  margin: 0;
+  font-size: var(--ds-font-size-xs);
+  color: var(--ds-color-text-secondary);
+  line-height: var(--ds-line-height-body);
+  padding: var(--ds-space-3);
+  background: var(--ds-color-bg-surface-muted);
+  border-radius: var(--ds-radius-md);
+}
+
+.errorText {
+  margin: 0;
+  font-size: var(--ds-font-size-sm);
+  color: var(--ds-color-danger-strong);
+}
+
+.sectionHint {
+  margin: 0;
+  font-size: var(--ds-font-size-sm);
+  color: var(--ds-color-text-secondary);
+}
+
+.footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--ds-space-3);
+  padding: var(--ds-space-3) var(--ds-space-4);
+  border-top: 1px solid var(--ds-color-border);
+  background: var(--ds-color-bg-surface);
+}
+
+.saveStatusOk {
+  font-size: var(--ds-font-size-sm);
+  font-weight: var(--ds-font-weight-bold);
+  color: var(--ds-color-secondary-strong);
+}
+
+.saveStatusError {
+  font-size: var(--ds-font-size-sm);
+  font-weight: var(--ds-font-weight-bold);
+  color: var(--ds-color-danger-strong);
+}

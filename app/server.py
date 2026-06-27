@@ -30,6 +30,12 @@ from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.workers.runner import WorkerRunner
 
 from app.config import Settings, load_settings
+from app.model_settings import (
+    apply_partial_update,
+    effective_settings_payload,
+    load_model_settings,
+    save_model_settings,
+)
 from app.pipeline import build_pipeline_worker, select_engine
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -230,6 +236,38 @@ async def local_engine_stop() -> dict:
     """
     settings = load_settings()
     return await _set_local_engine_loaded(settings, loaded=False)
+
+
+@app.get("/api/model-settings")
+async def get_model_settings() -> dict:
+    """Return the current effective model-tuning settings (file overrides
+    merged over defaults) plus schema metadata describing every tunable
+    field, grouped by model role (llm/tts/stt) and, where the parameter
+    vocabulary genuinely differs, by engine (see app/model_settings.py's
+    `model_settings_schema`).
+
+    NOTE: persisting a value here does not yet change pipeline behavior --
+    see app/model_settings.py's module docstring for the (not-yet-made)
+    app/pipeline.py wiring this store is designed to plug into. Saved
+    settings take effect, once that wiring lands, on the *next* connection
+    (engine/services are built once per WebRTC connection, not live-reloaded
+    mid-call).
+    """
+    return effective_settings_payload()
+
+
+@app.put("/api/model-settings")
+async def put_model_settings(request: dict) -> dict:
+    """Accept a partial or full model-settings object, merge it over the
+    persisted settings, validate against the known schema (unknown
+    section/field names are silently ignored -- see
+    `app.model_settings.apply_partial_update`), persist it, and return the
+    new effective settings in the same shape as GET.
+    """
+    current = load_model_settings()
+    updated = apply_partial_update(current, request)
+    save_model_settings(updated)
+    return effective_settings_payload()
 
 
 async def run_bot(webrtc_connection: SmallWebRTCConnection) -> None:
