@@ -3,7 +3,6 @@ import { Button } from "../../primitives/Button";
 import { LanguagePicker } from "../LanguagePicker";
 import { ServerAddressInput } from "../ServerAddressInput";
 import { EngineStatusChip, type EngineMode } from "../EngineStatusChip";
-import { LocalModelsControl } from "../LocalModelsControl";
 import type { LanguageOption } from "../../../data/languages";
 import type { ConnectionState } from "../../../hooks/useTranslatorConnection.types";
 import styles from "./SettingsScreen.module.css";
@@ -55,57 +54,63 @@ export function SettingsScreen({
       </header>
 
       <div className={styles.content}>
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Language pair</h2>
-          <p className={styles.sectionHint}>
-            Translation runs both directions automatically -- pick the two languages in this conversation.
-          </p>
-          <div className={styles.pickerStack}>
-            <LanguagePicker
-              label="Your language"
-              value={source}
-              onChange={onSourceChange}
-              disabledCodes={[target.code]}
-            />
-            <LanguagePicker
-              label="Their language"
-              value={target}
-              onChange={onTargetChange}
-              disabledCodes={[source.code]}
-            />
-          </div>
+        <section className={styles.group}>
+          <h2 className={styles.groupTitle}>Conversation</h2>
+          <section className={styles.section}>
+            <h3 className={styles.sectionTitle}>Language pair</h3>
+            <p className={styles.sectionHint}>
+              Translation runs both directions automatically -- pick the two languages in this conversation.
+            </p>
+            <div className={styles.pickerStack}>
+              <LanguagePicker
+                label="Your language"
+                value={source}
+                onChange={onSourceChange}
+                disabledCodes={[target.code]}
+              />
+              <LanguagePicker
+                label="Their language"
+                value={target}
+                onChange={onTargetChange}
+                disabledCodes={[source.code]}
+              />
+            </div>
+          </section>
         </section>
 
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Translation engine</h2>
-          <p className={styles.sectionHint}>
-            Shows which backend is currently translating. Cloud, offline (Pi-portable), and local
-            (Mac dev) modes are all supported -- this reflects whichever the server is running.
-          </p>
-          <EngineStatusChip mode={engineMode} />
-          <LocalModelsControl serverAddress={serverAddress} />
-        </section>
+        <section className={styles.group}>
+          <h2 className={styles.groupTitle}>Infrastructure</h2>
 
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Model tuning</h2>
-          <p className={styles.sectionHint}>
-            Tune the ASR, LLM, and TTS models directly -- including the LLM's persona, since that's what decides
-            whether this product stays a translator or becomes something else entirely.
-          </p>
-          <Button variant="secondary" icon={<FlaskConical size={18} />} onClick={onOpenModelLab}>
-            Open Model Lab
-          </Button>
-        </section>
+          <section className={styles.section}>
+            <h3 className={styles.sectionTitle}>Engine status</h3>
+            <p className={styles.sectionHint}>
+              Shows which backend is currently translating. Cloud, offline (Pi-portable), and local
+              (Mac dev) modes are all supported -- this reflects whichever the server is running.
+            </p>
+            <EngineStatusChip mode={engineMode} />
+          </section>
 
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Model Provider</h2>
-          <p className={styles.sectionHint}>
-            Choose which provider and model serve text, voice, listening, and (soon) omni capabilities -- and switch
-            between running fully local or in the cloud.
-          </p>
-          <Button variant="secondary" icon={<Server size={18} />} onClick={onOpenModelProvider}>
-            Open Model Provider
-          </Button>
+          <section className={styles.section}>
+            <h3 className={styles.sectionTitle}>Model Tuning</h3>
+            <p className={styles.sectionHint}>
+              Tune the ASR, LLM, and TTS models directly -- including the LLM's persona, since that's what decides
+              whether this product stays a translator or becomes something else entirely.
+            </p>
+            <Button variant="secondary" icon={<FlaskConical size={18} />} onClick={onOpenModelLab}>
+              Open Model Lab
+            </Button>
+          </section>
+
+          <section className={styles.section}>
+            <h3 className={styles.sectionTitle}>Model Provider</h3>
+            <p className={styles.sectionHint}>
+              Choose which provider and model serve text, voice, listening, and (soon) omni capabilities -- and switch
+              between running fully local or in the cloud.
+            </p>
+            <Button variant="secondary" icon={<Server size={18} />} onClick={onOpenModelProvider}>
+              Open Model Provider
+            </Button>
+          </section>
         </section>
 
         <details className={styles.devSection}>

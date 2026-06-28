@@ -3,6 +3,7 @@ import { ArrowLeft, Cloud, HardDrive, MessageSquare, Mic, Sparkles, Volume2 } fr
 import { Button } from "../../primitives/Button";
 import { Badge } from "../../primitives/Badge";
 import { useModelProviders } from "../../../hooks/useModelProviders";
+import { LocalModelsControl } from "../LocalModelsControl";
 import type { ModelCapability, ModelProviderMode } from "../../../hooks/useTranslatorConnection.types";
 import styles from "./ModelProviderScreen.module.css";
 
@@ -126,6 +127,11 @@ export function ModelProviderScreen({ serverAddress, onClose }: ModelProviderScr
               <span className={styles.fieldLabel}>Engine</span>
               <div className={styles.staticValue}>oMLX</div>
               <p className={styles.fieldHelp}>More local inference engines coming soon.</p>
+            </div>
+
+            <div className={styles.field}>
+              <span className={styles.fieldLabel}>Models</span>
+              <LocalModelsControl serverAddress={serverAddress} />
             </div>
           </section>
         )}

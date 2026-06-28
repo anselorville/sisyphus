@@ -32,6 +32,25 @@
   gap: var(--ds-space-8);
 }
 
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-5);
+  padding: var(--ds-space-4);
+  border: 1px solid var(--ds-color-border);
+  border-radius: var(--ds-radius-lg);
+  background: var(--ds-color-bg-surface);
+}
+
+.groupTitle {
+  margin: 0;
+  font-size: var(--ds-font-size-xs);
+  font-weight: var(--ds-font-weight-extrabold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ds-color-text-secondary);
+}
+
 .section {
   display: flex;
   flex-direction: column;
