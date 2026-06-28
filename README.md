@@ -139,10 +139,10 @@ machine (`http://127.0.0.1:6789` by default) with three models loaded:
 
 - A chat/LLM model (default `Qwen3.5-4B-MLX-4bit`) served via its
   OpenAI-compatible `/v1/chat/completions`.
-- An STT model (default `nemotron-3.5-asr-streaming-0.6b`) served via
-  `/v1/audio/transcriptions` -- despite the "streaming" in its name, this is
-  a batch/segment endpoint (whole-utterance-in, transcript-out), not a
-  websocket stream; oMLX does not expose a streaming variant.
+- An STT model (default `Qwen3-ASR-1.7B-8bit`) served via
+  `/v1/audio/transcriptions` -- a batch/segment endpoint (whole-utterance-in,
+  transcript-out), not a websocket stream; oMLX does not expose a streaming
+  variant of this endpoint for any STT model.
 - A TTS model (default `VoxCPM2-8bit`) served via `/v1/audio/speech`.
 
 Set in `.env`:
@@ -152,7 +152,7 @@ ENGINE=omlx
 OMLX_BASE_URL=http://127.0.0.1:6789/v1
 OMLX_API_KEY=<your local oMLX key>
 OMLX_LLM_MODEL=Qwen3.5-4B-MLX-4bit
-OMLX_STT_MODEL=nemotron-3.5-asr-streaming-0.6b
+OMLX_STT_MODEL=Qwen3-ASR-1.7B-8bit
 OMLX_TTS_MODEL=VoxCPM2-8bit
 ```
 

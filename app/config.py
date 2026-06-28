@@ -219,7 +219,7 @@ def load_settings() -> Settings:
         omlx_base_url=os.environ.get("OMLX_BASE_URL", "http://127.0.0.1:6789/v1"),
         omlx_api_key=os.environ.get("OMLX_API_KEY", ""),
         omlx_llm_model=os.environ.get("OMLX_LLM_MODEL", "Qwen3.5-4B-MLX-4bit"),
-        omlx_stt_model=os.environ.get("OMLX_STT_MODEL", "nemotron-3.5-asr-streaming-0.6b"),
+        omlx_stt_model=os.environ.get("OMLX_STT_MODEL", "Qwen3-ASR-1.7B-8bit"),
         omlx_tts_model=os.environ.get("OMLX_TTS_MODEL", "VoxCPM2-8bit"),
         # OpenRouter (cloud provider) -- see app/openrouter_services.py and
         # app/model_providers.py. No safe default for the API key (a
