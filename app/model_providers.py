@@ -92,7 +92,15 @@ DEEPGRAM_DEFAULT_MODEL = "nova-3-general"
 # only as a *suggested* default; the actual catalog still comes from
 # `settings.openrouter_text_models` etc. (see `available_models` below) --
 # this is just which entry to prefer if present.
-OPENROUTER_SUGGESTED_TEXT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
+#
+# `deepseek/deepseek-v4-flash`, not the free `nemotron-3-ultra:free`:
+# live-measured (this session) steady-state per-translation latency of
+# ~1-4s for deepseek-v4-flash/-pro (after the one-time per-session TLS
+# handshake) vs. ~13s for nemotron-3-ultra:free on an identical prompt --
+# a real, measured difference, not a guess. Flash over pro since the two
+# measured within noise of each other in latency and flash is the cheaper
+# of the two.
+OPENROUTER_SUGGESTED_TEXT_MODEL = "deepseek/deepseek-v4-flash"
 
 
 @dataclass
