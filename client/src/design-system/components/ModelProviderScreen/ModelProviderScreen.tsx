@@ -84,9 +84,8 @@ export function ModelProviderScreen({ serverAddress, onClose }: ModelProviderScr
   }
 
   async function handleModelChange(capability: ModelCapability, model: string) {
-    const capabilityData = data!.cloud[capability];
     setPendingField(`${capability}-model`);
-    await update({ cloud: { [capability]: { provider: capabilityData.provider, model } } });
+    await update({ cloud: { [capability]: { model } } });
     setPendingField(null);
   }
 
@@ -182,7 +181,12 @@ export function ModelProviderScreen({ serverAddress, onClose }: ModelProviderScr
                     <select
                       className={styles.select}
                       value={capabilityData.model ?? ""}
-                      disabled={isComingSoon || !capabilityData.provider || pendingField === `${key}-model`}
+                      disabled={
+                        isComingSoon ||
+                        !capabilityData.provider ||
+                        pendingField === `${key}-model` ||
+                        pendingField === `${key}-provider`
+                      }
                       aria-label={`${label} model`}
                       onChange={(event) => handleModelChange(key, event.target.value)}
                     >

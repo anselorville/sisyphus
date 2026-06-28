@@ -108,3 +108,42 @@
 .devContent {
   margin-top: var(--ds-space-3);
 }
+
+.engineModeTabs {
+  display: flex;
+  gap: var(--ds-space-2);
+}
+
+.engineModeTab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ds-space-1);
+  padding: var(--ds-space-2) var(--ds-space-3);
+  border: 1px solid var(--ds-color-border);
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-color-bg-surface);
+  font-size: var(--ds-font-size-sm);
+  font-weight: var(--ds-font-weight-bold);
+  color: var(--ds-color-text-secondary);
+  cursor: pointer;
+  transition: color var(--ds-duration-base) var(--ds-ease-standard),
+    border-color var(--ds-duration-base) var(--ds-ease-standard),
+    background var(--ds-duration-base) var(--ds-ease-standard);
+}
+
+.engineModeTab[data-active="true"] {
+  color: var(--ds-color-primary-strong);
+  border-color: var(--ds-color-primary);
+  background: var(--ds-color-bg-surface-muted);
+}
+
+.engineModeTab:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.localModelsWrap {
+  margin-top: var(--ds-space-1);
+}

@@ -1,11 +1,19 @@
-import { ArrowLeft, ChevronDown, FlaskConical, Server } from "lucide-react";
+import { useState } from "react";
+import { ArrowLeft, ChevronDown, Cloud, FlaskConical, HardDrive, Server } from "lucide-react";
 import { Button } from "../../primitives/Button";
 import { LanguagePicker } from "../LanguagePicker";
 import { ServerAddressInput } from "../ServerAddressInput";
 import { EngineStatusChip, type EngineMode } from "../EngineStatusChip";
+import { LocalModelsControl } from "../LocalModelsControl";
+import { useModelProviders } from "../../../hooks/useModelProviders";
 import type { LanguageOption } from "../../../data/languages";
-import type { ConnectionState } from "../../../hooks/useTranslatorConnection.types";
+import type { ConnectionState, ModelProviderMode } from "../../../hooks/useTranslatorConnection.types";
 import styles from "./SettingsScreen.module.css";
+
+const ENGINE_MODE_TABS: { key: ModelProviderMode; label: string; icon: typeof HardDrive }[] = [
+  { key: "local", label: "Local", icon: HardDrive },
+  { key: "cloud", label: "Cloud", icon: Cloud },
+];
 
 export interface SettingsScreenProps {
   source: LanguageOption;
@@ -43,6 +51,17 @@ export function SettingsScreen({
   onOpenModelProvider,
 }: SettingsScreenProps) {
   const isLocked = connectionState === "connected" || connectionState === "connecting";
+
+  const { data: modelProvidersData, loadError: modelProvidersLoadError, update: updateModelProviders } =
+    useModelProviders(serverAddress);
+  const [pendingModeChange, setPendingModeChange] = useState(false);
+
+  async function handleEngineModeChange(mode: ModelProviderMode) {
+    if (!modelProvidersData || mode === modelProvidersData.mode) return;
+    setPendingModeChange(true);
+    await updateModelProviders({ mode });
+    setPendingModeChange(false);
+  }
 
   return (
     <div className={styles.screen} role="dialog" aria-label="Settings">
@@ -88,6 +107,39 @@ export function SettingsScreen({
               (Mac dev) modes are all supported -- this reflects whichever the server is running.
             </p>
             <EngineStatusChip mode={engineMode} />
+            <p className={styles.sectionHint}>
+              This reflects what's actually running right now, which can differ from the mode selected below --
+              e.g. if the server's <code>ENGINE</code> environment variable pins a specific engine, switching the
+              mode here won't change it until that override is cleared.
+            </p>
+
+            {!modelProvidersLoadError && modelProvidersData && (
+              <>
+                <div className={styles.engineModeTabs} role="tablist" aria-label="Cloud or local mode">
+                  {ENGINE_MODE_TABS.map(({ key, label, icon: Icon }) => (
+                    <button
+                      key={key}
+                      type="button"
+                      role="tab"
+                      aria-selected={modelProvidersData.mode === key}
+                      className={styles.engineModeTab}
+                      data-active={modelProvidersData.mode === key}
+                      disabled={pendingModeChange}
+                      onClick={() => handleEngineModeChange(key)}
+                    >
+                      <Icon size={16} />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {modelProvidersData.mode === "local" && (
+                  <div className={styles.localModelsWrap}>
+                    <LocalModelsControl serverAddress={serverAddress} />
+                  </div>
+                )}
+              </>
+            )}
           </section>
 
           <section className={styles.section}>
