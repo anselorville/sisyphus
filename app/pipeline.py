@@ -817,6 +817,22 @@ def _build_cloud_text_service(
     )
 
 
+# Known-good default voice per OpenRouter TTS model id, used only when
+# Model Lab's cloud:speech.voice is unset -- so a fresh install (no
+# model_settings.json) with cloud mode + openrouter speech doesn't crash at
+# pipeline-build time. `en-US-Harper:MAI-Voice-2` is the exact id verified
+# live this session against microsoft/mai-voice-2 (see
+# app/openrouter_services.py's module docstring: every OpenAI-style voice
+# name returns HTTP 400, only this Azure-locale-qualified form works).
+# Deliberately NOT a single hardcoded universal default -- a different
+# OpenRouter TTS model swapped into OPENROUTER_TTS_MODELS later may have a
+# completely different voice-id vocabulary, so an unrecognized model id
+# still raises the explicit RuntimeError below rather than guessing.
+_OPENROUTER_TTS_DEFAULT_VOICE: dict[str, str] = {
+    "microsoft/mai-voice-2": "en-US-Harper:MAI-Voice-2",
+}
+
+
 def _build_cloud_speech_service(
     settings: Settings,
     direction_stripper: "TranslationDirectionStripper | None",
@@ -861,6 +877,8 @@ def _build_cloud_speech_service(
         model = _openrouter_model_or_first(
             settings, settings.openrouter_tts_models, cloud.speech.model, "speech"
         )
+        if not voice:
+            voice = _OPENROUTER_TTS_DEFAULT_VOICE.get(model)
         if not voice:
             raise RuntimeError(
                 "Cloud speech capability set to provider 'openrouter', but no "

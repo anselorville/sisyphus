@@ -122,15 +122,30 @@ class LocalProviderConfig:
 class CloudCapabilityConfig:
     """One cloud capability's selected provider/model.
 
-    Both `None` by default, meaning "use today's existing hardcoded default
-    for this capability" (Anthropic for text, Cartesia for speech, Deepgram
-    for transcription) -- see app/pipeline.py's dispatch. `omni` is always
+    `provider=None` means "use today's existing hardcoded default for this
+    capability" (Anthropic for text, Cartesia for speech, Deepgram for
+    transcription) -- see app/pipeline.py's dispatch. `omni` is always
     `provider=None, model=None` and not independently settable (see
     `apply_partial_update` below, which ignores any incoming `omni` value).
+
+    The non-omni capabilities default `provider` to `"openrouter"` (not
+    `None`) -- see `ModelProviders.cloud`'s docstring for why: a fresh
+    install (no model_providers.json yet) should default to a provider that
+    can actually work out of the box, and on a typical setup for this
+    product only `OPENROUTER_API_KEY` is populated (Anthropic/Cartesia/
+    Deepgram keys are usually blank). `model=None` is left as-is --
+    `_openrouter_model_or_first` (app/pipeline.py) already falls back to the
+    first entry of the relevant `OPENROUTER_*_MODELS` catalog (reordered for
+    text to prefer `OPENROUTER_SUGGESTED_TEXT_MODEL`), so there's no need to
+    hardcode a specific model id here and risk it drifting from that catalog.
     """
 
     provider: str | None = None
     model: str | None = None
+
+
+def _default_openrouter_capability() -> CloudCapabilityConfig:
+    return CloudCapabilityConfig(provider="openrouter")
 
 
 @dataclass
@@ -138,17 +153,27 @@ class CloudProviderConfig:
     """`mode == "cloud"` configuration: one `CloudCapabilityConfig` per
     capability slot."""
 
-    text: CloudCapabilityConfig = field(default_factory=CloudCapabilityConfig)
-    speech: CloudCapabilityConfig = field(default_factory=CloudCapabilityConfig)
-    transcription: CloudCapabilityConfig = field(default_factory=CloudCapabilityConfig)
+    text: CloudCapabilityConfig = field(default_factory=_default_openrouter_capability)
+    speech: CloudCapabilityConfig = field(default_factory=_default_openrouter_capability)
+    transcription: CloudCapabilityConfig = field(default_factory=_default_openrouter_capability)
     omni: CloudCapabilityConfig = field(default_factory=CloudCapabilityConfig)
 
 
 @dataclass
 class ModelProviders:
-    """Top-level settings object: serving mode plus per-mode configuration."""
+    """Top-level settings object: serving mode plus per-mode configuration.
 
-    mode: ModelProviderMode = "local"
+    `mode` defaults to `"cloud"` (not `"local"`): a fresh install with no
+    `model_providers.json` yet should default to something that works for
+    anyone running this build, not the dev-only oMLX path -- oMLX requires a
+    local server running on the exact dev machine that built/configured it
+    (see app/mlx_services.py's module docstring: "NOT Pi-portable... exists
+    purely to let you iterate on the product on a Mac dev machine"). Cloud
+    mode, with the `CloudCapabilityConfig` defaults above, is the only mode
+    that's actually usable by someone other than the original developer.
+    """
+
+    mode: ModelProviderMode = "cloud"
     local: LocalProviderConfig = field(default_factory=LocalProviderConfig)
     cloud: CloudProviderConfig = field(default_factory=CloudProviderConfig)
 
@@ -213,7 +238,7 @@ def load_model_providers() -> ModelProviders:
 
     mode = raw.get("mode")
     if mode not in ("local", "cloud"):
-        mode = "local"
+        mode = "cloud"
 
     local_raw = raw.get("local") or {}
     engine = local_raw.get("engine") if isinstance(local_raw, dict) else None
@@ -225,7 +250,7 @@ def load_model_providers() -> ModelProviders:
     def _capability(key: str) -> CloudCapabilityConfig:
         data = cloud_raw.get(key) if isinstance(cloud_raw, dict) else None
         if not isinstance(data, dict):
-            return CloudCapabilityConfig()
+            return _default_openrouter_capability()
         provider = data.get("provider")
         model = data.get("model")
         return CloudCapabilityConfig(
