@@ -90,11 +90,22 @@ from pipecat.turns.user_start.transcription_user_turn_start_strategy import (
 from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
-from app.config import CLOUD_REQUIRED_KEYS, Settings
+from app.config import Settings
 from app.connectivity import has_internet_connection
 from app.local_services import build_local_llm, build_local_stt, build_local_tts
 from app.mlx_services import build_mlx_llm, build_mlx_stt, build_mlx_tts
+from app.model_providers import (
+    AVAILABLE_LOCAL_ENGINES,
+    CARTESIA_DEFAULT_MODEL,
+    DEEPGRAM_DEFAULT_MODEL,
+    CloudProviderConfig,
+    ModelProviders,
+    available_models,
+    load_model_providers,
+    model_providers_configured,
+)
 from app.model_settings import ModelSettings, load_model_settings
+from app.openrouter_services import build_openrouter_llm, build_openrouter_stt, build_openrouter_tts
 
 # Cartesia voice per TARGET_LANG, keyed by the *short* language code we parse
 # out of SOURCE_LANG/TARGET_LANG (see `_lang_code`).
@@ -686,95 +697,244 @@ class ToneAwareCartesiaTTSService(CartesiaTTSService):
             yield frame
 
 
-def _build_cloud_services(
-    settings: Settings,
-    system_prompt: str,
-    direction_stripper: "TranslationDirectionStripper",
-    model_settings: ModelSettings,
-) -> tuple[STTService, LLMService, TTSService]:
-    """Build the cloud STT/LLM/TTS service trio (Deepgram/Anthropic/Cartesia).
-
-    Validates that all three cloud API keys (`CLOUD_REQUIRED_KEYS`) are
-    present -- deferred from `app.config.load_settings()` to exactly this
-    point, since these keys are only actually required once the cloud
-    engine path is selected and about to be built (see app/config.py's
-    module docstring for why settings load no longer validates them
-    eagerly).
-
-    The Cartesia voice is picked per `settings.target_lang` (see
-    `CARTESIA_VOICE_IDS`/`cartesia_voice_for_language`) by default, or
-    overridden by `model_settings.tts.voice` (the Model Lab feature -- see
-    app/model_settings.py) when set. The `language` setting is set per
-    `settings.target_lang` regardless, so Cartesia's multilingual Sonic
-    model phonemizes the text correctly even with a custom voice_id.
-
-    `direction_stripper` is passed to `ToneAwareCartesiaTTSService` (see its
-    docstring -- UNVERIFIED end-to-end, no real Cartesia account here) so
-    the tone hint parsed out of the LLM's `[XX->YY|tone]` tag can flow into
-    Cartesia's per-utterance emotion tag; `model_settings.tts.
-    instructions_template` (an emotion-preset name in the cloud schema) is
-    the static fallback `ToneAwareCartesiaTTSService` would need to use when
-    no live tone is available yet -- NOT wired up here (see
-    `ToneAwareCartesiaTTSService`'s own UNVERIFIED status; adding an
-    untested fallback path on top of an already-untested mechanism isn't
-    worth the risk until there's a real account to verify against).
-    `model_settings.llm.temperature/top_p` flow into `AnthropicLLMSettings`.
-
-    Raises:
-        RuntimeError: if any of `CLOUD_REQUIRED_KEYS` is missing.
-    """
-    missing = [
-        key
-        for key in CLOUD_REQUIRED_KEYS
-        if not getattr(settings, key.lower(), None)
-    ]
-    if missing:
+def _require_anthropic_key(settings: Settings) -> None:
+    if not settings.anthropic_api_key:
         raise RuntimeError(
-            "Cloud engine selected, but missing required environment "
-            f"variable(s): {', '.join(missing)}. Copy .env.example to .env "
-            "and fill in the missing API key(s), export them in your shell, "
-            "or set ENGINE=offline/omlx to use a non-cloud engine instead."
+            "Cloud text capability set to 'anthropic', but ANTHROPIC_API_KEY "
+            "is missing. Copy .env.example to .env and fill it in, export it "
+            "in your shell, or switch the text capability's provider in the "
+            "Model Provider settings."
         )
 
-    # DeepgramSTTService's own default (when no `settings=` is given at all)
-    # hardcodes `language=Language.EN` -- a pre-existing Phase-1 behavior
-    # this change doesn't alter for the unhinted case (no real Deepgram key
-    # in this environment to verify changing it is safe). Only applies an
-    # explicit override when `language_hint` parses to a real `Language`.
-    stt_kwargs: dict[str, object] = {}
-    stt_language_hint = model_settings.stt.language_hint
-    if stt_language_hint:
-        try:
-            stt_kwargs["settings"] = DeepgramSTTService.Settings(
-                language=Language(stt_language_hint.strip().lower())
-            )
-        except ValueError:
-            pass
-    stt = DeepgramSTTService(api_key=settings.deepgram_api_key, **stt_kwargs)
+
+def _require_cartesia_key(settings: Settings) -> None:
+    if not settings.cartesia_api_key:
+        raise RuntimeError(
+            "Cloud speech capability set to 'cartesia', but CARTESIA_API_KEY "
+            "is missing. Copy .env.example to .env and fill it in, export it "
+            "in your shell, or switch the speech capability's provider in "
+            "the Model Provider settings."
+        )
+
+
+def _require_deepgram_key(settings: Settings) -> None:
+    if not settings.deepgram_api_key:
+        raise RuntimeError(
+            "Cloud transcription capability set to 'deepgram', but "
+            "DEEPGRAM_API_KEY is missing. Copy .env.example to .env and fill "
+            "it in, export it in your shell, or switch the transcription "
+            "capability's provider in the Model Provider settings."
+        )
+
+
+def _require_openrouter_key(settings: Settings) -> None:
+    if not settings.openrouter_api_key:
+        raise RuntimeError(
+            "A cloud capability is set to provider 'openrouter', but "
+            "OPENROUTER_API_KEY is missing. Copy .env.example to .env and "
+            "fill it in, or export it in your shell."
+        )
+
+
+def _openrouter_model_or_first(settings: Settings, catalog: list[str], configured: str | None, capability: str) -> str:
+    """Resolve the OpenRouter model id to use for `capability`: the
+    explicitly configured model if set, else the first entry of `catalog`,
+    else a `RuntimeError` (per spec: "raise a clear RuntimeError" if both
+    are unavailable).
+    """
+    if configured:
+        return configured
+    if catalog:
+        return catalog[0]
+    raise RuntimeError(
+        f"Cloud {capability} capability set to provider 'openrouter' with no "
+        f"model configured, and OPENROUTER_{capability.upper()}_MODELS has no "
+        "entries to fall back to. Set a model in the Model Provider settings "
+        "or populate that env var."
+    )
+
+
+def _build_cloud_text_service(
+    settings: Settings,
+    system_prompt: str,
+    model_settings: ModelSettings,
+    cloud: CloudProviderConfig,
+) -> LLMService:
+    """Build the cloud translation LLM service for whichever provider is
+    configured for the "text" capability (`cloud.text.provider`):
+
+    - `None`/unset/`"anthropic"`: today's existing hardcoded default
+      (Anthropic), using `cloud.text.model` if set, else Anthropic's own
+      default model id.
+    - `"openrouter"`: `build_openrouter_llm`, using `cloud.text.model` if
+      set, else the first entry of `settings.openrouter_text_models`.
+
+    `model_settings.llm.temperature/top_p` (Model Lab) flow into whichever
+    provider is selected, same as before this feature existed for the
+    Anthropic-only path.
+    """
+    provider = cloud.text.provider or "anthropic"
 
     llm_overrides: dict[str, float] = {}
     if model_settings.llm.temperature is not None:
         llm_overrides["temperature"] = model_settings.llm.temperature
     if model_settings.llm.top_p is not None:
         llm_overrides["top_p"] = model_settings.llm.top_p
-    llm = AnthropicLLMService(
+
+    if provider == "openrouter":
+        _require_openrouter_key(settings)
+        model = _openrouter_model_or_first(
+            settings, available_models(settings, "text", "openrouter"), cloud.text.model, "text"
+        )
+        return build_openrouter_llm(
+            settings,
+            system_prompt,
+            model,
+            temperature=model_settings.llm.temperature,
+            top_p=model_settings.llm.top_p,
+        )
+
+    # provider == "anthropic" (default)
+    _require_anthropic_key(settings)
+    if cloud.text.model:
+        llm_overrides["model"] = cloud.text.model
+    return AnthropicLLMService(
         api_key=settings.anthropic_api_key,
         settings=AnthropicLLMSettings(system_instruction=system_prompt, **llm_overrides),
     )
 
+
+def _build_cloud_speech_service(
+    settings: Settings,
+    direction_stripper: "TranslationDirectionStripper",
+    model_settings: ModelSettings,
+    cloud: CloudProviderConfig,
+) -> TTSService:
+    """Build the cloud TTS service for whichever provider is configured for
+    the "speech" capability (`cloud.speech.provider`):
+
+    - `None`/unset/`"cartesia"`: today's existing hardcoded default
+      (Cartesia), using `cloud.speech.model` if set, else `"sonic-3.5"`.
+      Voice/language/tone-wiring identical to before this feature.
+    - `"openrouter"`: `build_openrouter_tts`, using `cloud.speech.model` if
+      set, else the first entry of `settings.openrouter_tts_models`. Tone
+      wiring: forwarded via `tone_source=direction_stripper` (see
+      `OpenRouterTTSService`'s docstring) -- UNVERIFIED whether OpenRouter's
+      backend actually changes output in response, unlike the Cartesia path
+      which is its own separate UNVERIFIED status (no real Cartesia account
+      in this environment either).
+    """
+    provider = cloud.speech.provider or "cartesia"
+
+    if provider == "openrouter":
+        _require_openrouter_key(settings)
+        model = _openrouter_model_or_first(
+            settings, settings.openrouter_tts_models, cloud.speech.model, "speech"
+        )
+        if not model_settings.tts.voice:
+            raise RuntimeError(
+                "Cloud speech capability set to provider 'openrouter', but no "
+                "voice is configured (Model Lab tts.voice) -- OpenRouter TTS "
+                "models (e.g. mai-voice-2) require a real voice id, there is "
+                "no universal default. Set one in the Model Lab settings."
+            )
+        return build_openrouter_tts(
+            settings,
+            model=model,
+            voice=model_settings.tts.voice,
+            default_instructions=model_settings.tts.instructions_template,
+            speed=model_settings.tts.speed,
+            temperature=model_settings.tts.temperature,
+            top_p=model_settings.tts.top_p,
+            tone_source=direction_stripper,
+        )
+
+    # provider == "cartesia" (default)
+    _require_cartesia_key(settings)
     tts_overrides: dict[str, float] = {}
     if model_settings.tts.speed is not None:
         tts_overrides["speed"] = model_settings.tts.speed
-    tts = ToneAwareCartesiaTTSService(
+    return ToneAwareCartesiaTTSService(
         tone_source=direction_stripper,
         api_key=settings.cartesia_api_key,
         settings=CartesiaTTSService.Settings(
-            model="sonic-3.5",
+            model=cloud.speech.model or CARTESIA_DEFAULT_MODEL,
             voice=model_settings.tts.voice or cartesia_voice_for_language(settings.target_lang),
             language=cartesia_language_for(settings.target_lang),
             **tts_overrides,
         ),
     )
+
+
+def _build_cloud_transcription_service(
+    settings: Settings, model_settings: ModelSettings, cloud: CloudProviderConfig
+) -> STTService:
+    """Build the cloud STT service for whichever provider is configured for
+    the "transcription" capability (`cloud.transcription.provider`):
+
+    - `None`/unset/`"deepgram"`: today's existing hardcoded default
+      (Deepgram), using `cloud.transcription.model` if set, else
+      Deepgram's own default model id.
+    - `"openrouter"`: `build_openrouter_stt`, using
+      `cloud.transcription.model` if set, else the first entry of
+      `settings.openrouter_asr_models`.
+    """
+    provider = cloud.transcription.provider or "deepgram"
+
+    if provider == "openrouter":
+        _require_openrouter_key(settings)
+        model = _openrouter_model_or_first(
+            settings, settings.openrouter_asr_models, cloud.transcription.model, "transcription"
+        )
+        return build_openrouter_stt(
+            settings, model=model, language_hint=model_settings.stt.language_hint
+        )
+
+    # provider == "deepgram" (default)
+    _require_deepgram_key(settings)
+    stt_kwargs: dict[str, object] = {}
+    stt_settings_kwargs: dict[str, object] = {"model": cloud.transcription.model or DEEPGRAM_DEFAULT_MODEL}
+    stt_language_hint = model_settings.stt.language_hint
+    if stt_language_hint:
+        try:
+            stt_settings_kwargs["language"] = Language(stt_language_hint.strip().lower())
+        except ValueError:
+            pass
+    stt_kwargs["settings"] = DeepgramSTTService.Settings(**stt_settings_kwargs)
+    return DeepgramSTTService(api_key=settings.deepgram_api_key, **stt_kwargs)
+
+
+def _build_cloud_services(
+    settings: Settings,
+    system_prompt: str,
+    direction_stripper: "TranslationDirectionStripper",
+    model_settings: ModelSettings,
+    model_providers: ModelProviders,
+) -> tuple[STTService, LLMService, TTSService]:
+    """Build the cloud STT/LLM/TTS service trio, dispatching per-capability
+    on `model_providers.cloud` (see app/model_providers.py): each of
+    text/speech/transcription independently picks Anthropic/Cartesia/
+    Deepgram (today's existing hardcoded defaults, used when a capability's
+    provider is unset) or OpenRouter (a user-selected model from that
+    capability's `settings.openrouter_*_models` catalog).
+
+    Each per-capability builder (`_build_cloud_text_service`/
+    `_build_cloud_speech_service`/`_build_cloud_transcription_service`)
+    validates only the API key(s) actually needed for the provider it ends
+    up building, deferred from `app.config.load_settings()` to exactly this
+    point -- same posture as before this feature, just scoped per capability
+    instead of requiring all three `CLOUD_REQUIRED_KEYS` unconditionally.
+
+    `model_settings` (Model Lab overrides) flow into whichever
+    provider/model ends up active per capability -- Model Provider picks
+    WHICH service serves a capability, Model Lab tunes whichever one is
+    active; they compose, see app/model_providers.py's module docstring.
+    """
+    cloud = model_providers.cloud
+
+    stt = _build_cloud_transcription_service(settings, model_settings, cloud)
+    llm = _build_cloud_text_service(settings, system_prompt, model_settings, cloud)
+    tts = _build_cloud_speech_service(settings, direction_stripper, model_settings, cloud)
 
     return stt, llm, tts
 
@@ -899,6 +1059,18 @@ def build_pipeline(
     # once-per-connection contract).
     model_settings = load_model_settings()
 
+    # Model Provider settings (app/model_providers.py): which provider/model
+    # serves each capability, loaded on the same once-per-connection
+    # lifecycle as `model_settings` above. `load_model_providers()` itself
+    # already returns all-defaults (`mode="local"`, `engine="omlx"`) when
+    # model_providers.json doesn't exist on disk at all -- see that
+    # function's docstring for why that default is safe: it only matters
+    # *within* the "cloud"/"omlx" engine branches below, never overriding
+    # `select_engine()`'s own ENGINE-env-var-driven choice, and never
+    # touching the "offline" path at all (existing ENGINE=cloud/offline/omlx
+    # deployments with no model_providers.json keep working unchanged).
+    model_providers = load_model_providers()
+
     system_prompt = build_translation_system_prompt(
         settings.source_lang,
         settings.target_lang,
@@ -909,11 +1081,41 @@ def build_pipeline(
 
     engine = select_engine(settings)
     if engine == "offline":
+        # Untouched, separate, lower-tier concern -- not part of
+        # model_providers.mode at all (per this feature's explicit scope).
         stt, llm, tts = _build_local_service_trio(settings, system_prompt, model_settings)
-    elif engine == "omlx":
+    elif engine == "omlx" or (model_providers_configured() and model_providers.mode == "local"):
+        # "omlx" was requested explicitly via ENGINE=omlx, OR the cloud
+        # engine is active but the user has EXPLICITLY chosen mode="local"
+        # via the Model Provider UI (model_providers.json exists on disk) --
+        # either way, behave exactly like today's omlx path.
+        #
+        # The `model_providers_configured()` guard is load-bearing, not
+        # decorative: `load_model_providers().mode` defaults to "local" even
+        # when model_providers.json doesn't exist at all (see that
+        # function's docstring) -- without this guard, `mode == "local"`
+        # would be true for every `ENGINE=cloud` deployment that has never
+        # touched this feature, silently rerouting it to omlx instead of
+        # cloud. Confirmed live: with no model_providers.json and
+        # `ENGINE=cloud`, `engine == "omlx" or model_providers.mode ==
+        # "local"` evaluated to `True` before this guard was added -- a real
+        # regression, not a hypothetical one.
+        #
+        # Only "omlx" itself does anything in `local.engine` today (see
+        # AVAILABLE_LOCAL_ENGINES); anything else falls back to omlx with a
+        # logged warning rather than crashing, so a future second local
+        # engine can be added by extending that dispatch, not this branch.
+        if model_providers.local.engine not in AVAILABLE_LOCAL_ENGINES:
+            logger.warning(
+                f"model_providers.local.engine={model_providers.local.engine!r} "
+                f"is not a supported local engine (available: "
+                f"{AVAILABLE_LOCAL_ENGINES}) -- falling back to 'omlx'."
+            )
         stt, llm, tts = _build_mlx_service_trio(settings, system_prompt, direction_stripper, model_settings)
     else:
-        stt, llm, tts = _build_cloud_services(settings, system_prompt, direction_stripper, model_settings)
+        stt, llm, tts = _build_cloud_services(
+            settings, system_prompt, direction_stripper, model_settings, model_providers
+        )
 
     context = LLMContext()
 

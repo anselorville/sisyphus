@@ -89,6 +89,26 @@ class Settings:
     omlx_stt_model: str
     omlx_tts_model: str
 
+    # --- OpenRouter (cloud provider) configuration ---
+    # See app/openrouter_services.py and app/model_providers.py. OpenRouter
+    # is a single account/API key that fronts many third-party models across
+    # all three capabilities this pipeline needs (text/LLM, speech/TTS,
+    # transcription/ASR) -- unlike Anthropic/Deepgram/Cartesia, which are
+    # each a single fixed model family. `openrouter_api_key` has no safe
+    # default (a per-account secret, left empty if unset); the three
+    # `_models` lists are catalogs of *selectable* model ids for
+    # app/model_providers.py's settings UI, comma-split from their env
+    # vars -- which one is actually in use per capability is chosen via that
+    # settings store, not here. None of these are validated at
+    # load_settings() time, for the same reason the existing cloud keys
+    # aren't (see CLOUD_REQUIRED_KEYS above): whether OpenRouter is required
+    # depends entirely on whether the user has configured it as the provider
+    # for some capability via the Model Provider UI.
+    openrouter_api_key: str
+    openrouter_text_models: list[str]
+    openrouter_tts_models: list[str]
+    openrouter_asr_models: list[str]
+
 
 def _parse_bool_env(name: str) -> bool:
     """Parse a boolean-ish environment variable (case-insensitive).
@@ -97,6 +117,16 @@ def _parse_bool_env(name: str) -> bool:
     unset/empty) is False.
     """
     return os.environ.get(name, "").strip().lower() in ("true", "1", "yes", "on")
+
+
+def _parse_csv_env(name: str) -> list[str]:
+    """Parse a comma-separated env var into a list of trimmed, non-empty
+    strings. Returns an empty list if unset/empty -- callers (currently
+    app/model_providers.py's schema) treat an empty catalog as "OpenRouter
+    has no selectable models for this capability", not an error.
+    """
+    raw = os.environ.get(name, "")
+    return [item.strip() for item in raw.split(",") if item.strip()]
 
 
 def _resolve_engine() -> str:
@@ -191,4 +221,12 @@ def load_settings() -> Settings:
         omlx_llm_model=os.environ.get("OMLX_LLM_MODEL", "Qwen3.5-4B-MLX-4bit"),
         omlx_stt_model=os.environ.get("OMLX_STT_MODEL", "nemotron-3.5-asr-streaming-0.6b"),
         omlx_tts_model=os.environ.get("OMLX_TTS_MODEL", "VoxCPM2-8bit"),
+        # OpenRouter (cloud provider) -- see app/openrouter_services.py and
+        # app/model_providers.py. No safe default for the API key (a
+        # per-account secret, left empty if unset); the three catalogs
+        # default to empty lists if their env vars are unset.
+        openrouter_api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+        openrouter_text_models=_parse_csv_env("OPENROUTER_TEXT_MODELS"),
+        openrouter_tts_models=_parse_csv_env("OPENROUTER_TTS_MODELS"),
+        openrouter_asr_models=_parse_csv_env("OPENROUTER_ASR_MODELS"),
     )

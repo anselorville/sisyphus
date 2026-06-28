@@ -30,6 +30,12 @@ from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.workers.runner import WorkerRunner
 
 from app.config import Settings, load_settings
+from app.model_providers import (
+    apply_partial_update as apply_providers_partial_update,
+    effective_providers_payload,
+    load_model_providers,
+    save_model_providers,
+)
 from app.model_settings import (
     apply_partial_update,
     effective_settings_payload,
@@ -268,6 +274,33 @@ async def put_model_settings(request: dict) -> dict:
     updated = apply_partial_update(current, request)
     save_model_settings(updated)
     return effective_settings_payload()
+
+
+@app.get("/api/model-providers")
+async def get_model_providers() -> dict:
+    """Return the current effective Model Provider configuration (which
+    provider/model serves each capability: text/speech/transcription, plus
+    the reserved `omni` placeholder) and which local engine is active, in
+    the exact shape `client/src/hooks/useModelProviders.ts` expects (see
+    app/model_providers.py's `effective_providers_payload`).
+    """
+    settings = load_settings()
+    return effective_providers_payload(settings)
+
+
+@app.put("/api/model-providers")
+async def put_model_providers(request: dict) -> dict:
+    """Accept a partial Model Provider config, merge it over the persisted
+    config (any `cloud.omni` value in the request is ignored -- `omni` is a
+    reserved placeholder, never independently settable, see
+    app/model_providers.py), persist it, and return the new effective
+    config in the same shape as GET.
+    """
+    settings = load_settings()
+    current = load_model_providers()
+    updated = apply_providers_partial_update(current, request)
+    save_model_providers(updated)
+    return effective_providers_payload(settings)
 
 
 async def run_bot(webrtc_connection: SmallWebRTCConnection) -> None:

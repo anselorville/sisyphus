@@ -44,5 +44,9 @@ models/
 # not source. See app/model_settings.py.
 model_settings.json
 
+# Model Provider settings (which provider/model serves each capability) --
+# runtime-local state, not source. See app/model_providers.py.
+model_providers.json
+
 # Personal research notes that may contain pasted API keys -- never commit.
 docs/refs/
