@@ -6,6 +6,7 @@ import { LanguagePairHeader } from "./design-system/components/LanguagePairHeade
 import { ConnectionStatusBadge } from "./design-system/components/ConnectionStatusBadge";
 import { SettingsScreen } from "./design-system/components/SettingsScreen";
 import { ModelLabScreen } from "./design-system/components/ModelLabScreen";
+import { ModelProviderScreen } from "./design-system/components/ModelProviderScreen";
 import { FaceToFaceView } from "./design-system/components/FaceToFaceView";
 import { EmptyState } from "./design-system/components/EmptyState";
 import type { EngineMode } from "./design-system/components/EngineStatusChip";
@@ -44,6 +45,7 @@ function App() {
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [modelLabOpen, setModelLabOpen] = useState(false);
+  const [modelProviderOpen, setModelProviderOpen] = useState(false);
   const [faceToFaceOpen, setFaceToFaceOpen] = useState(false);
   const [source, setSource] = useState<LanguageOption>(DEFAULT_SOURCE);
   const [target, setTarget] = useState<LanguageOption>(DEFAULT_TARGET);
@@ -53,19 +55,25 @@ function App() {
     setTarget(source);
   }, [source, target]);
 
-  // Settings, Model Lab, and face-to-face are mutually exclusive full-screen modes.
+  // Settings, Model Lab, Model Provider, and face-to-face are mutually exclusive full-screen modes.
   const openSettings = useCallback(() => {
     setFaceToFaceOpen(false);
     setModelLabOpen(false);
+    setModelProviderOpen(false);
     setSettingsOpen(true);
   }, []);
   const openModelLab = useCallback(() => {
     setSettingsOpen(false);
     setModelLabOpen(true);
   }, []);
+  const openModelProvider = useCallback(() => {
+    setSettingsOpen(false);
+    setModelProviderOpen(true);
+  }, []);
   const toggleFaceToFace = useCallback(() => {
     setSettingsOpen(false);
     setModelLabOpen(false);
+    setModelProviderOpen(false);
     setFaceToFaceOpen((open) => !open);
   }, []);
 
@@ -77,6 +85,20 @@ function App() {
           engineMode={engineMode}
           onClose={() => {
             setModelLabOpen(false);
+            setSettingsOpen(true);
+          }}
+        />
+      </div>
+    );
+  }
+
+  if (modelProviderOpen) {
+    return (
+      <div className={styles.root}>
+        <ModelProviderScreen
+          serverAddress={serverAddress}
+          onClose={() => {
+            setModelProviderOpen(false);
             setSettingsOpen(true);
           }}
         />
@@ -98,6 +120,7 @@ function App() {
           engineMode={engineMode}
           onClose={() => setSettingsOpen(false)}
           onOpenModelLab={openModelLab}
+          onOpenModelProvider={openModelProvider}
         />
       </div>
     );

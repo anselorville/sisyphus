@@ -88,6 +88,48 @@ export type ModelSettingsPartialUpdate = {
   stt?: Partial<SttModelSettingsValues>;
 };
 
+/** Which top-level model-serving mode is active: fully local (oMLX) or cloud APIs. */
+export type ModelProviderMode = "local" | "cloud";
+
+/** The 4 model-capability slots a provider/model pair can be assigned to. */
+export type ModelCapability = "text" | "speech" | "transcription" | "omni";
+
+/** Local-mode section of GET/PUT /api/model-providers -- see app/model_providers.py.
+ * `available_engines` is just `["omlx"]` today, so the UI shows a static label
+ * rather than a working dropdown. */
+export interface ModelProviderLocalConfig {
+  engine: string;
+  available_engines: string[];
+}
+
+/** One cloud capability's current provider/model plus what's selectable.
+ * `omni` always has `provider`/`model` null, empty `available_providers`/
+ * `available_models`, and `status: "coming_soon"`. */
+export interface ModelProviderCloudCapability {
+  provider: string | null;
+  model: string | null;
+  available_providers: string[];
+  available_models: Record<string, string[]>;
+  status?: "coming_soon";
+}
+
+export type ModelProviderCloudConfig = Record<ModelCapability, ModelProviderCloudCapability>;
+
+/** Full shape of GET/PUT /api/model-providers (see app/model_providers.py). */
+export interface ModelProvidersPayload {
+  mode: ModelProviderMode;
+  local: ModelProviderLocalConfig;
+  cloud: ModelProviderCloudConfig;
+}
+
+/** Partial update body accepted by PUT /api/model-providers -- any subset of
+ * mode/local/cloud/capabilities; omitted ones are left unchanged server-side. */
+export type ModelProvidersPartialUpdate = {
+  mode?: ModelProviderMode;
+  local?: Partial<ModelProviderLocalConfig>;
+  cloud?: Partial<Record<ModelCapability, Partial<Pick<ModelProviderCloudCapability, "provider" | "model">>>>;
+};
+
 interface TranscriptEventBase {
   id: string;
   timestamp: number;

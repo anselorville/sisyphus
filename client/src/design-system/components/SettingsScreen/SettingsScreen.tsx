@@ -1,4 +1,4 @@
-import { ArrowLeft, ChevronDown, FlaskConical } from "lucide-react";
+import { ArrowLeft, ChevronDown, FlaskConical, Server } from "lucide-react";
 import { Button } from "../../primitives/Button";
 import { LanguagePicker } from "../LanguagePicker";
 import { ServerAddressInput } from "../ServerAddressInput";
@@ -19,6 +19,7 @@ export interface SettingsScreenProps {
   engineMode: EngineMode;
   onClose: () => void;
   onOpenModelLab: () => void;
+  onOpenModelProvider: () => void;
 }
 
 /**
@@ -40,6 +41,7 @@ export function SettingsScreen({
   engineMode,
   onClose,
   onOpenModelLab,
+  onOpenModelProvider,
 }: SettingsScreenProps) {
   const isLocked = connectionState === "connected" || connectionState === "connecting";
 
@@ -92,6 +94,17 @@ export function SettingsScreen({
           </p>
           <Button variant="secondary" icon={<FlaskConical size={18} />} onClick={onOpenModelLab}>
             Open Model Lab
+          </Button>
+        </section>
+
+        <section className={styles.section}>
+          <h2 className={styles.sectionTitle}>Model Provider</h2>
+          <p className={styles.sectionHint}>
+            Choose which provider and model serve text, voice, listening, and (soon) omni capabilities -- and switch
+            between running fully local or in the cloud.
+          </p>
+          <Button variant="secondary" icon={<Server size={18} />} onClick={onOpenModelProvider}>
+            Open Model Provider
           </Button>
         </section>
 

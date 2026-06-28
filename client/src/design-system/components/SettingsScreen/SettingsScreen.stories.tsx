@@ -25,6 +25,7 @@ const meta: Meta<typeof SettingsScreen> = {
     engineMode: "cloud",
     onClose: () => {},
     onOpenModelLab: () => {},
+    onOpenModelProvider: () => {},
   },
 };
 
