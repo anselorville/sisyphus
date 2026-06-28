@@ -208,3 +208,26 @@
   font-size: var(--ds-font-size-sm);
   color: var(--ds-color-text-secondary);
 }
+
+.footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--ds-space-3);
+  padding: var(--ds-space-3) var(--ds-space-4);
+  border-top: 1px solid var(--ds-color-border);
+  background: var(--ds-color-bg-surface);
+}
+
+.saveStatusOk {
+  font-size: var(--ds-font-size-sm);
+  font-weight: var(--ds-font-weight-bold);
+  color: var(--ds-color-secondary-strong);
+}
+
+.saveStatusError {
+  font-size: var(--ds-font-size-sm);
+  font-weight: var(--ds-font-weight-bold);
+  color: var(--ds-color-danger-strong);
+}

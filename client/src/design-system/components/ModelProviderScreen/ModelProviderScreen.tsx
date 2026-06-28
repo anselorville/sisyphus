@@ -1,10 +1,14 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowLeft, Cloud, HardDrive, MessageSquare, Mic, Sparkles, Volume2 } from "lucide-react";
 import { Button } from "../../primitives/Button";
 import { Badge } from "../../primitives/Badge";
 import { useModelProviders } from "../../../hooks/useModelProviders";
 import { LocalModelsControl } from "../LocalModelsControl";
-import type { ModelCapability, ModelProviderMode } from "../../../hooks/useTranslatorConnection.types";
+import type {
+  ModelCapability,
+  ModelProviderCloudConfig,
+  ModelProviderMode,
+} from "../../../hooks/useTranslatorConnection.types";
 import styles from "./ModelProviderScreen.module.css";
 
 export interface ModelProviderScreenProps {
@@ -24,6 +28,14 @@ const CAPABILITY_ROWS: { key: ModelCapability; label: string; icon: typeof Messa
   { key: "omni", label: "Omni", icon: Sparkles },
 ];
 
+type DraftCloud = ModelProviderCloudConfig;
+
+const ALL_CAPABILITIES: ModelCapability[] = ["text", "speech", "transcription", "omni"];
+
+function cloudCapabilitiesEqual(a: DraftCloud, b: DraftCloud): boolean {
+  return ALL_CAPABILITIES.every((key) => a[key].provider === b[key].provider && a[key].model === b[key].model);
+}
+
 /**
  * "Model Provider" -- the infrastructure-capability layer: which
  * provider/model actually serves each of the 4 model-capability types
@@ -33,14 +45,35 @@ const CAPABILITY_ROWS: { key: ModelCapability; label: string; icon: typeof Messa
  * direction) -- this screen answers "what serves the request," not "how is
  * it tuned" or "what does the product do with it."
  *
- * Reachable from SettingsScreen, same pattern as Model Lab. Saves on every
- * selection change (no separate "Save" button), matching Model Lab's
- * save-on-explicit-action posture but simplified further since each control
- * here is a single atomic choice rather than a multi-field draft.
+ * Reachable from SettingsScreen, same pattern as Model Lab. Mirrors Model
+ * Lab's draft-then-explicit-save posture: every tab click and select change
+ * only updates local draft state -- nothing is sent to the server until the
+ * user clicks "Save changes," which fires a single combined PUT.
  */
 export function ModelProviderScreen({ serverAddress, onClose }: ModelProviderScreenProps) {
   const { data, loadError, updateError, update } = useModelProviders(serverAddress);
-  const [pendingField, setPendingField] = useState<string | null>(null);
+
+  const [draftMode, setDraftMode] = useState<ModelProviderMode | null>(null);
+  const [draftCloud, setDraftCloud] = useState<DraftCloud | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  // Seed the draft from the loaded/saved data, but only when there's no
+  // in-progress unsaved draft yet -- mirrors Model Lab's behavior of not
+  // clobbering edits if the underlying data re-fetches in the background.
+  useEffect(() => {
+    if (!data) return;
+    setDraftMode((prev) => prev ?? data.mode);
+    setDraftCloud((prev) => prev ?? data.cloud);
+  }, [data]);
+
+  // Clear a transient "saved" confirmation after a few seconds so it doesn't
+  // linger indefinitely as stale-looking UI.
+  useEffect(() => {
+    if (!saved) return;
+    const timer = setTimeout(() => setSaved(false), 3000);
+    return () => clearTimeout(timer);
+  }, [saved]);
 
   if (loadError) {
     return (
@@ -56,7 +89,7 @@ export function ModelProviderScreen({ serverAddress, onClose }: ModelProviderScr
     );
   }
 
-  if (!data) {
+  if (!data || draftMode === null || draftCloud === null) {
     return (
       <div className={styles.screen} role="dialog" aria-label="Model Provider">
         <Header onClose={onClose} />
@@ -67,26 +100,52 @@ export function ModelProviderScreen({ serverAddress, onClose }: ModelProviderScr
     );
   }
 
-  async function handleModeChange(mode: ModelProviderMode) {
-    if (mode === data!.mode) return;
-    setPendingField("mode");
-    await update({ mode });
-    setPendingField(null);
+  const hasUnsavedChanges = draftMode !== data.mode || !cloudCapabilitiesEqual(draftCloud, data.cloud);
+
+  function handleModeChange(mode: ModelProviderMode) {
+    setDraftMode(mode);
   }
 
-  async function handleProviderChange(capability: ModelCapability, provider: string) {
-    const capabilityData = data!.cloud[capability];
-    const models = capabilityData.available_models[provider] ?? [];
-    const model = models[0] ?? null;
-    setPendingField(`${capability}-provider`);
-    await update({ cloud: { [capability]: { provider, model } } });
-    setPendingField(null);
+  function handleProviderChange(capability: ModelCapability, provider: string) {
+    setDraftCloud((prev) => {
+      if (!prev) return prev;
+      const capabilityData = prev[capability];
+      const models = capabilityData.available_models[provider] ?? [];
+      const model = models[0] ?? null;
+      return {
+        ...prev,
+        [capability]: { ...capabilityData, provider, model },
+      };
+    });
   }
 
-  async function handleModelChange(capability: ModelCapability, model: string) {
-    setPendingField(`${capability}-model`);
-    await update({ cloud: { [capability]: { model } } });
-    setPendingField(null);
+  function handleModelChange(capability: ModelCapability, model: string) {
+    setDraftCloud((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        [capability]: { ...prev[capability], model },
+      };
+    });
+  }
+
+  async function handleSave() {
+    if (!hasUnsavedChanges || saving || !draftMode || !draftCloud) return;
+    setSaving(true);
+    const ok = await update({
+      mode: draftMode,
+      cloud: {
+        text: { provider: draftCloud.text.provider, model: draftCloud.text.model },
+        speech: { provider: draftCloud.speech.provider, model: draftCloud.speech.model },
+        transcription: { provider: draftCloud.transcription.provider, model: draftCloud.transcription.model },
+      },
+    });
+    setSaving(false);
+    // The hook's `update()` already called `setData(response)` on success,
+    // which updates `data` to match what we just saved -- `hasUnsavedChanges`
+    // (computed from `draftMode`/`draftCloud` vs `data`) becomes false
+    // automatically since the draft already equals what was just persisted.
+    if (ok) setSaved(true);
   }
 
   return (
@@ -99,10 +158,9 @@ export function ModelProviderScreen({ serverAddress, onClose }: ModelProviderScr
             key={key}
             type="button"
             role="tab"
-            aria-selected={data.mode === key}
+            aria-selected={draftMode === key}
             className={styles.tab}
-            data-active={data.mode === key}
-            disabled={pendingField === "mode"}
+            data-active={draftMode === key}
             onClick={() => handleModeChange(key)}
           >
             <Icon size={16} />
@@ -112,7 +170,7 @@ export function ModelProviderScreen({ serverAddress, onClose }: ModelProviderScr
       </div>
 
       <div className={styles.content}>
-        {data.mode === "local" && (
+        {draftMode === "local" && (
           <section className={styles.card}>
             <div className={styles.cardHeader}>
               <HardDrive size={18} className={styles.cardHeaderIcon} />
@@ -135,7 +193,7 @@ export function ModelProviderScreen({ serverAddress, onClose }: ModelProviderScr
           </section>
         )}
 
-        {data.mode === "cloud" && (
+        {draftMode === "cloud" && (
           <section className={styles.card}>
             <div className={styles.cardHeader}>
               <Cloud size={18} className={styles.cardHeaderIcon} />
@@ -148,7 +206,7 @@ export function ModelProviderScreen({ serverAddress, onClose }: ModelProviderScr
             </div>
 
             {CAPABILITY_ROWS.map(({ key, label, icon: Icon }) => {
-              const capabilityData = data.cloud[key];
+              const capabilityData = draftCloud[key];
               const isComingSoon = capabilityData.status === "coming_soon";
               const models = capabilityData.provider
                 ? capabilityData.available_models[capabilityData.provider] ?? []
@@ -166,7 +224,7 @@ export function ModelProviderScreen({ serverAddress, onClose }: ModelProviderScr
                     <select
                       className={styles.select}
                       value={capabilityData.provider ?? ""}
-                      disabled={isComingSoon || pendingField === `${key}-provider`}
+                      disabled={isComingSoon}
                       aria-label={`${label} provider`}
                       onChange={(event) => handleProviderChange(key, event.target.value)}
                     >
@@ -181,12 +239,7 @@ export function ModelProviderScreen({ serverAddress, onClose }: ModelProviderScr
                     <select
                       className={styles.select}
                       value={capabilityData.model ?? ""}
-                      disabled={
-                        isComingSoon ||
-                        !capabilityData.provider ||
-                        pendingField === `${key}-model` ||
-                        pendingField === `${key}-provider`
-                      }
+                      disabled={isComingSoon || !capabilityData.provider}
                       aria-label={`${label} model`}
                       onChange={(event) => handleModelChange(key, event.target.value)}
                     >
@@ -206,6 +259,14 @@ export function ModelProviderScreen({ serverAddress, onClose }: ModelProviderScr
 
         {updateError && <p className={styles.errorText}>Couldn't save that change -- try again.</p>}
       </div>
+
+      <footer className={styles.footer}>
+        {saved && <span className={styles.saveStatusOk}>Saved</span>}
+        {updateError && <span className={styles.saveStatusError}>Couldn't save -- try again.</span>}
+        <Button variant="primary" loading={saving} disabled={!hasUnsavedChanges} onClick={handleSave}>
+          Save changes
+        </Button>
+      </footer>
     </div>
   );
 }

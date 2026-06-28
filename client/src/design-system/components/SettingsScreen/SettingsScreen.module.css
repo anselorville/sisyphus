@@ -109,8 +109,15 @@
   margin-top: var(--ds-space-3);
 }
 
+.engineModeRow {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-3);
+}
+
 .engineModeTabs {
   display: flex;
+  flex: 1;
   gap: var(--ds-space-2);
 }
 

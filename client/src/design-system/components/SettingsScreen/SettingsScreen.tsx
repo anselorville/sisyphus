@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowLeft, ChevronDown, Cloud, FlaskConical, HardDrive, Server } from "lucide-react";
 import { Button } from "../../primitives/Button";
 import { LanguagePicker } from "../LanguagePicker";
@@ -54,13 +54,25 @@ export function SettingsScreen({
 
   const { data: modelProvidersData, loadError: modelProvidersLoadError, update: updateModelProviders } =
     useModelProviders(serverAddress);
-  const [pendingModeChange, setPendingModeChange] = useState(false);
+  const [draftEngineMode, setDraftEngineMode] = useState<ModelProviderMode | null>(null);
+  const [savingEngineMode, setSavingEngineMode] = useState(false);
 
-  async function handleEngineModeChange(mode: ModelProviderMode) {
-    if (!modelProvidersData || mode === modelProvidersData.mode) return;
-    setPendingModeChange(true);
-    await updateModelProviders({ mode });
-    setPendingModeChange(false);
+  // Seed the draft from the loaded data, but don't clobber an in-progress
+  // unsaved draft if the underlying data re-fetches in the background --
+  // same posture as ModelProviderScreen/ModelLabScreen.
+  useEffect(() => {
+    if (!modelProvidersData) return;
+    setDraftEngineMode((prev) => prev ?? modelProvidersData.mode);
+  }, [modelProvidersData]);
+
+  const hasUnsavedEngineModeChange =
+    modelProvidersData !== null && draftEngineMode !== null && draftEngineMode !== modelProvidersData.mode;
+
+  async function handleSaveEngineMode() {
+    if (!hasUnsavedEngineModeChange || savingEngineMode || draftEngineMode === null) return;
+    setSavingEngineMode(true);
+    await updateModelProviders({ mode: draftEngineMode });
+    setSavingEngineMode(false);
   }
 
   return (
@@ -113,27 +125,36 @@ export function SettingsScreen({
               mode here won't change it until that override is cleared.
             </p>
 
-            {!modelProvidersLoadError && modelProvidersData && (
+            {!modelProvidersLoadError && modelProvidersData && draftEngineMode !== null && (
               <>
-                <div className={styles.engineModeTabs} role="tablist" aria-label="Cloud or local mode">
-                  {ENGINE_MODE_TABS.map(({ key, label, icon: Icon }) => (
-                    <button
-                      key={key}
-                      type="button"
-                      role="tab"
-                      aria-selected={modelProvidersData.mode === key}
-                      className={styles.engineModeTab}
-                      data-active={modelProvidersData.mode === key}
-                      disabled={pendingModeChange}
-                      onClick={() => handleEngineModeChange(key)}
-                    >
-                      <Icon size={16} />
-                      {label}
-                    </button>
-                  ))}
+                <div className={styles.engineModeRow}>
+                  <div className={styles.engineModeTabs} role="tablist" aria-label="Cloud or local mode">
+                    {ENGINE_MODE_TABS.map(({ key, label, icon: Icon }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        role="tab"
+                        aria-selected={draftEngineMode === key}
+                        className={styles.engineModeTab}
+                        data-active={draftEngineMode === key}
+                        onClick={() => setDraftEngineMode(key)}
+                      >
+                        <Icon size={16} />
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <Button
+                    variant="secondary"
+                    loading={savingEngineMode}
+                    disabled={!hasUnsavedEngineModeChange}
+                    onClick={handleSaveEngineMode}
+                  >
+                    Save
+                  </Button>
                 </div>
 
-                {modelProvidersData.mode === "local" && (
+                {draftEngineMode === "local" && (
                   <div className={styles.localModelsWrap}>
                     <LocalModelsControl serverAddress={serverAddress} />
                   </div>
