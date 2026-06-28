@@ -50,3 +50,5 @@ model_providers.json
 
 # Personal research notes that may contain pasted API keys -- never commit.
 docs/refs/
+output.mp3
+tests/
