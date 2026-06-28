@@ -227,6 +227,93 @@
   accent-color: var(--ds-color-primary);
 }
 
+.checkboxRow {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  cursor: pointer;
+}
+
+.checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--ds-color-primary);
+  cursor: pointer;
+}
+
+.fileInput {
+  font-size: var(--ds-font-size-sm);
+  color: var(--ds-color-text-primary);
+}
+
+.adapterTabs {
+  display: flex;
+  gap: var(--ds-space-2);
+}
+
+.adapterTab {
+  padding: var(--ds-space-1) var(--ds-space-3);
+  border: 1px solid var(--ds-color-border);
+  border-radius: var(--ds-radius-pill);
+  background: var(--ds-color-bg-surface);
+  font-size: var(--ds-font-size-xs);
+  font-weight: var(--ds-font-weight-bold);
+  color: var(--ds-color-text-secondary);
+  cursor: pointer;
+}
+
+.adapterTab[data-active="true"] {
+  color: var(--ds-color-primary-strong);
+  border-color: var(--ds-color-primary);
+  background: var(--ds-color-primary-subtle);
+}
+
+.testPanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-2);
+  padding: var(--ds-space-4);
+  margin-top: var(--ds-space-2);
+  background: var(--ds-color-bg-surface-muted);
+  border-radius: var(--ds-radius-md);
+}
+
+.testTitle {
+  margin: 0;
+  font-size: var(--ds-font-size-sm);
+  font-weight: var(--ds-font-weight-bold);
+  color: var(--ds-color-text-primary);
+}
+
+.testResult {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-1);
+  padding: var(--ds-space-3);
+  background: var(--ds-color-bg-surface);
+  border: 1px solid var(--ds-color-border);
+  border-radius: var(--ds-radius-sm);
+}
+
+.testResultLabel {
+  margin: 0;
+  font-size: var(--ds-font-size-xs);
+  font-weight: var(--ds-font-weight-bold);
+  color: var(--ds-color-text-secondary);
+}
+
+.testResultText {
+  margin: 0;
+  font-size: var(--ds-font-size-sm);
+  color: var(--ds-color-text-primary);
+  line-height: var(--ds-line-height-body);
+  white-space: pre-wrap;
+}
+
+.audioPlayer {
+  width: 100%;
+}
+
 .liveNote {
   margin: 0;
   font-size: var(--ds-font-size-xs);

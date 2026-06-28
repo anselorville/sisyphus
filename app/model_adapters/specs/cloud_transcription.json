@@ -1,0 +1,13 @@
+{
+  "id": "cloud:transcription",
+  "label": "Cloud (transcription / ASR)",
+  "capability": "transcription",
+  "fields": [
+    {
+      "key": "language_hint",
+      "label": "Language hint (optional)",
+      "kind": "text",
+      "help": "Leave empty for auto-detect (recommended -- this is a bidirectional pipeline, so locking to one language will misdetect the other)."
+    }
+  ]
+}

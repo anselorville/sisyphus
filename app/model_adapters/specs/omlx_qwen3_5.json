@@ -1,0 +1,32 @@
+{
+  "id": "omlx:qwen3_5",
+  "label": "Qwen3.5 (oMLX, local)",
+  "capability": "text",
+  "fields": [
+    {
+      "key": "temperature",
+      "label": "Temperature",
+      "kind": "number",
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.05,
+      "help": "Higher = more varied/creative phrasing, lower = more literal/consistent."
+    },
+    {
+      "key": "top_p",
+      "label": "Top-p",
+      "kind": "number",
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.05,
+      "help": "Nucleus sampling cutoff."
+    },
+    {
+      "key": "enable_thinking",
+      "label": "Enable thinking mode",
+      "kind": "boolean",
+      "default": false,
+      "help": "Qwen3.5's chain-of-thought 'thinking' mode. Off by default for latency: verified live, a single translation took ~51s (1598 reasoning tokens) with thinking enabled vs. well under a second with it disabled. Turn this on only if you want higher-quality, much slower responses -- not recommended for real-time translation."
+    }
+  ]
+}

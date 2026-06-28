@@ -95,6 +95,7 @@ def build_mlx_llm(
     *,
     temperature: float | None = None,
     top_p: float | None = None,
+    enable_thinking: bool = False,
 ) -> OpenAILLMService:
     """Construct the oMLX translation LLM service (generic OpenAI-compatible
     Pipecat LLM service, pointed at the local oMLX server, using the same
@@ -103,12 +104,17 @@ def build_mlx_llm(
     Requires a running oMLX server at `settings.omlx_base_url` with
     `settings.omlx_llm_model` already loaded.
 
-    `chat_template_kwargs: {"enable_thinking": False}` disables Qwen3.5's
-    chain-of-thought "thinking" mode. Verified live: with thinking enabled,
-    a single translation took ~51s (1598 reasoning tokens for a two-line
-    answer); with `enable_thinking: false`, the same request returned a
-    correct translation in well under a second. Real-time translation
-    cannot afford the former, so this is not optional.
+    `chat_template_kwargs: {"enable_thinking": enable_thinking}` controls
+    Qwen3.5's chain-of-thought "thinking" mode, defaulting to `False`
+    (disabled) for latency: verified live, a single translation took ~51s
+    (1598 reasoning tokens for a two-line answer) with thinking enabled,
+    vs. well under a second with `enable_thinking=False`. Real-time
+    translation cannot afford the former as a default -- but it's now a
+    real Model Lab tunable (`omlx:qwen3_5`'s `enable_thinking` field, see
+    app/model_adapters/specs/omlx_qwen3_5.json) for a user who explicitly
+    wants higher-quality, slower responses sometimes (e.g. while tuning a
+    persona/system prompt via the preview loop, not necessarily mid live
+    conversation).
 
     This must be nested under `extra={"extra_body": {...}}`, NOT
     `extra={"chat_template_kwargs": {...}}` directly: `Settings.extra` is
@@ -123,7 +129,7 @@ def build_mlx_llm(
     its contents are merged into the raw request body without going through
     parameter validation.
 
-    `temperature`/`top_p` (from `Settings.llm`, the Model Lab feature -- see
+    `temperature`/`top_p` (from the Model Lab feature -- see
     app/model_settings.py) are forwarded only when given; the constructor's
     own defaults (`NOT_GIVEN`, meaning "omit from the request") apply
     otherwise.
@@ -139,7 +145,7 @@ def build_mlx_llm(
         settings=OpenAILLMService.Settings(
             model=settings.omlx_llm_model,
             system_instruction=system_prompt,
-            extra={"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}},
+            extra={"extra_body": {"chat_template_kwargs": {"enable_thinking": enable_thinking}}},
             **overrides,
         ),
     )
@@ -275,6 +281,8 @@ class MlxTTSService(TTSService):
         speed: float | None = None,
         temperature: float | None = None,
         top_p: float | None = None,
+        top_k: int | None = None,
+        repetition_penalty: float | None = None,
         **kwargs,
     ) -> None:
         super().__init__(push_start_frame=True, push_stop_frames=True, **kwargs)
@@ -284,12 +292,17 @@ class MlxTTSService(TTSService):
         # Model Lab overrides (app/model_settings.py): `default_instructions`
         # is the static fallback used when there's no live per-utterance tone
         # yet (e.g. the very first utterance of a session); `speed`/
-        # `temperature`/`top_p` are sent on every request when set. All
-        # `None` by default -- identical behavior to before this feature.
+        # `temperature`/`top_p`/`top_k`/`repetition_penalty` are sent on
+        # every request when set -- all real fields on oMLX's
+        # `AudioSpeechRequest` schema (confirmed live against the running
+        # server's /openapi.json). All `None` by default -- identical
+        # behavior to before this feature.
         self._default_instructions = default_instructions
         self._speed = speed
         self._temperature = temperature
         self._top_p = top_p
+        self._top_k = top_k
+        self._repetition_penalty = repetition_penalty
 
     def can_generate_metrics(self) -> bool:
         """oMLX TTS supports processing-time metrics."""
@@ -374,6 +387,10 @@ class MlxTTSService(TTSService):
                 extra_body["temperature"] = self._temperature
             if self._top_p is not None:
                 extra_body["top_p"] = self._top_p
+            if self._top_k is not None:
+                extra_body["top_k"] = self._top_k
+            if self._repetition_penalty is not None:
+                extra_body["repetition_penalty"] = self._repetition_penalty
             async with self._client.audio.speech.with_streaming_response.create(
                 input=text,
                 model=self._model,
@@ -415,6 +432,8 @@ def build_mlx_tts(
     speed: float | None = None,
     temperature: float | None = None,
     top_p: float | None = None,
+    top_k: int | None = None,
+    repetition_penalty: float | None = None,
 ) -> MlxTTSService:
     """Construct the oMLX TTS service (custom `MlxTTSService`, pointed at
     oMLX's `/v1/audio/speech` endpoint, using the VoxCPM2 model).
@@ -442,11 +461,12 @@ def build_mlx_tts(
     future caller that just wants oMLX TTS standalone) get the exact same
     behavior as before this feature existed.
 
-    `voice`/`default_instructions`/`speed`/`temperature`/`top_p` (from
-    `Settings.tts`, the Model Lab feature -- see app/model_settings.py) are
-    Model-Lab overrides, all `None`/inert by default. `default_instructions`
-    is the static fallback `MlxTTSService.run_tts` uses when no live
-    per-utterance tone has been inferred yet.
+    `voice`/`default_instructions`/`speed`/`temperature`/`top_p`/`top_k`/
+    `repetition_penalty` (the Model Lab feature -- see app/model_settings.py
+    and app/model_adapters/specs/omlx_voxcpm2.json) are Model-Lab overrides,
+    all `None`/inert by default. `default_instructions` is the static
+    fallback `MlxTTSService.run_tts` uses when no live per-utterance tone
+    has been inferred yet.
     """
     return MlxTTSService(
         api_key=settings.omlx_api_key,
@@ -457,5 +477,7 @@ def build_mlx_tts(
         speed=speed,
         temperature=temperature,
         top_p=top_p,
+        top_k=top_k,
+        repetition_penalty=repetition_penalty,
         settings=TTSSettings(voice=voice or "default", model=None, language=None),
     )

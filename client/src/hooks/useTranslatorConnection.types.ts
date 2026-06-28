@@ -130,6 +130,51 @@ export type ModelProvidersPartialUpdate = {
   cloud?: Partial<Record<ModelCapability, Partial<Pick<ModelProviderCloudCapability, "provider" | "model">>>>;
 };
 
+/** A single tunable field's render metadata, as reported by GET
+ * /api/model-lab/schema (see app/model_lab.py's `FieldSchema` -- the new,
+ * dynamic-schema replacement for the old fixed-shape /api/model-settings).
+ * `kind` mirrors the old `ModelSettingsField.type` but adds "boolean". */
+export interface ModelLabField {
+  key: string;
+  label: string;
+  kind: "text" | "textarea" | "number" | "boolean" | "select";
+  help?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: string[];
+  default?: unknown;
+}
+
+/** One adapter -- a concrete model/engine backing a capability (e.g. "Cloud"
+ * or a specific local oMLX model) -- with its own field list. Multiple
+ * adapters can coexist per capability; the user switches between them. */
+export interface ModelLabAdapter {
+  id: string;
+  label: string;
+  capability: ModelLabCapability;
+  fields: ModelLabField[];
+}
+
+/** The 3 model-lab capability slots -- distinct from `ModelCapability`
+ * (which also includes "omni", not relevant to per-adapter tuning yet). */
+export type ModelLabCapability = "text" | "speech" | "transcription";
+
+/** Full shape of GET /api/model-lab/schema. */
+export type ModelLabSchema = Record<ModelLabCapability, { adapters: ModelLabAdapter[] }>;
+
+/** A single field value as accepted/returned by the model-lab values store.
+ * Sparse -- only fields the user has touched are present. */
+export type ModelLabFieldValue = string | number | boolean | null;
+
+/** Shape of GET /api/model-lab/values and the PUT response -- saved values
+ * keyed by adapter id, each a sparse map of field key -> value. */
+export type ModelLabValues = Record<string, Record<string, ModelLabFieldValue>>;
+
+/** Body accepted by PUT /api/model-lab/values -- partial values for one or
+ * more adapters; omitted fields/adapters are left unchanged server-side. */
+export type ModelLabValuesUpdate = Record<string, Record<string, ModelLabFieldValue>>;
+
 interface TranscriptEventBase {
   id: string;
   timestamp: number;

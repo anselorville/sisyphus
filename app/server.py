@@ -20,10 +20,13 @@ import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import json as json_module
+
 import httpx
 import uvicorn
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
@@ -36,9 +39,10 @@ from app.model_providers import (
     load_model_providers,
     save_model_providers,
 )
+from app.model_adapters import Capability, list_adapters_async
+from app.model_lab_preview import PreviewError, preview_speech, preview_text, preview_transcription
 from app.model_settings import (
     apply_partial_update,
-    effective_settings_payload,
     load_model_settings,
     save_model_settings,
 )
@@ -244,36 +248,164 @@ async def local_engine_stop() -> dict:
     return await _set_local_engine_loaded(settings, loaded=False)
 
 
-@app.get("/api/model-settings")
-async def get_model_settings() -> dict:
-    """Return the current effective model-tuning settings (file overrides
-    merged over defaults) plus schema metadata describing every tunable
-    field, grouped by model role (llm/tts/stt) and, where the parameter
-    vocabulary genuinely differs, by engine (see app/model_settings.py's
-    `model_settings_schema`).
+_CAPABILITIES: tuple[Capability, ...] = ("text", "speech", "transcription")
 
-    NOTE: persisting a value here does not yet change pipeline behavior --
-    see app/model_settings.py's module docstring for the (not-yet-made)
-    app/pipeline.py wiring this store is designed to plug into. Saved
-    settings take effect, once that wiring lands, on the *next* connection
-    (engine/services are built once per WebRTC connection, not live-reloaded
-    mid-call).
+
+@app.get("/api/model-lab/schema")
+async def get_model_lab_schema() -> dict:
+    """Return every tunable adapter, grouped by capability:
+
+        {
+          "text": {"adapters": [AdapterSpec, ...]},
+          "speech": {"adapters": [...]},
+          "transcription": {"adapters": [...]},
+        }
+
+    Each capability's adapter list always has exactly one `cloud:<capability>`
+    entry (the shared cloud parameter table) plus the local adapter matching
+    whichever oMLX model is currently configured for that capability --
+    either a real spec-file match (keyed by oMLX's `config_model_type`, see
+    app/model_adapters/'s module docstring) or an "unrecognized model, no
+    tuning profile yet" stub with no fields, never an error.
     """
-    return effective_settings_payload()
+    settings = load_settings()
+    return {
+        capability: {"adapters": [a.to_dict() for a in await list_adapters_async(capability, settings)]}
+        for capability in _CAPABILITIES
+    }
 
 
-@app.put("/api/model-settings")
-async def put_model_settings(request: dict) -> dict:
-    """Accept a partial or full model-settings object, merge it over the
-    persisted settings, validate against the known schema (unknown
-    section/field names are silently ignored -- see
+@app.get("/api/model-lab/values")
+async def get_model_lab_values() -> dict:
+    """Return the full persisted Model Lab value store:
+    `{"<adapter_id>": {<field_key>: <value>, ...}, ...}`.
+    """
+    return load_model_settings()
+
+
+@app.put("/api/model-lab/values")
+async def put_model_lab_values(request: dict) -> dict:
+    """Accept a partial `{"<adapter_id>": {...fields...}, ...}` update,
+    merge it over the persisted store (only the adapter id(s)/field(s)
+    actually present in the body are touched -- see
     `app.model_settings.apply_partial_update`), persist it, and return the
-    new effective settings in the same shape as GET.
+    new full value store in the same shape as GET.
     """
     current = load_model_settings()
     updated = apply_partial_update(current, request)
     save_model_settings(updated)
-    return effective_settings_payload()
+    return updated
+
+
+@app.post("/api/model-lab/preview/text")
+async def post_model_lab_preview_text(request: dict) -> dict:
+    """Run one real LLM call against the configured service for
+    `request["adapter_id"]` (`cloud:text` -> whatever provider is currently
+    configured for the text capability; `omlx:<config_model_type>` -> the
+    matching oMLX builder), with `request["values"]` applied as draft
+    overrides on top of (not replacing) the currently-saved values for that
+    adapter.
+
+    Body: `{"adapter_id": str, "values": {...draft field overrides...},
+    "input_text": str}`. Returns `{"output_text": str}`.
+
+    Uses a short, generic test system prompt -- NOT the full bidirectional
+    translation system prompt -- unless `values.system_prompt_override` (or
+    a previously-saved one) is set, in which case that exact persona text is
+    used verbatim as the system instruction (see
+    `app.model_lab_preview.preview_text`'s docstring for why).
+    """
+    adapter_id = request.get("adapter_id")
+    values = request.get("values") or {}
+    input_text = request.get("input_text") or ""
+    if not isinstance(adapter_id, str) or not adapter_id:
+        raise HTTPException(status_code=400, detail="'adapter_id' is required.")
+    if not isinstance(values, dict):
+        raise HTTPException(status_code=400, detail="'values' must be an object.")
+
+    settings = load_settings()
+    try:
+        output_text = await preview_text(
+            adapter_id=adapter_id, values=values, input_text=input_text, settings=settings
+        )
+    except PreviewError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        # Missing API key / unconfigured provider, etc. -- same class of
+        # error app/pipeline.py's own builders raise at pipeline-build time.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"output_text": output_text}
+
+
+@app.post("/api/model-lab/preview/speech")
+async def post_model_lab_preview_speech(request: dict):
+    """Run one real TTS call against the configured service for
+    `request["adapter_id"]`, with `request["values"]` applied as draft
+    overrides on top of the currently-saved values for that adapter.
+
+    Body: `{"adapter_id": str, "values": {...}, "input_text": str}`.
+    Returns a real WAV file (`Content-Type: audio/wav`) -- the concatenated
+    `TTSAudioRawFrame.audio` bytes from one real `run_test()` call, wrapped
+    in a WAV header built from the frames' own sample_rate/num_channels (see
+    `app.model_lab_preview._wav_bytes_from_frames`).
+    """
+    adapter_id = request.get("adapter_id")
+    values = request.get("values") or {}
+    input_text = request.get("input_text") or ""
+    if not isinstance(adapter_id, str) or not adapter_id:
+        raise HTTPException(status_code=400, detail="'adapter_id' is required.")
+    if not isinstance(values, dict):
+        raise HTTPException(status_code=400, detail="'values' must be an object.")
+
+    settings = load_settings()
+    try:
+        wav_bytes = await preview_speech(
+            adapter_id=adapter_id, values=values, input_text=input_text, settings=settings
+        )
+    except PreviewError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(content=wav_bytes, media_type="audio/wav")
+
+
+@app.post("/api/model-lab/preview/transcription")
+async def post_model_lab_preview_transcription(
+    adapter_id: str = Form(...),
+    values: str = Form("{}"),
+    audio: UploadFile = File(...),
+) -> dict:
+    """Run one real STT call against the configured service for
+    `adapter_id`, with `values` (a JSON-encoded string field) applied as
+    draft overrides on top of the currently-saved values for that adapter.
+
+    Multipart form fields: `adapter_id` (str), `values` (JSON-encoded
+    object, as a string field), `audio` (file upload). The uploaded file
+    must be a WAV (16-bit PCM) -- its actual sample rate/channel count are
+    read from its own header (via Python's `wave` module) rather than
+    assumed, so any sample rate works, but non-WAV containers are rejected
+    with a 400.
+
+    Returns `{"transcript": str}`.
+    """
+    try:
+        parsed_values = json_module.loads(values) if values else {}
+    except json_module.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"'values' is not valid JSON: {exc}") from exc
+    if not isinstance(parsed_values, dict):
+        raise HTTPException(status_code=400, detail="'values' must decode to a JSON object.")
+
+    audio_bytes = await audio.read()
+    settings = load_settings()
+    try:
+        transcript = await preview_transcription(
+            adapter_id=adapter_id, values=parsed_values, audio_wav_bytes=audio_bytes, settings=settings
+        )
+    except PreviewError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"transcript": transcript}
 
 
 @app.get("/api/model-providers")

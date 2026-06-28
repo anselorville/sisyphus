@@ -1,0 +1,13 @@
+{
+  "id": "omlx:qwen3_asr",
+  "label": "Qwen3-ASR (oMLX, local -- local files currently broken/incomplete)",
+  "capability": "transcription",
+  "fields": [
+    {
+      "key": "language_hint",
+      "label": "Language hint (optional)",
+      "kind": "text",
+      "help": "Leave empty for auto-detect. This model's local files are currently broken/incomplete on this oMLX install and could not be loaded to verify behavior live; this field is carried over from the shared /v1/audio/transcriptions schema (same endpoint every oMLX STT model uses), not specifically verified against qwen3_asr."
+    }
+  ]
+}

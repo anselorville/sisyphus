@@ -38,6 +38,7 @@ dependencies = [
     # transitive dependency of pipecat-ai, but declared explicitly since we
     # now import it directly.
     "httpx>=0.27.0",
+    "python-multipart>=0.0.32",
 ]
 
 [project.scripts]

@@ -194,6 +194,7 @@ def build_openrouter_llm(
     *,
     temperature: float | None = None,
     top_p: float | None = None,
+    max_tokens: int | None = None,
 ) -> OpenRouterLLMService:
     """Construct an OpenRouter-backed translation LLM service
     (`OpenRouterLLMService`, pointed at OpenRouter, using the same
@@ -225,14 +226,19 @@ def build_openrouter_llm(
     top level (the actual wire shape `extra_body`'s contents get merged
     into) -- both produced `reasoning_tokens=0`.
 
-    `temperature`/`top_p` (from `Settings.llm`, the Model Lab feature -- see
-    app/model_settings.py) are forwarded only when given.
+    `temperature`/`top_p`/`max_tokens` (from the Model Lab feature -- see
+    app/model_settings.py's `cloud:text` adapter, shared across every cloud
+    text provider) are forwarded only when given; `max_tokens` is a real,
+    standard field on `OpenAILLMService.Settings` (confirmed in
+    pipecat.services.openai.base_llm), not an OpenRouter-specific add-on.
     """
-    overrides: dict[str, float] = {}
+    overrides: dict[str, float | int] = {}
     if temperature is not None:
         overrides["temperature"] = temperature
     if top_p is not None:
         overrides["top_p"] = top_p
+    if max_tokens is not None:
+        overrides["max_tokens"] = max_tokens
     return OpenRouterLLMService(
         api_key=settings.openrouter_api_key,
         base_url=OPENROUTER_BASE_URL,

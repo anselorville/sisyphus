@@ -104,7 +104,7 @@ from app.model_providers import (
     load_model_providers,
     model_providers_configured,
 )
-from app.model_settings import ModelSettings, load_model_settings
+from app.model_settings import ModelLabValues, load_model_settings, values_for
 from app.openrouter_services import build_openrouter_llm, build_openrouter_stt, build_openrouter_tts
 
 # Cartesia voice per TARGET_LANG, keyed by the *short* language code we parse
@@ -757,7 +757,7 @@ def _openrouter_model_or_first(settings: Settings, catalog: list[str], configure
 def _build_cloud_text_service(
     settings: Settings,
     system_prompt: str,
-    model_settings: ModelSettings,
+    model_lab_values: ModelLabValues,
     cloud: CloudProviderConfig,
 ) -> LLMService:
     """Build the cloud translation LLM service for whichever provider is
@@ -769,17 +769,22 @@ def _build_cloud_text_service(
     - `"openrouter"`: `build_openrouter_llm`, using `cloud.text.model` if
       set, else the first entry of `settings.openrouter_text_models`.
 
-    `model_settings.llm.temperature/top_p` (Model Lab) flow into whichever
-    provider is selected, same as before this feature existed for the
-    Anthropic-only path.
+    Model Lab overrides come from the generic `cloud:text` adapter's saved
+    values (see app/model_adapters/specs/cloud_text.json for the field
+    list: `temperature`/`top_p`/`max_tokens`/`system_prompt_override`) --
+    one shared parameter table across every cloud text provider, per the
+    product owner's explicit ask (Cloud providers are broadly OpenAI-
+    style/Anthropic-style compatible on these fields).
+    `system_prompt_override`, if present, is expected to already have been
+    folded into `system_prompt` by the caller (`build_pipeline`) via
+    `build_translation_system_prompt(persona_override=...)` -- this
+    function only forwards `temperature`/`top_p`/`max_tokens`.
     """
     provider = cloud.text.provider or "anthropic"
-
-    llm_overrides: dict[str, float] = {}
-    if model_settings.llm.temperature is not None:
-        llm_overrides["temperature"] = model_settings.llm.temperature
-    if model_settings.llm.top_p is not None:
-        llm_overrides["top_p"] = model_settings.llm.top_p
+    values = values_for("cloud:text", model_lab_values)
+    temperature = values.get("temperature")
+    top_p = values.get("top_p")
+    max_tokens = values.get("max_tokens")
 
     if provider == "openrouter":
         _require_openrouter_key(settings)
@@ -790,14 +795,22 @@ def _build_cloud_text_service(
             settings,
             system_prompt,
             model,
-            temperature=model_settings.llm.temperature,
-            top_p=model_settings.llm.top_p,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
         )
 
     # provider == "anthropic" (default)
     _require_anthropic_key(settings)
+    llm_overrides: dict[str, Any] = {}
     if cloud.text.model:
         llm_overrides["model"] = cloud.text.model
+    if temperature is not None:
+        llm_overrides["temperature"] = temperature
+    if top_p is not None:
+        llm_overrides["top_p"] = top_p
+    if max_tokens is not None:
+        llm_overrides["max_tokens"] = max_tokens
     return AnthropicLLMService(
         api_key=settings.anthropic_api_key,
         settings=AnthropicLLMSettings(system_instruction=system_prompt, **llm_overrides),
@@ -806,8 +819,8 @@ def _build_cloud_text_service(
 
 def _build_cloud_speech_service(
     settings: Settings,
-    direction_stripper: "TranslationDirectionStripper",
-    model_settings: ModelSettings,
+    direction_stripper: "TranslationDirectionStripper | None",
+    model_lab_values: ModelLabValues,
     cloud: CloudProviderConfig,
 ) -> TTSService:
     """Build the cloud TTS service for whichever provider is configured for
@@ -823,43 +836,61 @@ def _build_cloud_speech_service(
       backend actually changes output in response, unlike the Cartesia path
       which is its own separate UNVERIFIED status (no real Cartesia account
       in this environment either).
+
+    Model Lab overrides come from the `cloud:speech` adapter's saved values
+    (see app/model_adapters/specs/cloud_speech.json: `voice`/`speed`/
+    `instructions_template`/`temperature`/`top_p`), one shared table across
+    every cloud speech provider.
+
+    `direction_stripper=None` is valid (used by app/model_lab_preview.py's
+    one-shot preview calls, which have no live pipeline/tone source to read
+    from) -- both `ToneAwareCartesiaTTSService`/`build_openrouter_tts`
+    accept `tone_source=None` and simply never have a live tone to forward,
+    falling back to the static `instructions_template` override only.
     """
     provider = cloud.speech.provider or "cartesia"
+    values = values_for("cloud:speech", model_lab_values)
+    voice = values.get("voice")
+    speed = values.get("speed")
+    instructions_template = values.get("instructions_template")
+    temperature = values.get("temperature")
+    top_p = values.get("top_p")
 
     if provider == "openrouter":
         _require_openrouter_key(settings)
         model = _openrouter_model_or_first(
             settings, settings.openrouter_tts_models, cloud.speech.model, "speech"
         )
-        if not model_settings.tts.voice:
+        if not voice:
             raise RuntimeError(
                 "Cloud speech capability set to provider 'openrouter', but no "
-                "voice is configured (Model Lab tts.voice) -- OpenRouter TTS "
-                "models (e.g. mai-voice-2) require a real voice id, there is "
-                "no universal default. Set one in the Model Lab settings."
+                "voice is configured (Model Lab cloud:speech.voice) -- "
+                "OpenRouter TTS models (e.g. mai-voice-2) require a real "
+                "voice id, there is no universal default. Set one in the "
+                "Model Lab settings."
             )
         return build_openrouter_tts(
             settings,
             model=model,
-            voice=model_settings.tts.voice,
-            default_instructions=model_settings.tts.instructions_template,
-            speed=model_settings.tts.speed,
-            temperature=model_settings.tts.temperature,
-            top_p=model_settings.tts.top_p,
+            voice=voice,
+            default_instructions=instructions_template,
+            speed=speed,
+            temperature=temperature,
+            top_p=top_p,
             tone_source=direction_stripper,
         )
 
     # provider == "cartesia" (default)
     _require_cartesia_key(settings)
     tts_overrides: dict[str, float] = {}
-    if model_settings.tts.speed is not None:
-        tts_overrides["speed"] = model_settings.tts.speed
+    if speed is not None:
+        tts_overrides["speed"] = speed
     return ToneAwareCartesiaTTSService(
         tone_source=direction_stripper,
         api_key=settings.cartesia_api_key,
         settings=CartesiaTTSService.Settings(
             model=cloud.speech.model or CARTESIA_DEFAULT_MODEL,
-            voice=model_settings.tts.voice or cartesia_voice_for_language(settings.target_lang),
+            voice=voice or cartesia_voice_for_language(settings.target_lang),
             language=cartesia_language_for(settings.target_lang),
             **tts_overrides,
         ),
@@ -867,7 +898,7 @@ def _build_cloud_speech_service(
 
 
 def _build_cloud_transcription_service(
-    settings: Settings, model_settings: ModelSettings, cloud: CloudProviderConfig
+    settings: Settings, model_lab_values: ModelLabValues, cloud: CloudProviderConfig
 ) -> STTService:
     """Build the cloud STT service for whichever provider is configured for
     the "transcription" capability (`cloud.transcription.provider`):
@@ -878,26 +909,29 @@ def _build_cloud_transcription_service(
     - `"openrouter"`: `build_openrouter_stt`, using
       `cloud.transcription.model` if set, else the first entry of
       `settings.openrouter_asr_models`.
+
+    Model Lab overrides come from the `cloud:transcription` adapter's saved
+    values (see app/model_adapters/specs/cloud_transcription.json:
+    `language_hint` only, deliberately sparse).
     """
     provider = cloud.transcription.provider or "deepgram"
+    values = values_for("cloud:transcription", model_lab_values)
+    language_hint = values.get("language_hint")
 
     if provider == "openrouter":
         _require_openrouter_key(settings)
         model = _openrouter_model_or_first(
             settings, settings.openrouter_asr_models, cloud.transcription.model, "transcription"
         )
-        return build_openrouter_stt(
-            settings, model=model, language_hint=model_settings.stt.language_hint
-        )
+        return build_openrouter_stt(settings, model=model, language_hint=language_hint)
 
     # provider == "deepgram" (default)
     _require_deepgram_key(settings)
     stt_kwargs: dict[str, object] = {}
     stt_settings_kwargs: dict[str, object] = {"model": cloud.transcription.model or DEEPGRAM_DEFAULT_MODEL}
-    stt_language_hint = model_settings.stt.language_hint
-    if stt_language_hint:
+    if language_hint:
         try:
-            stt_settings_kwargs["language"] = Language(stt_language_hint.strip().lower())
+            stt_settings_kwargs["language"] = Language(language_hint.strip().lower())
         except ValueError:
             pass
     stt_kwargs["settings"] = DeepgramSTTService.Settings(**stt_settings_kwargs)
@@ -908,7 +942,7 @@ def _build_cloud_services(
     settings: Settings,
     system_prompt: str,
     direction_stripper: "TranslationDirectionStripper",
-    model_settings: ModelSettings,
+    model_lab_values: ModelLabValues,
     model_providers: ModelProviders,
 ) -> tuple[STTService, LLMService, TTSService]:
     """Build the cloud STT/LLM/TTS service trio, dispatching per-capability
@@ -925,38 +959,34 @@ def _build_cloud_services(
     point -- same posture as before this feature, just scoped per capability
     instead of requiring all three `CLOUD_REQUIRED_KEYS` unconditionally.
 
-    `model_settings` (Model Lab overrides) flow into whichever
-    provider/model ends up active per capability -- Model Provider picks
-    WHICH service serves a capability, Model Lab tunes whichever one is
-    active; they compose, see app/model_providers.py's module docstring.
+    `model_lab_values` (the full generic per-adapter value store) flows
+    into whichever provider/model ends up active per capability via the
+    shared `cloud:<capability>` adapter -- Model Provider picks WHICH
+    service serves a capability, Model Lab tunes whichever one is active;
+    they compose, see app/model_providers.py's module docstring.
     """
     cloud = model_providers.cloud
 
-    stt = _build_cloud_transcription_service(settings, model_settings, cloud)
-    llm = _build_cloud_text_service(settings, system_prompt, model_settings, cloud)
-    tts = _build_cloud_speech_service(settings, direction_stripper, model_settings, cloud)
+    stt = _build_cloud_transcription_service(settings, model_lab_values, cloud)
+    llm = _build_cloud_text_service(settings, system_prompt, model_lab_values, cloud)
+    tts = _build_cloud_speech_service(settings, direction_stripper, model_lab_values, cloud)
 
     return stt, llm, tts
 
 
 def _build_local_service_trio(
-    settings: Settings, system_prompt: str, model_settings: ModelSettings
+    settings: Settings, system_prompt: str, model_lab_values: ModelLabValues
 ) -> tuple[STTService, LLMService, TTSService]:
     """Build the local/offline STT/LLM/TTS service trio (Whisper/Ollama/Piper).
 
-    Only `llm`/`stt` Model Lab fields are wired here (see
-    `app.local_services.build_local_llm`/`build_local_stt`) -- there's no
-    `tts` section for this engine in `model_settings_schema()` at all
-    (Piper has no expressiveness controls; see `build_local_tts`'s
-    docstring for why that's a deliberate no-op, not an oversight).
+    This engine (faster-whisper + Ollama + Piper) predates the per-adapter
+    Model Lab redesign and has no declared `AdapterSpec` of its own (it's
+    the Pi-portable fallback, not a tuning target the product owner asked
+    to expose adapters for) -- left at today's hardcoded defaults, same
+    behavior as before this feature, no values lookup performed.
     """
-    stt = build_local_stt(settings, language_hint=model_settings.stt.language_hint)
-    llm = build_local_llm(
-        settings,
-        system_prompt,
-        temperature=model_settings.llm.temperature,
-        top_p=model_settings.llm.top_p,
-    )
+    stt = build_local_stt(settings)
+    llm = build_local_llm(settings, system_prompt)
     tts = build_local_tts(settings)
     return stt, llm, tts
 
@@ -965,7 +995,7 @@ def _build_mlx_service_trio(
     settings: Settings,
     system_prompt: str,
     direction_stripper: "TranslationDirectionStripper",
-    model_settings: ModelSettings,
+    model_lab_values: ModelLabValues,
 ) -> tuple[STTService, LLMService, TTSService]:
     """Build the oMLX STT/LLM/TTS service trio (see app/mlx_services.py).
 
@@ -979,26 +1009,43 @@ def _build_mlx_service_trio(
     `/v1/audio/speech` -- verified live (this session) that this field
     measurably changes the generated audio for identical input text.
 
-    `model_settings` (Model Lab overrides) flow into all three builders --
-    this is the one engine where every field in `ModelSettings` has been
-    live-verified to actually reach oMLX (the only engine with a real
-    server to test against in this environment).
+    Model Lab overrides come from the per-model-architecture adapters
+    (`omlx:qwen3_5`, `omlx:voxcpm2`, `omlx:nemotron_asr`/`omlx:qwen3_asr`),
+    keyed by `config_model_type` rather than the exact model id -- see
+    app/model_adapters/'s module docstring. Looking up by the *configured*
+    model id's `config_model_type` here (rather than hardcoding which
+    adapter id applies) keeps this in sync with whichever oMLX model is
+    actually loaded, the same live discovery `list_adapters` does for the
+    schema endpoint.
     """
-    stt = build_mlx_stt(settings, language_hint=model_settings.stt.language_hint)
+    from app.model_adapters import omlx_config_model_type  # local import: avoid import cycle at module load
+
+    stt_model_type = omlx_config_model_type(settings, settings.omlx_stt_model)
+    llm_model_type = omlx_config_model_type(settings, settings.omlx_llm_model)
+    tts_model_type = omlx_config_model_type(settings, settings.omlx_tts_model)
+
+    stt_values = values_for(f"omlx:{stt_model_type}", model_lab_values) if stt_model_type else {}
+    llm_values = values_for(f"omlx:{llm_model_type}", model_lab_values) if llm_model_type else {}
+    tts_values = values_for(f"omlx:{tts_model_type}", model_lab_values) if tts_model_type else {}
+
+    stt = build_mlx_stt(settings, language_hint=stt_values.get("language_hint"))
     llm = build_mlx_llm(
         settings,
         system_prompt,
-        temperature=model_settings.llm.temperature,
-        top_p=model_settings.llm.top_p,
+        temperature=llm_values.get("temperature"),
+        top_p=llm_values.get("top_p"),
+        enable_thinking=bool(llm_values.get("enable_thinking", False)),
     )
     tts = build_mlx_tts(
         settings,
         direction_stripper,
-        voice=model_settings.tts.voice,
-        default_instructions=model_settings.tts.instructions_template,
-        speed=model_settings.tts.speed,
-        temperature=model_settings.tts.temperature,
-        top_p=model_settings.tts.top_p,
+        voice=tts_values.get("voice"),
+        default_instructions=tts_values.get("instructions"),
+        speed=tts_values.get("speed"),
+        temperature=tts_values.get("temperature"),
+        top_p=tts_values.get("top_p"),
+        top_k=tts_values.get("top_k"),
+        repetition_penalty=tts_values.get("repetition_penalty"),
     )
     return stt, llm, tts
 
@@ -1056,12 +1103,14 @@ def build_pipeline(
     # connection, same lifecycle as `settings`/`engine` -- a saved settings
     # change takes effect on the *next* connection, not live mid-call (no
     # mid-conversation re-build, matching `select_engine()`'s own
-    # once-per-connection contract).
-    model_settings = load_model_settings()
+    # once-per-connection contract). This is the full generic
+    # `{adapter_id: {field_key: value}}` store; each builder below pulls out
+    # only the adapter id(s) relevant to it via `values_for`.
+    model_lab_values = load_model_settings()
 
     # Model Provider settings (app/model_providers.py): which provider/model
     # serves each capability, loaded on the same once-per-connection
-    # lifecycle as `model_settings` above. `load_model_providers()` itself
+    # lifecycle as `model_lab_values` above. `load_model_providers()` itself
     # already returns all-defaults (`mode="local"`, `engine="omlx"`) when
     # model_providers.json doesn't exist on disk at all -- see that
     # function's docstring for why that default is safe: it only matters
@@ -1071,19 +1120,16 @@ def build_pipeline(
     # deployments with no model_providers.json keep working unchanged).
     model_providers = load_model_providers()
 
-    system_prompt = build_translation_system_prompt(
-        settings.source_lang,
-        settings.target_lang,
-        persona_override=model_settings.llm.system_prompt_override,
-    )
-
     direction_stripper = TranslationDirectionStripper()
 
     engine = select_engine(settings)
     if engine == "offline":
         # Untouched, separate, lower-tier concern -- not part of
         # model_providers.mode at all (per this feature's explicit scope).
-        stt, llm, tts = _build_local_service_trio(settings, system_prompt, model_settings)
+        # No declared adapter for this engine (see `_build_local_service_trio`),
+        # so no persona override either -- always the default persona.
+        system_prompt = build_translation_system_prompt(settings.source_lang, settings.target_lang)
+        stt, llm, tts = _build_local_service_trio(settings, system_prompt, model_lab_values)
     elif engine == "omlx" or (model_providers_configured() and model_providers.mode == "local"):
         # "omlx" was requested explicitly via ENGINE=omlx, OR the cloud
         # engine is active but the user has EXPLICITLY chosen mode="local"
@@ -1111,10 +1157,30 @@ def build_pipeline(
                 f"is not a supported local engine (available: "
                 f"{AVAILABLE_LOCAL_ENGINES}) -- falling back to 'omlx'."
             )
-        stt, llm, tts = _build_mlx_service_trio(settings, system_prompt, direction_stripper, model_settings)
+        # Persona override for the omlx text adapter (`omlx:<config_model_type>`,
+        # e.g. `omlx:qwen3_5`) -- resolved by the same config_model_type lookup
+        # `_build_mlx_service_trio` performs internally for its other fields;
+        # done once more here since the persona has to be folded into
+        # `system_prompt` before that function is called, not after.
+        from app.model_adapters import omlx_config_model_type
+
+        llm_model_type = omlx_config_model_type(settings, settings.omlx_llm_model)
+        llm_values = values_for(f"omlx:{llm_model_type}", model_lab_values) if llm_model_type else {}
+        system_prompt = build_translation_system_prompt(
+            settings.source_lang,
+            settings.target_lang,
+            persona_override=llm_values.get("system_prompt_override"),
+        )
+        stt, llm, tts = _build_mlx_service_trio(settings, system_prompt, direction_stripper, model_lab_values)
     else:
+        cloud_text_values = values_for("cloud:text", model_lab_values)
+        system_prompt = build_translation_system_prompt(
+            settings.source_lang,
+            settings.target_lang,
+            persona_override=cloud_text_values.get("system_prompt_override"),
+        )
         stt, llm, tts = _build_cloud_services(
-            settings, system_prompt, direction_stripper, model_settings, model_providers
+            settings, system_prompt, direction_stripper, model_lab_values, model_providers
         )
 
     context = LLMContext()

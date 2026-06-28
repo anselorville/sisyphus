@@ -82,7 +82,6 @@ function App() {
       <div className={styles.root}>
         <ModelLabScreen
           serverAddress={serverAddress}
-          engineMode={engineMode}
           onClose={() => {
             setModelLabOpen(false);
             setSettingsOpen(true);

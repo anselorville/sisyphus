@@ -1,0 +1,13 @@
+{
+  "id": "omlx:nemotron_asr",
+  "label": "Nemotron ASR (oMLX, local)",
+  "capability": "transcription",
+  "fields": [
+    {
+      "key": "language_hint",
+      "label": "Language hint (optional)",
+      "kind": "text",
+      "help": "Leave empty for auto-detect (recommended -- this is a bidirectional pipeline, so locking to one language will misdetect the other). Verified live against oMLX's /v1/audio/transcriptions: omitting this field correctly auto-detects; setting it to the wrong language silently breaks transcription."
+    }
+  ]
+}
