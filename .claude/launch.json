@@ -5,7 +5,8 @@
       "name": "client",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "client", "run", "dev"],
-      "port": 1420
+      "port": 1420,
+      "autoPort": false
     }
   ]
 }

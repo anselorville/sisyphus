@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
-# Starts the backend (uv run python -m app.server) and frontend (npm run dev,
-# i.e. Vite) dev servers, killing any already-running instances first so this
-# script is always a clean restart -- safe to re-run repeatedly with no
+# Restarts ONLY the backend (uv run python -m app.server), killing any
+# already-running instance first -- safe to re-run repeatedly with no
 # manual cleanup in between.
 #
-# Usage: scripts/dev.sh
+# Deliberately does NOT touch the frontend/port 1420: that port is owned
+# exclusively by Claude Code's own preview-server tooling (preview_start /
+# preview_stop), which refuses to run if anything else is already bound to
+# it. Use the Preview feature for the frontend; use this script only to get
+# the backend (Model Lab / Model Provider / the real translation pipeline)
+# back into a known-good state without disturbing that.
+#
+# Usage: scripts/restart-backend.sh
 
 set -euo pipefail
 
@@ -12,7 +18,6 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 BACKEND_LOG="/tmp/sisyphus-backend.log"
-FRONTEND_LOG="/tmp/sisyphus-frontend.log"
 
 # Resolve the backend port from .env's WEBRTC_PORT, falling back to 7860 if
 # .env is missing or doesn't set it.
@@ -24,11 +29,7 @@ if [[ -f "$REPO_ROOT/.env" ]]; then
   fi
 fi
 
-# Vite's dev port is hardcoded to 1420 by client/src-tauri/tauri.conf.json's
-# "devUrl" -- do not change this independently of that file.
-FRONTEND_PORT=1420
-
-echo "==> Cleaning up any existing dev servers..."
+echo "==> Stopping any existing backend..."
 
 kill_port() {
   local port="$1"
@@ -41,7 +42,6 @@ kill_port() {
 }
 
 kill_port "$BACKEND_PORT"
-kill_port "$FRONTEND_PORT"
 
 # Belt-and-suspenders: also kill by invocation pattern, in case a previous
 # run is hung without having bound its port yet, or bound a different port
@@ -51,10 +51,7 @@ pkill -f "python -m app.server" || true
 echo "==> Starting backend (uv run python -m app.server) on port ${BACKEND_PORT}..."
 (cd "$REPO_ROOT" && nohup uv run python -m app.server >"$BACKEND_LOG" 2>&1 &)
 
-echo "==> Starting frontend (npm run dev) on port ${FRONTEND_PORT}..."
-(cd "$REPO_ROOT/client" && nohup npm run dev >"$FRONTEND_LOG" 2>&1 &)
-
-# Poll briefly for both ports to come up rather than a long fixed sleep.
+# Poll briefly for the port to come up rather than a long fixed sleep.
 wait_for_port() {
   local port="$1"
   local tries=0
@@ -69,26 +66,15 @@ wait_for_port() {
 }
 
 BACKEND_OK=0
-FRONTEND_OK=0
 wait_for_port "$BACKEND_PORT" && BACKEND_OK=1 || true
-wait_for_port "$FRONTEND_PORT" && FRONTEND_OK=1 || true
-
 BACKEND_PID="$(lsof -ti ":${BACKEND_PORT}" 2>/dev/null | head -n1 || true)"
-FRONTEND_PID="$(lsof -ti ":${FRONTEND_PORT}" 2>/dev/null | head -n1 || true)"
 
 echo ""
 echo "==> Summary"
 if [[ "$BACKEND_OK" -eq 1 ]]; then
-  echo "    Backend:  RUNNING  pid=${BACKEND_PID}  port=${BACKEND_PORT}  log=${BACKEND_LOG}"
+  echo "    Backend: RUNNING  pid=${BACKEND_PID}  port=${BACKEND_PORT}  log=${BACKEND_LOG}"
 else
-  echo "    Backend:  FAILED to come up on port ${BACKEND_PORT} within timeout -- check ${BACKEND_LOG}"
-fi
-if [[ "$FRONTEND_OK" -eq 1 ]]; then
-  echo "    Frontend: RUNNING  pid=${FRONTEND_PID}  port=${FRONTEND_PORT}  log=${FRONTEND_LOG}"
-else
-  echo "    Frontend: FAILED to come up on port ${FRONTEND_PORT} within timeout -- check ${FRONTEND_LOG}"
-fi
-
-if [[ "$BACKEND_OK" -eq 0 || "$FRONTEND_OK" -eq 0 ]]; then
+  echo "    Backend: FAILED to come up on port ${BACKEND_PORT} within timeout -- check ${BACKEND_LOG}"
   exit 1
 fi
+echo "    Frontend is NOT touched by this script -- use Claude Code's Preview feature for it."
