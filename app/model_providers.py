@@ -62,7 +62,7 @@ AVAILABLE_LOCAL_ENGINES: tuple[str, ...] = ("omlx",)
 # module implements), never a real dispatch target today.
 CAPABILITY_PROVIDERS: dict[ModelCapability, tuple[str, ...]] = {
     "text": ("anthropic", "openrouter"),
-    "speech": ("cartesia", "openrouter"),
+    "speech": ("edge_tts", "cartesia", "openrouter"),
     "transcription": ("deepgram", "openrouter"),
     "omni": (),
 }
@@ -362,6 +362,8 @@ def available_models(settings: Settings, capability: ModelCapability, provider: 
     """
     if provider == "anthropic" and capability == "text":
         return [ANTHROPIC_DEFAULT_MODEL]
+    if provider == "edge_tts" and capability == "speech":
+        return ["auto"]
     if provider == "cartesia" and capability == "speech":
         return [CARTESIA_DEFAULT_MODEL]
     if provider == "deepgram" and capability == "transcription":

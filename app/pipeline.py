@@ -51,6 +51,7 @@ and ultimately passed to TTS as an expressiveness hint (see
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -92,6 +93,7 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from app.config import Settings
 from app.connectivity import has_internet_connection
+from app.edge_tts_services import build_edge_tts
 from app.local_services import build_local_llm, build_local_stt, build_local_tts
 from app.mlx_services import build_mlx_llm, build_mlx_stt, build_mlx_tts
 from app.model_providers import (
@@ -550,6 +552,112 @@ class TranscriptTapProcessor(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
+_SENTENCE_END_RE = re.compile(r"[。！？!?]+")
+
+
+class SemanticBufferProcessor(FrameProcessor):
+    """Buffers STT transcription fragments until a sentence boundary is reached,
+    then forwards semantically complete sentences to the LLM while keeping any
+    incomplete remainder buffered for the next incoming fragment.
+
+    Why this is needed: Deepgram streaming STT emits a final TranscriptionFrame
+    per VAD-detected utterance. In real environments (background noise, speech
+    hesitations, fast talking), utterances are frequently fragmented mid-sentence
+    -- e.g. "我手里有你要的东" before "西。" arrives separately. Sending each
+    fragment directly to the LLM causes garbage translations of incomplete inputs
+    and leaves the LLM guessing at truncated meaning.
+
+    This processor solves it by:
+    1. Accumulating each TranscriptionFrame's text into a rolling buffer
+    2. On each append, checking if the buffer ends with terminal punctuation
+       (。！？!?) -- Deepgram adds punctuation via `punctuate=True`
+    3. If yes: extracting everything up to (and including) the last sentence-end,
+       pushing it as a single complete TranscriptionFrame, and keeping any
+       remainder buffered
+    4. If no: starting a flush timer (`flush_timeout` seconds). If no new
+       fragment arrives before the timer fires, the buffer is force-flushed so
+       the pipeline never stalls (handles unpunctuated speech or a long trailing
+       pause)
+
+    Position in pipeline: AFTER `original_tap` (so the UI immediately shows
+    raw transcription fragments for real-time feedback) but BEFORE
+    `user_aggregator` (so the LLM only ever sees complete sentences).
+    """
+
+    def __init__(self, flush_timeout: float = 3.0, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._buffer: str = ""
+        self._flush_timeout = flush_timeout
+        self._flush_task: "asyncio.Task[None] | None" = None
+        self._last_user_id: str = ""
+        self._last_timestamp: str = ""
+
+    def _split_at_last_sentence_end(self, text: str) -> tuple[str, str]:
+        """Split at the last terminal punctuation in text.
+
+        Returns (complete_part, remainder). `complete_part` is everything up
+        to and including the last sentence-end marker; `remainder` is whatever
+        follows (may be empty). Returns ("", text) if no terminal punctuation
+        is found.
+        """
+        matches = list(_SENTENCE_END_RE.finditer(text))
+        if not matches:
+            return "", text
+        last_end = matches[-1].end()
+        return text[:last_end].strip(), text[last_end:].strip()
+
+    async def _cancel_flush_timer(self) -> None:
+        if self._flush_task and not self._flush_task.done():
+            self._flush_task.cancel()
+            try:
+                await self._flush_task
+            except asyncio.CancelledError:
+                pass
+        self._flush_task = None
+
+    async def _schedule_flush(self, direction: FrameDirection) -> None:
+        try:
+            await asyncio.sleep(self._flush_timeout)
+            if self._buffer:
+                text = self._buffer
+                self._buffer = ""
+                logger.debug(f"{self}: Force-flushing incomplete buffer [{text}]")
+                await self.push_frame(
+                    TranscriptionFrame(text=text, user_id=self._last_user_id, timestamp=self._last_timestamp),
+                    direction,
+                )
+        except asyncio.CancelledError:
+            pass
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, TranscriptionFrame):
+            await self._cancel_flush_timer()
+            text = frame.text.strip()
+            if not text:
+                return
+
+            self._last_user_id = frame.user_id
+            self._last_timestamp = frame.timestamp
+            self._buffer = (self._buffer + text) if self._buffer else text
+
+            complete, remainder = self._split_at_last_sentence_end(self._buffer)
+            if complete:
+                self._buffer = remainder
+                await self.push_frame(
+                    TranscriptionFrame(text=complete, user_id=frame.user_id, timestamp=frame.timestamp),
+                    direction,
+                )
+                if remainder:
+                    self._flush_task = asyncio.ensure_future(self._schedule_flush(direction))
+            else:
+                self._flush_task = asyncio.ensure_future(self._schedule_flush(direction))
+            return
+
+        await self.push_frame(frame, direction)
+
+
 def select_engine(settings: Settings) -> str:
     """Decide which engine ("cloud", "offline", or "omlx") to use for this
     run, at startup only.
@@ -872,6 +980,9 @@ def _build_cloud_speech_service(
     temperature = values.get("temperature")
     top_p = values.get("top_p")
 
+    if provider == "edge_tts":
+        return build_edge_tts(tone_source=direction_stripper)
+
     if provider == "openrouter":
         _require_openrouter_key(settings)
         model = _openrouter_model_or_first(
@@ -945,15 +1056,27 @@ def _build_cloud_transcription_service(
 
     # provider == "deepgram" (default)
     _require_deepgram_key(settings)
-    stt_kwargs: dict[str, object] = {}
-    stt_settings_kwargs: dict[str, object] = {"model": cloud.transcription.model or DEEPGRAM_DEFAULT_MODEL}
+    # punctuate=True: Deepgram adds terminal punctuation (。？！ / . ? !)
+    # which SemanticBufferProcessor uses to detect sentence boundaries.
+    # smart_format=True: normalizes numbers, currency, dates for cleaner output.
+    # interim_results=True: the DeepgramSTTService WebSocket delivers partial
+    # transcriptions as the user speaks -- only final TranscriptionFrame objects
+    # reach SemanticBuffer, but interim feedback shows up in the UI log faster.
+    stt_settings_kwargs: dict[str, object] = {
+        "model": cloud.transcription.model or DEEPGRAM_DEFAULT_MODEL,
+        "punctuate": True,
+        "smart_format": True,
+        "interim_results": True,
+    }
     if language_hint:
         try:
             stt_settings_kwargs["language"] = Language(language_hint.strip().lower())
         except ValueError:
             pass
-    stt_kwargs["settings"] = DeepgramSTTService.Settings(**stt_settings_kwargs)
-    return DeepgramSTTService(api_key=settings.deepgram_api_key, **stt_kwargs)
+    return DeepgramSTTService(
+        api_key=settings.deepgram_api_key,
+        settings=DeepgramSTTService.Settings(**stt_settings_kwargs),
+    )
 
 
 def _build_cloud_services(
@@ -1234,12 +1357,14 @@ def build_pipeline(
 
     original_tap = TranscriptTapProcessor(kind="original")
     translation_tap = TranscriptTapProcessor(kind="translation", direction_source=direction_stripper)
+    semantic_buffer = SemanticBufferProcessor(flush_timeout=3.0)
 
     pipeline = Pipeline(
         [
             transport.input(),  # Mic audio in
             stt,  # Speech -> text (source language)
-            original_tap,  # Tap: forward original transcript to client
+            original_tap,  # Tap: forward raw transcript fragments to client immediately
+            semantic_buffer,  # Buffer fragments; only forward complete sentences to LLM
             user_aggregator,  # Build user turn for the LLM
             llm,  # Translate (Anthropic, or local Ollama model when offline)
             direction_stripper,  # Parse+strip the "[XX->YY|tone]" prefix
