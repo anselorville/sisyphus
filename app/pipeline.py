@@ -98,6 +98,7 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from app.config import Settings
 from app.connectivity import has_internet_connection
 from app.edge_tts_services import build_edge_tts
+from app.latency import build_latency_observer
 from app.local_services import build_local_llm, build_local_stt, build_local_tts
 from app.mlx_services import build_mlx_llm, build_mlx_stt, build_mlx_tts
 from app.model_providers import (
@@ -1554,6 +1555,7 @@ def build_pipeline_worker(
     pipeline, _context = build_pipeline(webrtc_connection, settings)
     return PipelineWorker(
         pipeline,
+        observers=[build_latency_observer()],
         params=PipelineParams(
             enable_metrics=True,
             enable_usage_metrics=True,
