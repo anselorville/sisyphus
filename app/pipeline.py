@@ -59,6 +59,8 @@ from typing import Any
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
+    CancelFrame,
+    EndFrame,
     Frame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
@@ -66,6 +68,7 @@ from pipecat.frames.frames import (
     OutputTransportMessageUrgentFrame,
     TranscriptionFrame,
     TTSTextFrame,
+    UserStoppedSpeakingFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
@@ -616,6 +619,10 @@ class TranslationTranscriptTapProcessor(FrameProcessor):
 
 _SENTENCE_END_RE = re.compile(r"[。！？!?]+")
 
+# Maximum extra wait for an unpunctuated final STT fragment. This delay sits
+# directly inside the user-perceived user-stop -> bot-speech latency budget.
+SEMANTIC_BUFFER_FLUSH_TIMEOUT_SECONDS = 0.5
+
 
 class SemanticBufferProcessor(FrameProcessor):
     """Buffers STT transcription fragments until a sentence boundary is reached,
@@ -646,13 +653,22 @@ class SemanticBufferProcessor(FrameProcessor):
     `user_aggregator` (so the LLM only ever sees complete sentences).
     """
 
-    def __init__(self, flush_timeout: float = 3.0, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        flush_timeout: float = SEMANTIC_BUFFER_FLUSH_TIMEOUT_SECONDS,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self._buffer: str = ""
         self._flush_timeout = flush_timeout
         self._flush_task: "asyncio.Task[None] | None" = None
         self._last_user_id: str = ""
         self._last_timestamp: str = ""
+
+    @property
+    def buffered_text(self) -> str:
+        """Return the transcription suffix still awaiting a turn boundary."""
+        return self._buffer
 
     def _split_at_last_sentence_end(self, text: str) -> tuple[str, str]:
         """Split at the last terminal punctuation in text.
@@ -681,15 +697,26 @@ class SemanticBufferProcessor(FrameProcessor):
         try:
             await asyncio.sleep(self._flush_timeout)
             if self._buffer:
-                text = self._buffer
-                self._buffer = ""
-                logger.debug(f"{self}: Force-flushing incomplete buffer [{text}]")
-                await self.push_frame(
-                    TranscriptionFrame(text=text, user_id=self._last_user_id, timestamp=self._last_timestamp),
-                    direction,
+                logger.debug(
+                    f"{self}: Force-flushing incomplete buffer [{self._buffer}]"
                 )
+                await self._flush_buffer(direction)
         except asyncio.CancelledError:
             pass
+
+    async def _flush_buffer(self, direction: FrameDirection) -> None:
+        """Push the pending transcription once and clear it atomically."""
+        text = self._buffer.strip()
+        self._buffer = ""
+        if text:
+            await self.push_frame(
+                TranscriptionFrame(
+                    text=text,
+                    user_id=self._last_user_id,
+                    timestamp=self._last_timestamp,
+                ),
+                direction,
+            )
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -715,6 +742,24 @@ class SemanticBufferProcessor(FrameProcessor):
                     self._flush_task = asyncio.ensure_future(self._schedule_flush(direction))
             else:
                 self._flush_task = asyncio.ensure_future(self._schedule_flush(direction))
+            return
+
+        if isinstance(frame, UserStoppedSpeakingFrame):
+            await self._cancel_flush_timer()
+            await self._flush_buffer(direction)
+            await self.push_frame(frame, direction)
+            return
+
+        if isinstance(frame, CancelFrame):
+            await self._cancel_flush_timer()
+            self._buffer = ""
+            await self.push_frame(frame, direction)
+            return
+
+        if isinstance(frame, EndFrame):
+            await self._cancel_flush_timer()
+            await self._flush_buffer(direction)
+            await self.push_frame(frame, direction)
             return
 
         await self.push_frame(frame, direction)
@@ -1466,7 +1511,9 @@ def build_pipeline(
         context=context,
         max_context_turns=MAX_CONTEXT_TURNS,
     )
-    semantic_buffer = SemanticBufferProcessor(flush_timeout=3.0)
+    semantic_buffer = SemanticBufferProcessor(
+        flush_timeout=SEMANTIC_BUFFER_FLUSH_TIMEOUT_SECONDS
+    )
 
     pipeline = Pipeline(
         [
