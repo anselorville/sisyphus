@@ -97,6 +97,42 @@ off mid-sentence when you talk over it requires real API keys and a
 microphone, which wasn't available in this phase -- that live check is
 remaining work for whoever has working credentials.
 
+### Latency behavior and logs
+
+Final STT fragments pass through a semantic buffer before translation so a
+provider that splits one sentence into multiple finals does not trigger several
+partial translations. Terminal punctuation flushes that buffer immediately. An
+explicit Pipecat user-turn stop also flushes it immediately; if neither signal
+arrives, the unpunctuated fallback wait is capped at **500ms** (previously 3s).
+
+Every pipeline worker installs Pipecat's user-to-bot latency observer. Search
+the backend log for `voice_latency` to find:
+
+```text
+voice_latency user_to_bot_seconds=0.842
+voice_latency first_bot_speech_seconds=0.315
+voice_latency breakdown=LatencyBreakdown(...)
+```
+
+The first measurement covers user speech end to audible bot speech start. The
+breakdown includes the service timing Pipecat can attribute while metrics are
+enabled, such as STT finalization, LLM/TTS time-to-first-byte, and text
+aggregation.
+
+To accept barge-in with real audio:
+
+1. Connect with working provider credentials and start a long translated
+   response.
+2. Speak while translated audio is playing.
+3. Confirm audible output stops promptly.
+4. Confirm the new utterance produces exactly one translation.
+5. Keep listening long enough to confirm audio from the cancelled response does
+   not resume.
+
+Unit tests verify semantic-buffer timer cancellation and stale-text cleanup,
+but they cannot prove that the WebRTC sender and browser playout buffer stop
+audibly; the five-step live check remains the end-to-end acceptance gate.
+
 ## Engines
 
 There are three engines, all running the exact same pipeline *shape* (VAD ->
