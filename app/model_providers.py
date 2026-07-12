@@ -36,6 +36,7 @@ from typing import Any, Literal
 from loguru import logger
 
 from app.config import Settings
+from app.voxcpm_tts_services import VOXCPM2_CUDA_DEFAULT_MODEL, VOXCPM2_CUDA_PROVIDER
 
 # Repo-root JSON file. Same conceptual tier as model_settings.json: runtime-
 # local, optional, gitignored. Overridable via MODEL_PROVIDERS_PATH for
@@ -62,8 +63,8 @@ AVAILABLE_LOCAL_ENGINES: tuple[str, ...] = ("omlx",)
 # module implements), never a real dispatch target today.
 CAPABILITY_PROVIDERS: dict[ModelCapability, tuple[str, ...]] = {
     "text": ("anthropic", "openrouter"),
-    "speech": ("edge_tts", "cartesia", "openrouter"),
-    "transcription": ("deepgram", "openrouter"),
+    "speech": ("edge_tts", "cartesia", "openrouter", VOXCPM2_CUDA_PROVIDER),
+    "transcription": ("assemblyai", "deepgram", "openrouter"),
     "omni": (),
 }
 
@@ -83,6 +84,7 @@ CAPABILITY_PROVIDERS: dict[ModelCapability, tuple[str, ...]] = {
 ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-6"
 CARTESIA_DEFAULT_MODEL = "sonic-3.5"
 DEEPGRAM_DEFAULT_MODEL = "nova-3-general"
+ASSEMBLYAI_DEFAULT_MODEL = "universal-3-5-pro"
 
 # Sensible OpenRouter default to surface in the UI per capability, when the
 # user picks "openrouter" as a provider but hasn't chosen a specific model
@@ -366,8 +368,12 @@ def available_models(settings: Settings, capability: ModelCapability, provider: 
         return ["auto"]
     if provider == "cartesia" and capability == "speech":
         return [CARTESIA_DEFAULT_MODEL]
+    if provider == VOXCPM2_CUDA_PROVIDER and capability == "speech":
+        return [VOXCPM2_CUDA_DEFAULT_MODEL]
     if provider == "deepgram" and capability == "transcription":
         return [DEEPGRAM_DEFAULT_MODEL]
+    if provider == "assemblyai" and capability == "transcription":
+        return [ASSEMBLYAI_DEFAULT_MODEL]
     if provider == "openrouter":
         if capability == "text":
             catalog = list(settings.openrouter_text_models)

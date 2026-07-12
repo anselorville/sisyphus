@@ -29,6 +29,7 @@ import av
 import edge_tts
 from loguru import logger
 from pipecat.frames.frames import ErrorFrame, Frame, TTSAudioRawFrame
+from pipecat.services.settings import TTSSettings
 from pipecat.services.tts_service import TTSService
 
 # Voices selected for natural-sounding output in each language.
@@ -153,4 +154,5 @@ def build_edge_tts(
     return ToneAwareEdgeTTSService(
         tone_source=tone_source,
         default_voice=default_voice,
+        settings=TTSSettings(model=None, voice=default_voice, language=None),
     )

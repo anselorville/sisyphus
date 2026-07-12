@@ -27,6 +27,7 @@ load_dotenv()
 CLOUD_REQUIRED_KEYS = (
     "ANTHROPIC_API_KEY",
     "DEEPGRAM_API_KEY",
+    "ASSEMBLYAI_API_KEY",
     "CARTESIA_API_KEY",
 )
 
@@ -43,6 +44,7 @@ class Settings:
     # app/pipeline.py) if/when the cloud engine path is actually selected.
     anthropic_api_key: str
     deepgram_api_key: str
+    assemblyai_api_key: str
     cartesia_api_key: str
     source_lang: str
     target_lang: str
@@ -108,6 +110,16 @@ class Settings:
     openrouter_text_models: list[str]
     openrouter_tts_models: list[str]
     openrouter_asr_models: list[str]
+
+    # --- VoxCPM2-CUDA streaming TTS ---
+    # A LAN-hosted VoxCPM2 service exposing `/v1/tts/stream` as SSE, where
+    # each chunk is an independent WAV file. Only used when Model Provider
+    # selects speech provider `VoxCPM2-CUDA`.
+    voxcpm2_cuda_base_url: str
+    voxcpm2_cuda_seed: int
+    voxcpm2_cuda_cfg_value: float
+    voxcpm2_cuda_inference_timesteps: int
+    voxcpm2_cuda_voice_design: str
 
 
 def _parse_bool_env(name: str) -> bool:
@@ -186,11 +198,36 @@ def load_settings() -> Settings:
             f"WEBRTC_PORT must be an integer, got: {os.environ.get('WEBRTC_PORT')!r}"
         ) from exc
 
+    try:
+        voxcpm2_cuda_seed = int(os.environ.get("VOXCPM2_CUDA_SEED", "42"))
+    except ValueError as exc:
+        raise RuntimeError(
+            "VOXCPM2_CUDA_SEED must be an integer, got: "
+            f"{os.environ.get('VOXCPM2_CUDA_SEED')!r}"
+        ) from exc
+    try:
+        voxcpm2_cuda_cfg_value = float(os.environ.get("VOXCPM2_CUDA_CFG_VALUE", "2.0"))
+    except ValueError as exc:
+        raise RuntimeError(
+            "VOXCPM2_CUDA_CFG_VALUE must be a float, got: "
+            f"{os.environ.get('VOXCPM2_CUDA_CFG_VALUE')!r}"
+        ) from exc
+    try:
+        voxcpm2_cuda_inference_timesteps = int(
+            os.environ.get("VOXCPM2_CUDA_INFERENCE_TIMESTEPS", "5")
+        )
+    except ValueError as exc:
+        raise RuntimeError(
+            "VOXCPM2_CUDA_INFERENCE_TIMESTEPS must be an integer, got: "
+            f"{os.environ.get('VOXCPM2_CUDA_INFERENCE_TIMESTEPS')!r}"
+        ) from exc
+
     engine = _resolve_engine()
 
     return Settings(
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
         deepgram_api_key=os.environ.get("DEEPGRAM_API_KEY", ""),
+        assemblyai_api_key=os.environ.get("ASSEMBLYAI_API_KEY", ""),
         cartesia_api_key=os.environ.get("CARTESIA_API_KEY", ""),
         source_lang=os.environ.get("SOURCE_LANG", "Chinese"),
         target_lang=os.environ.get("TARGET_LANG", "English"),
@@ -229,4 +266,14 @@ def load_settings() -> Settings:
         openrouter_text_models=_parse_csv_env("OPENROUTER_TEXT_MODELS"),
         openrouter_tts_models=_parse_csv_env("OPENROUTER_TTS_MODELS"),
         openrouter_asr_models=_parse_csv_env("OPENROUTER_ASR_MODELS"),
+        voxcpm2_cuda_base_url=os.environ.get(
+            "VOXCPM2_CUDA_BASE_URL", "http://192.168.2.128:8765"
+        ).rstrip("/"),
+        voxcpm2_cuda_seed=voxcpm2_cuda_seed,
+        voxcpm2_cuda_cfg_value=voxcpm2_cuda_cfg_value,
+        voxcpm2_cuda_inference_timesteps=voxcpm2_cuda_inference_timesteps,
+        voxcpm2_cuda_voice_design=os.environ.get(
+            "VOXCPM2_CUDA_VOICE_DESIGN",
+            "一位沉稳的男性，声音清晰自然，音色稳定",
+        ).strip(),
     )

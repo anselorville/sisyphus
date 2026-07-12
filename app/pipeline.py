@@ -76,6 +76,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.anthropic.llm import AnthropicLLMService, AnthropicLLMSettings
+from pipecat.services.assemblyai.stt import AssemblyAISTTService
 from pipecat.services.cartesia.tts import CartesiaEmotion, CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.llm_service import LLMService
@@ -98,6 +99,7 @@ from app.local_services import build_local_llm, build_local_stt, build_local_tts
 from app.mlx_services import build_mlx_llm, build_mlx_stt, build_mlx_tts
 from app.model_providers import (
     AVAILABLE_LOCAL_ENGINES,
+    ASSEMBLYAI_DEFAULT_MODEL,
     CARTESIA_DEFAULT_MODEL,
     DEEPGRAM_DEFAULT_MODEL,
     CloudProviderConfig,
@@ -108,44 +110,23 @@ from app.model_providers import (
 )
 from app.model_settings import ModelLabValues, load_model_settings, values_for
 from app.openrouter_services import build_openrouter_llm, build_openrouter_stt, build_openrouter_tts
+from app.voxcpm_tts_services import VOXCPM2_CUDA_PROVIDER, build_voxcpm2_cuda_tts
 
-# Cartesia voice per TARGET_LANG, keyed by the *short* language code we parse
-# out of SOURCE_LANG/TARGET_LANG (see `_lang_code`).
-#
-# Approach: Cartesia's multilingual Sonic models (sonic-3.5, used here --
-# sonic-2/sonic-3/sonic-multilingual also qualify) render a *single* voice
-# recording correctly across 40+ languages by adapting pronunciation to
-# whatever the `language` field says, rather than requiring a distinct
-# per-language voice clone (confirmed via Cartesia's docs/blog -- "the same
-# voice can speak in different languages without needing separate voice
-# recordings for each language"). This is what makes the per-language voice
-# selection below tractable at all: we don't need N different voice_ids.
-#
-# We deliberately reuse ONE known-good voice_id (the "British Reading Lady"
-# voice already used by the Phase 1 prototype, confirmed real/working on a
-# live account) across every language below, rather than inventing distinct
-# voice_ids per language: this codebase has no working Cartesia API key, so
-# any other voice_id we might list here cannot be verified as real --
-# shipping unverified made-up UUIDs would be worse than relying on the one
-# ID known to work, paired with the correct `language` setting per
-# `cartesia_language_for()` so Cartesia phonemizes/pronounces the text
-# correctly even though the voice's own native recording is English.
-# TODO(orchestrator, once a real CARTESIA_API_KEY exists): browse Cartesia's
-# voice library (https://www.cartesia.ai/voices or the `/voices` list API,
-# filtered by `language`) and swap in a voice actually recorded in each
-# target language here for more natural accent/prosody -- this dict is the
-# only thing that needs to change, see `cartesia_voice_for_language()`.
+# Cartesia voice per language, keyed by the *short* language code we parse
+# out of SOURCE_LANG/TARGET_LANG (see `_lang_code`). Sonic 3.5 can render the
+# same voice across languages when paired with the correct `language` field,
+# so the release default deliberately reuses one verified voice id and lets
+# `_cartesia_language_for_direction()` pick pronunciation dynamically per
+# translated utterance.
+CARTESIA_RELEASE_VOICE_ID = "47c38ca4-5f35-497b-b1a3-415245fb35e1"
+
 CARTESIA_VOICE_IDS: dict[str, str] = {
-    # "British Reading Lady" -- the one voice_id verified to exist on a real
-    # Cartesia account (carried over from the Phase 1 prototype). Reused for
-    # every language below; only the `language` setting changes per
-    # TARGET_LANG (see `_build_cloud_services`), relying on sonic-3.5's
-    # multilingual rendering rather than a native-language voice recording.
-    "en": "71a7ad14-091c-4e8e-a314-022ece01c121",
-    "fr": "71a7ad14-091c-4e8e-a314-022ece01c121",
-    "de": "71a7ad14-091c-4e8e-a314-022ece01c121",
-    "es": "71a7ad14-091c-4e8e-a314-022ece01c121",
-    "it": "71a7ad14-091c-4e8e-a314-022ece01c121",
+    "en": CARTESIA_RELEASE_VOICE_ID,
+    "fr": CARTESIA_RELEASE_VOICE_ID,
+    "de": CARTESIA_RELEASE_VOICE_ID,
+    "es": CARTESIA_RELEASE_VOICE_ID,
+    "it": CARTESIA_RELEASE_VOICE_ID,
+    "zh": CARTESIA_RELEASE_VOICE_ID,
 }
 
 # Maps the free-text language names accepted by SOURCE_LANG/TARGET_LANG (see
@@ -256,6 +237,21 @@ def cartesia_language_for(lang_name: str) -> Language:
     """
     code = _lang_code(lang_name)
     return _PIPECAT_LANGUAGE_BY_CODE.get(code, Language.EN)
+
+
+def _cartesia_language_for_direction(
+    direction: str | None, fallback: Language | str | None
+) -> Language | str | None:
+    """Resolve Cartesia's synthesis language from a parsed `"SRC->DST"` tag.
+
+    The cloud translator is bidirectional, so `TARGET_LANG=English` is only
+    the startup fallback. Once the LLM emits `[ZH->EN]` or `[EN->ZH]`, TTS
+    should pronounce the translated text in the destination language.
+    """
+    if not direction or "->" not in direction:
+        return fallback
+    destination_code = direction.split("->", 1)[1].strip().lower()
+    return _PIPECAT_LANGUAGE_BY_CODE.get(destination_code, fallback)
 
 
 def build_translation_system_prompt(
@@ -508,10 +504,10 @@ class TranscriptTapProcessor(FrameProcessor):
     `OutputTransportMessageUrgentFrame` carrying a small JSON payload that the
     client's data-channel handler renders into the transcript log.
 
-    The "translation" tap must sit *after* TTS in the pipeline, not before --
-    `TTSTextFrame` is emitted by the TTS service itself once it has consumed
-    the LLM's text (see `pipecat.services.tts_service`), so a tap positioned
-    between the LLM and TTS would never see one.
+    For translations this legacy tap observes `TTSTextFrame`, which is only
+    appropriate for providers that emit one text frame per spoken utterance.
+    Cartesia emits playback-aligned text chunks, so the live pipeline uses
+    `TranslationTranscriptTapProcessor` before TTS for translation UI events.
     """
 
     def __init__(
@@ -548,6 +544,72 @@ class TranscriptTapProcessor(FrameProcessor):
             await self.push_frame(
                 OutputTransportMessageUrgentFrame(message=payload), direction
             )
+
+        await self.push_frame(frame, direction)
+
+
+class TranslationTranscriptTapProcessor(FrameProcessor):
+    """Emit one browser transcript event per completed translated LLM reply.
+
+    The LLM streams `LLMTextFrame` chunks to keep TTS latency low, and Cartesia
+    later emits `TTSTextFrame` chunks aligned to audio playout. The latter are
+    intentionally word/character-sized, so using them for the UI makes the
+    transcript look like the LLM is answering one glyph at a time and can also
+    leak partial assistant text into downstream context. This tap sits after
+    `TranslationDirectionStripper` and before TTS: it forwards all LLM frames
+    unchanged for low-latency speech, but buffers their text until
+    `LLMFullResponseEndFrame` and then sends exactly one data-channel message.
+    """
+
+    def __init__(
+        self,
+        *,
+        direction_source: "TranslationDirectionStripper | None" = None,
+        context: LLMContext | None = None,
+        max_context_turns: int | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._direction_source = direction_source
+        self._context = context
+        self._max_context_turns = max_context_turns
+        self._buffer = ""
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, LLMFullResponseStartFrame):
+            self._buffer = ""
+            await self.push_frame(frame, direction)
+            return
+
+        if isinstance(frame, LLMTextFrame):
+            self._buffer += frame.text
+            await self.push_frame(frame, direction)
+            return
+
+        if isinstance(frame, LLMFullResponseEndFrame):
+            text = self._buffer.strip()
+            self._buffer = ""
+            if text:
+                if self._context is not None:
+                    self._context.add_message({"role": "assistant", "content": text})
+                    if self._max_context_turns is not None:
+                        _trim_context_to_recent_turns(self._context, self._max_context_turns)
+
+                payload: dict[str, Any] = {
+                    "type": "transcript",
+                    "kind": "translation",
+                    "text": text,
+                }
+                if self._direction_source is not None:
+                    payload["direction"] = self._direction_source.last_direction
+                    payload["tone"] = self._direction_source.last_tone
+                await self.push_frame(
+                    OutputTransportMessageUrgentFrame(message=payload), direction
+                )
+            await self.push_frame(frame, direction)
+            return
 
         await self.push_frame(frame, direction)
 
@@ -793,12 +855,21 @@ class ToneAwareCartesiaTTSService(CartesiaTTSService):
     without error against a dummy API key).
     """
 
-    def __init__(self, *, tone_source: "TranslationDirectionStripper", **kwargs: Any) -> None:
+    def __init__(
+        self, *, tone_source: "TranslationDirectionStripper | None", **kwargs: Any
+    ) -> None:
         super().__init__(**kwargs)
         self._tone_source = tone_source
+        self._fallback_language = self._settings.language
 
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame | None, None]:
-        emotion = _nearest_cartesia_emotion(self._tone_source.last_tone)
+        direction = self._tone_source.last_direction if self._tone_source else None
+        self._settings.language = _cartesia_language_for_direction(
+            direction, self._fallback_language
+        )
+
+        tone = self._tone_source.last_tone if self._tone_source else None
+        emotion = _nearest_cartesia_emotion(tone)
         if emotion is not None:
             text = f"{self.EMOTION_TAG(emotion)} {text}"
         async for frame in super().run_tts(text, context_id):
@@ -832,6 +903,16 @@ def _require_deepgram_key(settings: Settings) -> None:
             "DEEPGRAM_API_KEY is missing. Copy .env.example to .env and fill "
             "it in, export it in your shell, or switch the transcription "
             "capability's provider in the Model Provider settings."
+        )
+
+
+def _require_assemblyai_key(settings: Settings) -> None:
+    if not settings.assemblyai_api_key:
+        raise RuntimeError(
+            "Cloud transcription capability set to 'assemblyai', but "
+            "ASSEMBLYAI_API_KEY is missing. Add it to .env, export it in "
+            "your shell, or switch the transcription capability's provider "
+            "in the Model Provider settings."
         )
 
 
@@ -940,6 +1021,11 @@ _OPENROUTER_TTS_DEFAULT_VOICE: dict[str, str] = {
     "microsoft/mai-voice-2": "en-US-Harper:MAI-Voice-2",
 }
 
+ASSEMBLYAI_BILINGUAL_PROMPT = (
+    "Transcribe Mandarin Chinese and English. The speaker may switch between "
+    "Chinese and English within the same conversation."
+)
+
 
 def _build_cloud_speech_service(
     settings: Settings,
@@ -964,7 +1050,9 @@ def _build_cloud_speech_service(
     Model Lab overrides come from the `cloud:speech` adapter's saved values
     (see app/model_adapters/specs/cloud_speech.json: `voice`/`speed`/
     `instructions_template`/`temperature`/`top_p`), one shared table across
-    every cloud speech provider.
+    every cloud speech provider. VoxCPM2-CUDA is the exception: its stable
+    Voice Design comes only from `VOXCPM2_CUDA_VOICE_DESIGN`, because this
+    adapter field is a provider voice identifier, not a Voice Design prompt.
 
     `direction_stripper=None` is valid (used by app/model_lab_preview.py's
     one-shot preview calls, which have no live pipeline/tone source to read
@@ -982,6 +1070,18 @@ def _build_cloud_speech_service(
 
     if provider == "edge_tts":
         return build_edge_tts(tone_source=direction_stripper)
+
+    if provider == VOXCPM2_CUDA_PROVIDER:
+        if not settings.voxcpm2_cuda_base_url:
+            raise RuntimeError(
+                "Cloud speech capability set to provider 'VoxCPM2-CUDA', but "
+                "VOXCPM2_CUDA_BASE_URL is missing. Set it in .env or switch "
+                "the speech capability's provider in Model Provider settings."
+            )
+        return build_voxcpm2_cuda_tts(
+            settings,
+            voice_design=settings.voxcpm2_cuda_voice_design,
+        )
 
     if provider == "openrouter":
         _require_openrouter_key(settings)
@@ -1053,6 +1153,20 @@ def _build_cloud_transcription_service(
             settings, settings.openrouter_asr_models, cloud.transcription.model, "transcription"
         )
         return build_openrouter_stt(settings, model=model, language_hint=language_hint)
+
+    if provider == "assemblyai":
+        _require_assemblyai_key(settings)
+        return AssemblyAISTTService(
+            api_key=settings.assemblyai_api_key,
+            settings=AssemblyAISTTService.Settings(
+                model=cloud.transcription.model or ASSEMBLYAI_DEFAULT_MODEL,
+                language=None,
+                language_detection=None,
+                prompt=ASSEMBLYAI_BILINGUAL_PROMPT,
+                formatted_finals=True,
+                continuous_partials=True,
+            ),
+        )
 
     # provider == "deepgram" (default)
     _require_deepgram_key(settings)
@@ -1338,7 +1452,7 @@ def build_pipeline(
             TranscriptionUserTurnStartStrategy(enable_interruptions=True),
         ],
     )
-    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
+    user_aggregator, _assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(),
@@ -1346,17 +1460,12 @@ def build_pipeline(
         ),
     )
 
-    # Bound context growth: trim to the most recent MAX_CONTEXT_TURNS turns
-    # right after each assistant turn is written to context (so the *next*
-    # user turn's LLM call already sees the trimmed history). See
-    # `_trim_context_to_recent_turns` for why this is hand-rolled rather than
-    # using LLMContext's built-in (summarization-based) mechanism.
-    @assistant_aggregator.event_handler("on_assistant_turn_stopped")
-    async def _on_assistant_turn_stopped(_aggregator, _message) -> None:
-        _trim_context_to_recent_turns(context, MAX_CONTEXT_TURNS)
-
     original_tap = TranscriptTapProcessor(kind="original")
-    translation_tap = TranscriptTapProcessor(kind="translation", direction_source=direction_stripper)
+    translation_tap = TranslationTranscriptTapProcessor(
+        direction_source=direction_stripper,
+        context=context,
+        max_context_turns=MAX_CONTEXT_TURNS,
+    )
     semantic_buffer = SemanticBufferProcessor(flush_timeout=3.0)
 
     pipeline = Pipeline(
@@ -1368,10 +1477,9 @@ def build_pipeline(
             user_aggregator,  # Build user turn for the LLM
             llm,  # Translate (Anthropic, or local Ollama model when offline)
             direction_stripper,  # Parse+strip the "[XX->YY|tone]" prefix
+            translation_tap,  # Tap: forward one complete translated text event to client
             tts,  # Translated text -> speech
-            translation_tap,  # Tap: forward translated text + direction to client
             transport.output(),  # Speech audio out
-            assistant_aggregator,  # Record assistant turn
         ]
     )
 
