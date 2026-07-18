@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, MessageSquare, Mic, Volume2 } from "lucide-react";
+import { ArrowLeft, Link2, MessageSquare, Mic, Square, Trash2, Volume2 } from "lucide-react";
 import { Button } from "../../primitives/Button";
 import { Badge } from "../../primitives/Badge";
 import { useModelLab } from "../../../hooks/useModelLab";
-import type { ModelLabAdapter, ModelLabCapability, ModelLabField, ModelLabFieldValue } from "../../../hooks/useTranslatorConnection.types";
+import { useWavRecorder } from "../../../hooks/useWavRecorder";
+import type { ModelLabAdapter, ModelLabCapability, ModelLabField, ModelLabFieldValue, ModelLabPreset } from "../../../hooks/useTranslatorConnection.types";
+import { PresetBar } from "./PresetBar";
+import { VoiceManager } from "./VoiceManager";
+import { ChainTestPanel } from "./ChainTestPanel";
 import styles from "./ModelLabScreen.module.css";
 
 export interface ModelLabScreenProps {
@@ -11,10 +15,13 @@ export interface ModelLabScreenProps {
   onClose: () => void;
 }
 
-const CAPABILITY_TABS: { key: ModelLabCapability; label: string; icon: typeof MessageSquare }[] = [
+type TabKey = ModelLabCapability | "chain";
+
+const CAPABILITY_TABS: { key: TabKey; label: string; icon: typeof MessageSquare }[] = [
   { key: "text", label: "Text", icon: MessageSquare },
   { key: "speech", label: "Voice", icon: Volume2 },
   { key: "transcription", label: "Listening", icon: Mic },
+  { key: "chain", label: "Full chain", icon: Link2 },
 ];
 
 type DraftMap = Record<string, ModelLabFieldValue>;
@@ -148,10 +155,11 @@ function TextTestPanel({
 }: {
   adapterId: string;
   draft: DraftMap;
-  previewText: (adapterId: string, draft: DraftMap, inputText: string) => Promise<{ output_text: string }>;
+  previewText: (adapterId: string, draft: DraftMap, inputText: string) => Promise<{ output_text: string; timing?: { total_ms: number } }>;
 }) {
   const [inputText, setInputText] = useState("");
   const [output, setOutput] = useState<string | null>(null);
+  const [timing, setTiming] = useState<{ total_ms: number } | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState(false);
 
@@ -162,6 +170,7 @@ function TextTestPanel({
     try {
       const result = await previewText(adapterId, draft, inputText);
       setOutput(result.output_text);
+      setTiming(result.timing ?? null);
     } catch {
       setError(true);
     } finally {
@@ -188,10 +197,19 @@ function TextTestPanel({
         <div className={styles.testResult}>
           <p className={styles.testResultLabel}>Output</p>
           <p className={styles.testResultText}>{output}</p>
+          {timing && <p className={styles.fieldHelp}>Took {(timing.total_ms / 1000).toFixed(1)}s</p>}
         </div>
       )}
     </div>
   );
+}
+
+interface SpeechHistoryEntry {
+  url: string;
+  label: string;
+  params: Record<string, ModelLabFieldValue>;
+  totalMs: number | null;
+  audioMs: number | null;
 }
 
 function SpeechTestPanel({
@@ -201,37 +219,77 @@ function SpeechTestPanel({
 }: {
   adapterId: string;
   draft: DraftMap;
-  previewSpeech: (adapterId: string, draft: DraftMap, inputText: string) => Promise<Blob>;
+  previewSpeech: (adapterId: string, draft: DraftMap, inputText: string) => Promise<{ blob: Blob; totalMs: number | null; audioMs: number | null }>;
 }) {
   const [inputText, setInputText] = useState("");
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [history, setHistory] = useState<SpeechHistoryEntry[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState(false);
 
-  // Revoke the previous object URL whenever a new one is created or the
-  // component unmounts, so we don't leak blob URLs across repeated test runs.
+  // Revoke all history URLs on unmount
   useEffect(() => {
     return () => {
-      if (audioUrl) URL.revokeObjectURL(audioUrl);
+      history.forEach((entry) => {
+        if (entry.url) URL.revokeObjectURL(entry.url);
+      });
     };
-  }, [audioUrl]);
+  }, [history]);
 
   async function handleRun() {
     if (running) return;
     setRunning(true);
     setError(false);
     try {
-      const blob = await previewSpeech(adapterId, draft, inputText);
-      const url = URL.createObjectURL(blob);
-      setAudioUrl((previous) => {
-        if (previous) URL.revokeObjectURL(previous);
-        return url;
+      const result = await previewSpeech(adapterId, draft, inputText);
+      const url = URL.createObjectURL(result.blob);
+      const label = `#${history.length + 1}`;
+      const newEntry: SpeechHistoryEntry = {
+        url,
+        label,
+        params: { ...draft },
+        totalMs: result.totalMs,
+        audioMs: result.audioMs,
+      };
+
+      // Add to history at the beginning (newest first)
+      setHistory((prev) => {
+        const updated = [newEntry, ...prev];
+        // Keep only the latest 10 entries, revoke old URLs
+        if (updated.length > 10) {
+          const removed = updated.slice(10);
+          removed.forEach((entry) => {
+            if (entry.url) URL.revokeObjectURL(entry.url);
+          });
+          return updated.slice(0, 10);
+        }
+        return updated;
       });
     } catch {
       setError(true);
     } finally {
       setRunning(false);
     }
+  }
+
+  function handleDeleteEntry(index: number) {
+    setHistory((prev) => {
+      const entry = prev[index];
+      if (entry?.url) URL.revokeObjectURL(entry.url);
+      return prev.filter((_, i) => i !== index);
+    });
+  }
+
+  function formatParams(params: Record<string, ModelLabFieldValue>): string {
+    return Object.entries(params)
+      .filter(([, value]) => value !== null && value !== undefined)
+      .map(([key, value]) => {
+        let displayValue = String(value);
+        if (displayValue.length > 40) {
+          displayValue = displayValue.substring(0, 40) + "...";
+        }
+        return `${key}=${displayValue}`;
+      })
+      .join(", ");
   }
 
   return (
@@ -249,10 +307,32 @@ function SpeechTestPanel({
         Run test
       </Button>
       {error && <p className={styles.errorText}>Couldn't run the test -- try again.</p>}
-      {audioUrl && !error && (
-        <div className={styles.testResult}>
-          <p className={styles.testResultLabel}>Output</p>
-          <audio controls src={audioUrl} className={styles.audioPlayer} />
+
+      {history.length > 0 && (
+        <div className={styles.historyList}>
+          {history.map((entry, index) => (
+            <div key={index} className={styles.historyItem}>
+              <div className={styles.historyItemHeader}>
+                <span className={styles.historyItemLabel}>{entry.label}</span>
+                <audio controls src={entry.url} className={styles.audioPlayer} />
+                <Button
+                  variant="secondary"
+                  onClick={() => handleDeleteEntry(index)}
+                  aria-label={`Delete history entry ${entry.label}`}
+                >
+                  <Trash2 size={14} />
+                </Button>
+              </div>
+              <div className={styles.historyItemParams}>{formatParams(entry.params)}</div>
+              {(entry.totalMs !== null || entry.audioMs !== null) && (
+                <div className={styles.historyItemTiming}>
+                  {entry.totalMs !== null && `Synthesis ${(entry.totalMs / 1000).toFixed(1)}s`}
+                  {entry.totalMs !== null && entry.audioMs !== null && " · "}
+                  {entry.audioMs !== null && `audio ${(entry.audioMs / 1000).toFixed(1)}s`}
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -266,22 +346,36 @@ function TranscriptionTestPanel({
 }: {
   adapterId: string;
   draft: DraftMap;
-  previewTranscription: (adapterId: string, draft: DraftMap, audioFile: File) => Promise<{ transcript: string }>;
+  previewTranscription: (adapterId: string, draft: DraftMap, audioFile: File) => Promise<{ transcript: string; timing?: { total_ms: number } }>;
 }) {
   const [file, setFile] = useState<File | null>(null);
   const [transcript, setTranscript] = useState<string | null>(null);
+  const [timing, setTiming] = useState<{ total_ms: number } | null>(null);
   const [running, setRunning] = useState(false);
-  const [error, setError] = useState(false);
+  const [testError, setTestError] = useState(false);
+  const { recording, start, stop, error: recorderError } = useWavRecorder();
+
+  async function handleRecordStart() {
+    await start();
+  }
+
+  async function handleRecordStop() {
+    const recordedFile = await stop();
+    if (recordedFile) {
+      setFile(recordedFile);
+    }
+  }
 
   async function handleRun() {
     if (running || !file) return;
     setRunning(true);
-    setError(false);
+    setTestError(false);
     try {
       const result = await previewTranscription(adapterId, draft, file);
       setTranscript(result.transcript);
+      setTiming(result.timing ?? null);
     } catch {
-      setError(true);
+      setTestError(true);
     } finally {
       setRunning(false);
     }
@@ -291,20 +385,50 @@ function TranscriptionTestPanel({
     <div className={styles.testPanel}>
       <h3 className={styles.testTitle}>Test it now</h3>
       <p className={styles.fieldHelp}>Transcribes an audio clip with your current (unsaved) settings above.</p>
-      <input
-        type="file"
-        accept="audio/*"
-        className={styles.fileInput}
-        onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-      />
+
+      <div className={styles.recordingControls}>
+        <div className={styles.recordingRow}>
+          <Button
+            variant="secondary"
+            onClick={recording ? handleRecordStop : handleRecordStart}
+          >
+            {recording ? (
+              <>
+                <Square size={16} />
+                Stop recording
+              </>
+            ) : (
+              <>
+                <Mic size={16} />
+                Record a clip
+              </>
+            )}
+          </Button>
+          <input
+            type="file"
+            accept="audio/*"
+            className={styles.fileInput}
+            onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+          />
+        </div>
+        {file && (
+          <p className={styles.selectedFile}>
+            Selected: <span>{file.name}</span>
+          </p>
+        )}
+      </div>
+
+      {recorderError && <p className={styles.errorText}>Microphone unavailable -- check permissions.</p>}
+
       <Button variant="secondary" loading={running} disabled={!file} onClick={handleRun}>
         Run test
       </Button>
-      {error && <p className={styles.errorText}>Couldn't run the test -- try again.</p>}
-      {transcript !== null && !error && (
+      {testError && <p className={styles.errorText}>Couldn't run the test -- try again.</p>}
+      {transcript !== null && !testError && (
         <div className={styles.testResult}>
           <p className={styles.testResultLabel}>Transcript</p>
           <p className={styles.testResultText}>{transcript}</p>
+          {timing && <p className={styles.fieldHelp}>Took {(timing.total_ms / 1000).toFixed(1)}s</p>}
         </div>
       )}
     </div>
@@ -331,12 +455,29 @@ function TranscriptionTestPanel({
  * button, mirroring the old screen's save-button affordance.
  */
 export function ModelLabScreen({ serverAddress, onClose }: ModelLabScreenProps) {
-  const { schema, values, loadError, saveState, setSaveState, saveValues, previewText, previewSpeech, previewTranscription } =
-    useModelLab(serverAddress);
+  const {
+    schema,
+    values,
+    presets,
+    voices,
+    loadError,
+    saveState,
+    setSaveState,
+    saveValues,
+    previewText,
+    previewSpeech,
+    previewTranscription,
+    previewChain,
+    createPreset,
+    deletePreset,
+    createVoice,
+    deleteVoice,
+  } = useModelLab(serverAddress);
 
-  const [activeCapability, setActiveCapability] = useState<ModelLabCapability>("text");
+  const [activeCapability, setActiveCapability] = useState<TabKey>("text");
   const [activeAdapterByCapability, setActiveAdapterByCapability] = useState<Record<string, string>>({});
   const [draftByAdapter, setDraftByAdapter] = useState<Record<string, DraftMap>>({});
+  const [selectedPresetByCapability, setSelectedPresetByCapability] = useState<Record<string, string | null>>({});
 
   // Clear a transient "saved" confirmation after a few seconds so it doesn't
   // linger indefinitely as stale-looking UI.
@@ -347,12 +488,19 @@ export function ModelLabScreen({ serverAddress, onClose }: ModelLabScreenProps) 
   }, [saveState, setSaveState]);
 
   const adaptersForCapability = useMemo<ModelLabAdapter[]>(() => {
-    if (!schema) return [];
-    return schema[activeCapability]?.adapters ?? [];
+    if (!schema || activeCapability === "chain") return [];
+    return schema[activeCapability as ModelLabCapability]?.adapters ?? [];
   }, [schema, activeCapability]);
 
-  const activeAdapterId = activeAdapterByCapability[activeCapability] ?? adaptersForCapability[0]?.id ?? null;
-  const activeAdapter = adaptersForCapability.find((adapter) => adapter.id === activeAdapterId) ?? null;
+  const activeAdapterId = activeCapability === "chain" ? null : (activeAdapterByCapability[activeCapability] ?? adaptersForCapability[0]?.id ?? null);
+  const activeAdapter = activeCapability === "chain" ? null : (adaptersForCapability.find((adapter) => adapter.id === activeAdapterId) ?? null);
+
+  // Helper to get active adapter id for a specific capability (used for chain tab)
+  function getActiveAdapterForCapability(capability: ModelLabCapability): string | null {
+    if (!schema) return null;
+    const adapters = schema[capability]?.adapters ?? [];
+    return activeAdapterByCapability[capability] ?? adapters[0]?.id ?? null;
+  }
 
   if (loadError) {
     return (
@@ -399,6 +547,85 @@ export function ModelLabScreen({ serverAddress, onClose }: ModelLabScreenProps) 
     return { ...saved, ...draftSection };
   }
 
+  // Calculate if the current draft differs from the selected preset
+  function isPresetModified(adapterId: string): boolean {
+    if (activeCapability === "chain") return false;
+    const selectedPresetId = selectedPresetByCapability[activeCapability];
+    if (!selectedPresetId) return false;
+
+    const presetList = presets[activeCapability as ModelLabCapability] ?? [];
+    const preset = presetList.find((p) => p.id === selectedPresetId);
+    if (!preset) return false;
+
+    // Get the adapter's field spec to know which keys to compare
+    const adapter = activeAdapter;
+    if (!adapter) return false;
+
+    const adapterFieldKeys = new Set(adapter.fields.map((f) => f.key));
+    const currentDraft = draftMapFor(adapterId);
+
+    // Compare only the fields that exist in the adapter spec
+    for (const key of adapterFieldKeys) {
+      const draftValue = currentDraft[key] ?? null;
+      const presetValue = preset.values[key] ?? null;
+      if (draftValue !== presetValue) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async function handlePresetApply(preset: ModelLabPreset) {
+    if (activeCapability === "chain" || !activeAdapterId || !activeAdapter) return;
+
+    // Get the adapter's field spec to know which keys to apply
+    const adapterFieldKeys = new Set(activeAdapter.fields.map((f) => f.key));
+
+    // Apply only the preset's values that are declared in the adapter's spec
+    for (const key of adapterFieldKeys) {
+      const value = preset.values[key] ?? null;
+      setDraftField(activeAdapterId, key, value);
+    }
+
+    // Record this preset as selected for the current capability
+    setSelectedPresetByCapability((prev) => ({ ...prev, [activeCapability]: preset.id }));
+  }
+
+  async function handlePresetSaveAs(name: string): Promise<boolean> {
+    if (activeCapability === "chain" || !activeAdapterId || !activeAdapter) return false;
+
+    // Get the adapter's field spec to know which keys to include in the preset
+    const adapterFieldKeys = new Set(activeAdapter.fields.map((f) => f.key));
+    const currentDraft = draftMapFor(activeAdapterId);
+
+    // Restrict to only fields declared in the adapter spec, drop null/undefined
+    const presetValues: Record<string, ModelLabFieldValue> = {};
+    for (const key of adapterFieldKeys) {
+      const value = currentDraft[key];
+      if (value !== null && value !== undefined) {
+        presetValues[key] = value;
+      }
+    }
+
+    const created = await createPreset(activeCapability as ModelLabCapability, name, presetValues);
+    if (created) {
+      setSelectedPresetByCapability((prev) => ({ ...prev, [activeCapability]: created.id }));
+      return true;
+    }
+    return false;
+  }
+
+  async function handlePresetDelete(preset: ModelLabPreset) {
+    if (activeCapability === "chain") return;
+    const ok = await deletePreset(activeCapability as ModelLabCapability, preset.id);
+    if (ok) {
+      // Clear selection if it was the deleted preset
+      if (selectedPresetByCapability[activeCapability] === preset.id) {
+        setSelectedPresetByCapability((prev) => ({ ...prev, [activeCapability]: null }));
+      }
+    }
+  }
+
   const hasUnsavedChanges = activeAdapterId ? Object.keys(draftByAdapter[activeAdapterId] ?? {}).length > 0 : false;
 
   async function handleSave() {
@@ -435,67 +662,111 @@ export function ModelLabScreen({ serverAddress, onClose }: ModelLabScreenProps) 
       </div>
 
       <div className={styles.content}>
-        {adaptersForCapability.length === 0 && (
-          <p className={styles.sectionHint}>No adapters available for this capability yet.</p>
-        )}
-
-        {adaptersForCapability.length > 1 && (
-          <div className={styles.adapterTabs} role="tablist" aria-label="Adapter">
-            {adaptersForCapability.map((adapter) => (
-              <button
-                key={adapter.id}
-                type="button"
-                role="tab"
-                aria-selected={activeAdapterId === adapter.id}
-                className={styles.adapterTab}
-                data-active={activeAdapterId === adapter.id}
-                onClick={() => setActiveAdapterByCapability((prev) => ({ ...prev, [activeCapability]: adapter.id }))}
-              >
-                {adapter.label}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {activeAdapter && (
-          <section className={styles.card} data-marquee="true">
-            <div className={styles.cardHeader}>
-              <Badge tone="neutral">{activeAdapter.label}</Badge>
-            </div>
-
-            {activeAdapter.fields.map((field) => (
-              <FieldControl
-                key={field.key}
-                field={field}
-                value={draftFor(activeAdapter.id, field.key)}
-                onChange={(value) => setDraftField(activeAdapter.id, field.key, value)}
-              />
-            ))}
-
-            {activeCapability === "text" && (
-              <TextTestPanel adapterId={activeAdapter.id} draft={draftMapFor(activeAdapter.id)} previewText={previewText} />
+        {activeCapability === "chain" ? (
+          <>
+            <ChainTestPanel
+              adapters={{
+                stt: getActiveAdapterForCapability("transcription"),
+                llm: getActiveAdapterForCapability("text"),
+                tts: getActiveAdapterForCapability("speech"),
+              }}
+              buildValues={() => {
+                const sttId = getActiveAdapterForCapability("transcription");
+                const llmId = getActiveAdapterForCapability("text");
+                const ttsId = getActiveAdapterForCapability("speech");
+                const result: Record<string, Record<string, ModelLabFieldValue>> = {};
+                if (sttId) result[sttId] = draftMapFor(sttId);
+                if (llmId) result[llmId] = draftMapFor(llmId);
+                if (ttsId) result[ttsId] = draftMapFor(ttsId);
+                return result;
+              }}
+              previewChain={previewChain}
+            />
+            <p className={styles.liveNote}>
+              Saved settings persist immediately, but don't take effect until the next connection -- the engine and its
+              services are built once when a call starts. Use "Test it now" above to try your draft values right away.
+            </p>
+          </>
+        ) : (
+          <>
+            {adaptersForCapability.length === 0 && (
+              <p className={styles.sectionHint}>No adapters available for this capability yet.</p>
             )}
-            {activeCapability === "speech" && (
-              <SpeechTestPanel
-                adapterId={activeAdapter.id}
-                draft={draftMapFor(activeAdapter.id)}
-                previewSpeech={previewSpeech}
-              />
-            )}
-            {activeCapability === "transcription" && (
-              <TranscriptionTestPanel
-                adapterId={activeAdapter.id}
-                draft={draftMapFor(activeAdapter.id)}
-                previewTranscription={previewTranscription}
-              />
-            )}
-          </section>
-        )}
 
-        <p className={styles.liveNote}>
-          Saved settings persist immediately, but don't take effect until the next connection -- the engine and its
-          services are built once when a call starts. Use "Test it now" above to try your draft values right away.
-        </p>
+            {adaptersForCapability.length > 1 && (
+              <div className={styles.adapterTabs} role="tablist" aria-label="Adapter">
+                {adaptersForCapability.map((adapter) => (
+                  <button
+                    key={adapter.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeAdapterId === adapter.id}
+                    className={styles.adapterTab}
+                    data-active={activeAdapterId === adapter.id}
+                    onClick={() => setActiveAdapterByCapability((prev) => ({ ...prev, [activeCapability]: adapter.id }))}
+                  >
+                    {adapter.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {(activeCapability === "text" || activeCapability === "speech") && activeAdapterId && (
+              <PresetBar
+                presets={presets[activeCapability as ModelLabCapability] ?? []}
+                selectedId={selectedPresetByCapability[activeCapability] ?? null}
+                modified={isPresetModified(activeAdapterId)}
+                onApply={handlePresetApply}
+                onSaveAs={handlePresetSaveAs}
+                onDelete={handlePresetDelete}
+              />
+            )}
+
+            {activeAdapter && (
+              <section className={styles.card} data-marquee="true">
+                <div className={styles.cardHeader}>
+                  <Badge tone="neutral">{activeAdapter.label}</Badge>
+                </div>
+
+                {activeAdapter.fields.map((field) => (
+                  <FieldControl
+                    key={field.key}
+                    field={field}
+                    value={draftFor(activeAdapter.id, field.key)}
+                    onChange={(value) => setDraftField(activeAdapter.id, field.key, value)}
+                  />
+                ))}
+
+                {activeCapability === "text" && (
+                  <TextTestPanel adapterId={activeAdapter.id} draft={draftMapFor(activeAdapter.id)} previewText={previewText} />
+                )}
+                {activeCapability === "speech" && (
+                  <SpeechTestPanel
+                    adapterId={activeAdapter.id}
+                    draft={draftMapFor(activeAdapter.id)}
+                    previewSpeech={previewSpeech}
+                  />
+                )}
+                {activeCapability === "transcription" && (
+                  <TranscriptionTestPanel
+                    adapterId={activeAdapter.id}
+                    draft={draftMapFor(activeAdapter.id)}
+                    previewTranscription={previewTranscription}
+                  />
+                )}
+              </section>
+            )}
+
+            {activeCapability === "speech" && activeAdapter?.id.startsWith("omlx:") && (
+              <VoiceManager voices={voices} createVoice={createVoice} deleteVoice={deleteVoice} />
+            )}
+
+            <p className={styles.liveNote}>
+              Saved settings persist immediately, but don't take effect until the next connection -- the engine and its
+              services are built once when a call starts. Use "Test it now" above to try your draft values right away.
+            </p>
+          </>
+        )}
       </div>
 
       <footer className={styles.footer}>

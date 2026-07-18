@@ -175,6 +175,24 @@ export type ModelLabValues = Record<string, Record<string, ModelLabFieldValue>>;
  * more adapters; omitted fields/adapters are left unchanged server-side. */
 export type ModelLabValuesUpdate = Record<string, Record<string, ModelLabFieldValue>>;
 
+/** A named preset (bundle of field values) for a specific capability,
+ * as returned by GET /api/model-lab/presets. Builtin presets (builtin: true)
+ * cannot be modified or deleted. */
+export interface ModelLabPreset {
+  id: string;
+  name: string;
+  builtin: boolean;
+  values: Record<string, ModelLabFieldValue>;
+}
+
+/** A voice in the voice library for TTS voice cloning. */
+export interface ModelLabVoice {
+  id: string;
+  name: string;
+  language: string | null;
+  created_at: string;
+}
+
 interface TranscriptEventBase {
   id: string;
   timestamp: number;
@@ -184,3 +202,18 @@ interface TranscriptEventBase {
 export type TranscriptEvent =
   | ({ kind: "original" } & TranscriptEventBase)
   | ({ kind: "translation"; direction?: string } & TranscriptEventBase);
+
+/** Result from a full chain preview (STT → LLM → TTS). */
+export interface ChainPreviewResult {
+  transcript: string;
+  translatedText: string;
+  direction: string | null;
+  tone: string | null;
+  timing: {
+    sttMs: number;
+    llmMs: number;
+    ttsMs: number;
+    totalMs: number;
+  };
+  audioBlob: Blob | null;
+}
