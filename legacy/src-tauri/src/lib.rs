@@ -3,8 +3,14 @@ mod conversation;
 mod inference;
 mod llm;
 
-use audio::capture::{is_recording, start_recording, stop_recording};
-use audio::playback::{init_playback, is_playback_active, queue_playback_audio, start_playback, stop_playback};
+use audio::capture::{
+    close_mic, is_recording, is_service_active, open_mic, set_vad_mode, start_voice_service,
+    stop_voice_service,
+};
+use audio::playback::{
+    init_playback, is_playback_active, pause_playback, queue_playback_audio, resume_playback,
+    start_playback, stop_playback,
+};
 use conversation::{
     add_assistant_message, add_user_message, get_conversation_history, get_conversation_status,
     is_conversation_active, transition_conversation_status, ConversationState,
@@ -44,12 +50,18 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
-            start_recording,
-            stop_recording,
+            start_voice_service,
+            stop_voice_service,
+            open_mic,
+            close_mic,
+            set_vad_mode,
             is_recording,
+            is_service_active,
             queue_playback_audio,
             start_playback,
             stop_playback,
+            pause_playback,
+            resume_playback,
             is_playback_active,
             get_conversation_history,
             get_conversation_status,
