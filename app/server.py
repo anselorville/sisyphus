@@ -17,6 +17,7 @@ or, after `uv sync`:
 from __future__ import annotations
 
 import asyncio
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -40,7 +41,23 @@ from app.model_providers import (
     save_model_providers,
 )
 from app.model_adapters import Capability, list_adapters_async
-from app.model_lab_preview import PreviewError, preview_speech, preview_text, preview_transcription
+from app.model_lab_preview import PreviewError, preview_chain, preview_speech, preview_text, preview_transcription
+from app.model_presets import (
+    BuiltinPresetError,
+    PresetNotFoundError,
+    create_preset,
+    delete_preset,
+    list_presets,
+    update_preset,
+)
+from app.voice_library import (
+    VoiceExistsError,
+    VoiceNotFoundError,
+    VoiceValidationError,
+    create_voice,
+    delete_voice,
+    list_voices,
+)
 from app.model_settings import (
     apply_partial_update,
     load_model_settings,
@@ -77,6 +94,10 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    # Custom response headers are invisible to cross-origin JS unless
+    # explicitly exposed -- the client reads the preview timing headers
+    # (X-Preview-Total-Ms/X-Preview-Audio-Ms) from fetch() responses.
+    expose_headers=["X-Preview-Total-Ms", "X-Preview-Audio-Ms"],
 )
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -307,7 +328,7 @@ async def post_model_lab_preview_text(request: dict) -> dict:
     adapter.
 
     Body: `{"adapter_id": str, "values": {...draft field overrides...},
-    "input_text": str}`. Returns `{"output_text": str}`.
+    "input_text": str}`. Returns `{"output_text": str, "timing": {"total_ms": int}}`.
 
     Uses a short, generic test system prompt -- NOT the full bidirectional
     translation system prompt -- unless `values.system_prompt_override` (or
@@ -325,7 +346,7 @@ async def post_model_lab_preview_text(request: dict) -> dict:
 
     settings = load_settings()
     try:
-        output_text = await preview_text(
+        output_text, timing = await preview_text(
             adapter_id=adapter_id, values=values, input_text=input_text, settings=settings
         )
     except PreviewError as exc:
@@ -334,7 +355,7 @@ async def post_model_lab_preview_text(request: dict) -> dict:
         # Missing API key / unconfigured provider, etc. -- same class of
         # error app/pipeline.py's own builders raise at pipeline-build time.
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"output_text": output_text}
+    return {"output_text": output_text, "timing": timing}
 
 
 @app.post("/api/model-lab/preview/speech")
@@ -347,7 +368,8 @@ async def post_model_lab_preview_speech(request: dict):
     Returns a real WAV file (`Content-Type: audio/wav`) -- the concatenated
     `TTSAudioRawFrame.audio` bytes from one real `run_test()` call, wrapped
     in a WAV header built from the frames' own sample_rate/num_channels (see
-    `app.model_lab_preview._wav_bytes_from_frames`).
+    `app.model_lab_preview._wav_bytes_from_frames`). Response headers include
+    `X-Preview-Total-Ms` and `X-Preview-Audio-Ms` with timing metadata.
     """
     adapter_id = request.get("adapter_id")
     values = request.get("values") or {}
@@ -359,14 +381,21 @@ async def post_model_lab_preview_speech(request: dict):
 
     settings = load_settings()
     try:
-        wav_bytes = await preview_speech(
+        wav_bytes, timing = await preview_speech(
             adapter_id=adapter_id, values=values, input_text=input_text, settings=settings
         )
     except PreviewError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return Response(content=wav_bytes, media_type="audio/wav")
+    return Response(
+        content=wav_bytes,
+        media_type="audio/wav",
+        headers={
+            "X-Preview-Total-Ms": str(timing["total_ms"]),
+            "X-Preview-Audio-Ms": str(timing["audio_ms"]),
+        },
+    )
 
 
 @app.post("/api/model-lab/preview/transcription")
@@ -386,7 +415,7 @@ async def post_model_lab_preview_transcription(
     assumed, so any sample rate works, but non-WAV containers are rejected
     with a 400.
 
-    Returns `{"transcript": str}`.
+    Returns `{"transcript": str, "timing": {"total_ms": int}}`.
     """
     try:
         parsed_values = json_module.loads(values) if values else {}
@@ -398,14 +427,286 @@ async def post_model_lab_preview_transcription(
     audio_bytes = await audio.read()
     settings = load_settings()
     try:
-        transcript = await preview_transcription(
+        transcript, timing = await preview_transcription(
             adapter_id=adapter_id, values=parsed_values, audio_wav_bytes=audio_bytes, settings=settings
         )
     except PreviewError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"transcript": transcript}
+    return {"transcript": transcript, "timing": timing}
+
+
+# One-shot audio stash for chain preview endpoint.
+# Maps token -> bytes. Capped at 8 entries; evicts oldest when full.
+# This prevents abandoned tokens from growing memory unboundedly.
+_chain_audio_stash: dict[str, bytes] = {}
+
+
+def _stash_chain_audio(audio_bytes: bytes) -> str:
+    """Store audio bytes and return a one-time token to retrieve them.
+    Evicts oldest entry if stash is at capacity (8 entries)."""
+    if len(_chain_audio_stash) >= 8:
+        # Remove the oldest (first inserted) entry.
+        # dict preserves insertion order in Python 3.7+.
+        oldest_token = next(iter(_chain_audio_stash))
+        del _chain_audio_stash[oldest_token]
+    token = secrets.token_urlsafe(16)
+    _chain_audio_stash[token] = audio_bytes
+    return token
+
+
+def _pop_chain_audio(token: str) -> bytes | None:
+    """Retrieve and delete audio by token. Returns None if token not found."""
+    return _chain_audio_stash.pop(token, None)
+
+
+@app.post("/api/model-lab/preview/chain")
+async def post_model_lab_preview_chain(
+    stt_adapter_id: str = Form(...),
+    llm_adapter_id: str = Form(...),
+    tts_adapter_id: str = Form(...),
+    values: str = Form("{}"),
+    audio: UploadFile = File(...),
+) -> dict:
+    """Run a full chain preview: STT → LLM (with real translation prompt +
+    persona override) → TTS. Returns text results + per-stage timing + audio token.
+
+    Multipart form fields: `stt_adapter_id`, `llm_adapter_id`, `tts_adapter_id` (str),
+    `values` (JSON-encoded dict keyed by adapter_id, as a string field),
+    `audio` (WAV file upload, 16-bit PCM).
+
+    Returns `{"transcript": str, "translated_text": str, "direction": str|null,
+    "tone": str|null, "timing": {...}, "audio_token": str}`.
+    Audio bytes are stored one-shot; retrieve via GET /api/model-lab/preview/chain/audio/{token}.
+
+    Raises 400 if JSON parse fails, adapters are invalid, or any stage fails
+    (empty transcript, no translation, etc.).
+    """
+    try:
+        parsed_values = json_module.loads(values) if values else {}
+    except json_module.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"'values' is not valid JSON: {exc}") from exc
+    if not isinstance(parsed_values, dict):
+        raise HTTPException(status_code=400, detail="'values' must decode to a JSON object.")
+
+    audio_bytes = await audio.read()
+    settings = load_settings()
+    try:
+        result_dict, wav_bytes = await preview_chain(
+            stt_adapter_id=stt_adapter_id,
+            llm_adapter_id=llm_adapter_id,
+            tts_adapter_id=tts_adapter_id,
+            values=parsed_values,
+            audio_wav_bytes=audio_bytes,
+            settings=settings,
+        )
+    except PreviewError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    audio_token = _stash_chain_audio(wav_bytes)
+    result_dict["audio_token"] = audio_token
+    return result_dict
+
+
+@app.get("/api/model-lab/preview/chain/audio/{token}")
+async def get_model_lab_preview_chain_audio(token: str):
+    """Retrieve and delete the audio WAV for a chain preview.
+
+    Path param: `token` (the audio_token returned by POST /api/model-lab/preview/chain).
+
+    Returns: 200 with audio/wav if found; 404 if token not found or already fetched.
+    """
+    wav_bytes = _pop_chain_audio(token)
+    if not wav_bytes:
+        raise HTTPException(status_code=404, detail="Audio token not found or already fetched.")
+    return Response(content=wav_bytes, media_type="audio/wav")
+
+
+@app.get("/api/model-lab/presets")
+async def get_model_lab_presets(capability: str = "") -> dict:
+    """Return all presets (builtin + user) for a given capability.
+
+    Query param: `capability` (required) -- either "text" or "speech".
+
+    Returns `{"presets": [...]}` where each preset is
+    `{"id", "name", "builtin", "values"}`. Builtins are listed first.
+
+    Raises 400 if `capability` is invalid.
+    """
+    if not capability or capability not in ("text", "speech"):
+        raise HTTPException(
+            status_code=400,
+            detail="'capability' query param is required and must be 'text' or 'speech'",
+        )
+
+    try:
+        presets = list_presets(capability)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"presets": presets}
+
+
+@app.post("/api/model-lab/presets")
+async def post_model_lab_presets(request: dict) -> dict:
+    """Create a new user preset.
+
+    Body: `{"capability": "text"|"speech", "name": str, "values": {...}}`.
+    Returns the newly created preset (status 201).
+
+    Raises 400 if capability is invalid, name is empty, or values is not a dict.
+    """
+    capability = request.get("capability")
+    name = request.get("name")
+    values = request.get("values")
+
+    if not capability or capability not in ("text", "speech"):
+        raise HTTPException(
+            status_code=400,
+            detail="'capability' is required and must be 'text' or 'speech'",
+        )
+    if not name or not isinstance(name, str):
+        raise HTTPException(status_code=400, detail="'name' must be a non-empty string")
+    if not isinstance(values, dict):
+        raise HTTPException(status_code=400, detail="'values' must be a JSON object")
+
+    try:
+        preset = create_preset(capability, name, values)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(content=preset, status_code=201)
+
+
+@app.put("/api/model-lab/presets/{preset_id}")
+async def put_model_lab_presets(preset_id: str, request: dict) -> dict:
+    """Update an existing user preset.
+
+    Path param: `preset_id` (the preset's ID).
+    Body: `{"name"?: str, "values"?: {...}}` (both optional, but at least one must be provided).
+
+    Returns the updated preset.
+
+    Raises 400 if preset is builtin, 404 if not found.
+    """
+    name = request.get("name")
+    values = request.get("values")
+
+    # Allow either name or values (or both) to be provided.
+    if name is None and values is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Request body must include at least one of 'name' or 'values'",
+        )
+
+    try:
+        preset = update_preset(preset_id, name=name, values=values)
+    except BuiltinPresetError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PresetNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return preset
+
+
+@app.delete("/api/model-lab/presets/{preset_id}")
+async def delete_model_lab_presets(preset_id: str) -> dict:
+    """Delete an existing user preset.
+
+    Path param: `preset_id` (the preset's ID).
+
+    Returns `{"ok": true}` on success.
+
+    Raises 400 if preset is builtin, 404 if not found.
+    """
+    try:
+        delete_preset(preset_id)
+    except BuiltinPresetError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PresetNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {"ok": True}
+
+
+@app.get("/api/model-lab/voices")
+async def get_model_lab_voices() -> dict:
+    """Return all available voices in the library.
+
+    Returns `{"voices": [...]}` where each voice is
+    `{"id", "name", "language", "created_at"}`.
+    """
+    voices = list_voices()
+    return {"voices": voices}
+
+
+@app.post("/api/model-lab/voices")
+async def post_model_lab_voices(
+    name: str = Form(None),
+    ref_text: str = Form(None),
+    audio: UploadFile = File(...),
+    language: str = Form(None),
+) -> dict:
+    """Create a new voice in the library.
+
+    Multipart form fields: `name` (str), `ref_text` (str), `audio` (WAV file),
+    optional `language` (str, e.g. "zh", "en").
+
+    The uploaded file must be a WAV (16-bit PCM, 1-30 seconds).
+
+    Returns the newly created voice (status 201).
+
+    Raises 400 if validation fails (bad audio, empty name/ref_text, name not sanitizable,
+    duplicate name, or audio duration outside 1-30 seconds).
+    """
+    if not name:
+        raise HTTPException(status_code=400, detail="'name' is required and must be non-empty.")
+    if not ref_text:
+        raise HTTPException(status_code=400, detail="'ref_text' is required and must be non-empty.")
+
+    audio_bytes = await audio.read()
+    try:
+        voice = create_voice(
+            name=name,
+            ref_text=ref_text,
+            wav_bytes=audio_bytes,
+            language=language,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except VoiceValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except VoiceExistsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(content=voice, status_code=201)
+
+
+@app.delete("/api/model-lab/voices/{voice_id}")
+async def delete_model_lab_voices(voice_id: str) -> dict:
+    """Delete a voice from the library.
+
+    Path param: `voice_id` (the voice's ID, may contain unicode).
+
+    Returns `{"ok": true}` on success.
+
+    Raises 404 if voice not found.
+    """
+    try:
+        delete_voice(voice_id)
+    except VoiceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {"ok": True}
 
 
 @app.get("/api/model-providers")

@@ -51,6 +51,7 @@ parallel mock.
 from __future__ import annotations
 
 import io
+import time
 import wave
 from typing import Any
 
@@ -74,6 +75,8 @@ from app.pipeline import (
     _build_cloud_speech_service,
     _build_cloud_text_service,
     _build_cloud_transcription_service,
+    build_translation_system_prompt,
+    parse_direction_prefix,
 )
 
 
@@ -81,6 +84,30 @@ class PreviewError(ValueError):
     """Raised for any preview request that can't be serviced (unknown
     adapter id, oMLX not configured, etc.) -- callers (app/server.py) map
     this to a 400 response."""
+
+
+def _audio_duration_ms(wav_bytes: bytes) -> int:
+    """Calculate the duration of a WAV file in milliseconds.
+
+    Args:
+        wav_bytes: Complete WAV file bytes (with header).
+
+    Returns:
+        Duration in milliseconds, rounded to nearest integer.
+
+    Raises:
+        PreviewError: If the input is not a valid 16-bit PCM WAV file.
+    """
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
+        nframes = wav_file.getnframes()
+        framerate = wav_file.getframerate()
+        sample_width = wav_file.getsampwidth()
+        if sample_width != 2:
+            raise PreviewError(
+                f"Audio duration calculation requires 16-bit PCM WAV (got sample width {sample_width * 8} bits)."
+            )
+        # duration_ms = (nframes / framerate) * 1000
+        return round(nframes / framerate * 1000)
 
 
 def _short_test_system_prompt() -> str:
@@ -102,10 +129,14 @@ def _short_test_system_prompt() -> str:
 
 async def preview_text(
     *, adapter_id: str, values: dict[str, Any], input_text: str, settings: Settings
-) -> str:
+) -> tuple[str, dict[str, int]]:
     """Run one real LLM call for `adapter_id` with `values` applied as
     overrides on top of the adapter's saved values, returning the model's
-    full text output.
+    full text output and timing metadata.
+
+    Returns:
+        Tuple of (output_text, {"total_ms": int}) where total_ms is the
+        time spent in run_test() (service construction not included).
 
     `values.get("system_prompt_override")`, if present and non-empty, is
     used verbatim as the system instruction (see `_short_test_system_prompt`'s
@@ -119,30 +150,14 @@ async def preview_text(
     override = merged.get("system_prompt_override")
     system_prompt = override.strip() if isinstance(override, str) and override.strip() else _short_test_system_prompt()
 
-    if adapter_id == "cloud:text":
-        model_providers = load_model_providers()
-        llm_service = _build_cloud_text_service(
-            settings,
-            system_prompt,
-            {adapter_id: merged},
-            model_providers.cloud,
-        )
-    elif adapter_id.startswith("omlx:"):
-        if not settings.omlx_base_url or not settings.omlx_api_key:
-            raise PreviewError("oMLX is not configured (OMLX_BASE_URL/OMLX_API_KEY).")
-        llm_service = build_mlx_llm(
-            settings,
-            system_prompt,
-            temperature=merged.get("temperature"),
-            top_p=merged.get("top_p"),
-            enable_thinking=bool(merged.get("enable_thinking", False)),
-        )
-    else:
-        raise PreviewError(f"Unknown or unsupported text adapter id: {adapter_id!r}")
+    llm_service = _build_text_service_for(adapter_id, system_prompt, merged, settings)
 
     context = LLMContext(messages=[{"role": "user", "content": input_text}])
+    start_time = time.monotonic()
     down, _up = await run_test(llm_service, frames_to_send=[LLMContextFrame(context=context)])
-    return "".join(f.text for f in down if isinstance(f, LLMTextFrame))
+    total_ms = round((time.monotonic() - start_time) * 1000)
+    output_text = "".join(f.text for f in down if isinstance(f, LLMTextFrame))
+    return output_text, {"total_ms": total_ms}
 
 
 def _wav_bytes_from_frames(frames: list[TTSAudioRawFrame]) -> bytes:
@@ -173,10 +188,15 @@ def _wav_bytes_from_frames(frames: list[TTSAudioRawFrame]) -> bytes:
 
 async def preview_speech(
     *, adapter_id: str, values: dict[str, Any], input_text: str, settings: Settings
-) -> bytes:
+) -> tuple[bytes, dict[str, int]]:
     """Run one real TTS call for `adapter_id` with `values` applied as
     overrides on top of the adapter's saved values, returning a complete WAV
-    file's bytes.
+    file's bytes and timing metadata.
+
+    Returns:
+        Tuple of (wav_bytes, {"total_ms": int, "audio_ms": int}) where:
+        - total_ms: time spent in run_test() (service construction not included)
+        - audio_ms: duration of the returned audio in milliseconds
     """
     from app.model_settings import load_model_settings, values_for
 
@@ -208,9 +228,139 @@ async def preview_speech(
     else:
         raise PreviewError(f"Unknown or unsupported speech adapter id: {adapter_id!r}")
 
+    start_time = time.monotonic()
     down, _up = await run_test(tts_service, frames_to_send=[TTSSpeakFrame(input_text)])
+    total_ms = round((time.monotonic() - start_time) * 1000)
     audio_frames = [f for f in down if isinstance(f, TTSAudioRawFrame)]
-    return _wav_bytes_from_frames(audio_frames)
+    wav_bytes = _wav_bytes_from_frames(audio_frames)
+    audio_ms = _audio_duration_ms(wav_bytes)
+    return wav_bytes, {"total_ms": total_ms, "audio_ms": audio_ms}
+
+
+def _build_text_service_for(
+    adapter_id: str,
+    system_prompt: str,
+    merged_values: dict[str, Any],
+    settings: Settings,
+):
+    """Private helper to build an LLM service for a given adapter_id with a
+    specific system prompt. Factored out so preview_text and preview_chain
+    cannot drift in their service construction logic.
+    """
+    if adapter_id == "cloud:text":
+        model_providers = load_model_providers()
+        return _build_cloud_text_service(
+            settings,
+            system_prompt,
+            {adapter_id: merged_values},
+            model_providers.cloud,
+        )
+    elif adapter_id.startswith("omlx:"):
+        if not settings.omlx_base_url or not settings.omlx_api_key:
+            raise PreviewError("oMLX is not configured (OMLX_BASE_URL/OMLX_API_KEY).")
+        return build_mlx_llm(
+            settings,
+            system_prompt,
+            temperature=merged_values.get("temperature"),
+            top_p=merged_values.get("top_p"),
+            enable_thinking=bool(merged_values.get("enable_thinking", False)),
+        )
+    else:
+        raise PreviewError(f"Unknown or unsupported text adapter id: {adapter_id!r}")
+
+
+async def preview_chain(
+    *,
+    stt_adapter_id: str,
+    llm_adapter_id: str,
+    tts_adapter_id: str,
+    values: dict[str, dict],
+    audio_wav_bytes: bytes,
+    settings: Settings,
+) -> tuple[dict, bytes]:
+    """Run a full chain preview: STT → LLM (with real translation system prompt +
+    persona override) → TTS. Returns intermediate results plus per-stage timing.
+
+    Args:
+        stt_adapter_id: STT adapter ID (e.g., "cloud:transcription")
+        llm_adapter_id: LLM adapter ID (e.g., "cloud:text" or "omlx:qwen3_5")
+        tts_adapter_id: TTS adapter ID (e.g., "cloud:speech" or "omlx:voxcpm2")
+        values: dict keyed by adapter_id, each value is a dict of draft overrides
+        audio_wav_bytes: Input audio as 16-bit PCM WAV bytes
+        settings: Runtime settings (source/target langs, API keys, etc.)
+
+    Returns:
+        Tuple of (result_dict, wav_bytes) where:
+        - result_dict contains: "transcript", "translated_text", "direction", "tone",
+          "timing": {"stt_ms", "llm_ms", "tts_ms", "total_ms"}
+        - wav_bytes is the synthesized audio
+
+    Raises PreviewError if any stage fails (empty STT output, no translation, etc.)
+    """
+    from app.model_settings import load_model_settings, values_for
+
+    # Stage 1: STT
+    stt_values = values.get(stt_adapter_id, {})
+    transcript, stt_timing = await preview_transcription(
+        adapter_id=stt_adapter_id,
+        values=stt_values,
+        audio_wav_bytes=audio_wav_bytes,
+        settings=settings,
+    )
+    transcript = transcript.strip()
+    if not transcript:
+        raise PreviewError("STT produced no transcript.")
+
+    # Stage 2: LLM (real translation system prompt with persona override)
+    llm_saved = values_for(llm_adapter_id, load_model_settings())
+    llm_draft = values.get(llm_adapter_id, {})
+    llm_merged = {**llm_saved, **llm_draft}
+
+    # Build real translation system prompt with persona override
+    persona_override = llm_merged.get("system_prompt_override")
+    system_prompt = build_translation_system_prompt(
+        settings.source_lang,
+        settings.target_lang,
+        persona_override=persona_override,
+    )
+
+    llm_service = _build_text_service_for(llm_adapter_id, system_prompt, llm_merged, settings)
+    context = LLMContext(messages=[{"role": "user", "content": transcript}])
+    llm_start = time.monotonic()
+    down, _up = await run_test(llm_service, frames_to_send=[LLMContextFrame(context=context)])
+    llm_ms = round((time.monotonic() - llm_start) * 1000)
+    raw_output = "".join(f.text for f in down if isinstance(f, LLMTextFrame))
+
+    # Parse direction and tone from the LLM output
+    direction, tone, translated_text = parse_direction_prefix(raw_output)
+    translated_text = translated_text.strip()
+    if not translated_text:
+        raise PreviewError("LLM produced no translation.")
+
+    # Stage 3: TTS
+    tts_values = values.get(tts_adapter_id, {})
+    wav_bytes, tts_timing = await preview_speech(
+        adapter_id=tts_adapter_id,
+        values=tts_values,
+        input_text=translated_text,
+        settings=settings,
+    )
+
+    total_ms = stt_timing["total_ms"] + llm_ms + tts_timing["total_ms"]
+
+    result = {
+        "transcript": transcript,
+        "translated_text": translated_text,
+        "direction": direction,
+        "tone": tone,
+        "timing": {
+            "stt_ms": stt_timing["total_ms"],
+            "llm_ms": llm_ms,
+            "tts_ms": tts_timing["total_ms"],
+            "total_ms": total_ms,
+        },
+    }
+    return result, wav_bytes
 
 
 def _pcm_chunks_from_wav(wav_bytes: bytes, *, chunk_ms: int = 100) -> tuple[list[bytes], int, int]:
@@ -239,10 +389,14 @@ def _pcm_chunks_from_wav(wav_bytes: bytes, *, chunk_ms: int = 100) -> tuple[list
 
 async def preview_transcription(
     *, adapter_id: str, values: dict[str, Any], audio_wav_bytes: bytes, settings: Settings
-) -> str:
+) -> tuple[str, dict[str, int]]:
     """Run one real STT call for `adapter_id` with `values` applied as
     overrides on top of the adapter's saved values, returning the
-    transcript text.
+    transcript text and timing metadata.
+
+    Returns:
+        Tuple of (transcript, {"total_ms": int}) where total_ms is the
+        time spent in run_test() (service construction not included).
 
     Requires WAV input (16-bit PCM) -- the uploaded file's own sample rate/
     channel count are read directly from its header (via Python's `wave`
@@ -275,5 +429,8 @@ async def preview_transcription(
         ]
         + [VADUserStoppedSpeakingFrame()]
     )
+    start_time = time.monotonic()
     down, _up = await run_test(stt_service, frames_to_send=frames)
-    return next((f.text for f in down if isinstance(f, TranscriptionFrame)), "")
+    total_ms = round((time.monotonic() - start_time) * 1000)
+    transcript = next((f.text for f in down if isinstance(f, TranscriptionFrame)), "")
+    return transcript, {"total_ms": total_ms}

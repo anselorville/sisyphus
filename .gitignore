@@ -48,6 +48,10 @@ model_settings.json
 # runtime-local state, not source. See app/model_providers.py.
 model_providers.json
 
+# User-defined model presets (named field-value bundles) -- runtime-local state,
+# not source. See app/model_presets.py.
+model_presets.json
+
 # Personal research notes that may contain pasted API keys -- never commit.
 docs/refs/
 output.mp3

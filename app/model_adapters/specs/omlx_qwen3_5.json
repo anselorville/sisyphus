@@ -4,6 +4,13 @@
   "capability": "text",
   "fields": [
     {
+      "key": "system_prompt_override",
+      "label": "Persona / system prompt",
+      "kind": "textarea",
+      "help": "Replaces the assistant's persona and behavior instructions. The structural output format the pipeline depends on (direction/tone tagging) is always preserved underneath, regardless of what you write here. Leave empty to use the default translator persona.",
+      "default": null
+    },
+    {
       "key": "temperature",
       "label": "Temperature",
       "kind": "number",

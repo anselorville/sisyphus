@@ -71,6 +71,7 @@ platform-conditional imports.
 
 from __future__ import annotations
 
+import base64
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any
 
@@ -283,6 +284,8 @@ class MlxTTSService(TTSService):
         top_p: float | None = None,
         top_k: int | None = None,
         repetition_penalty: float | None = None,
+        ref_audio_b64: str | None = None,
+        ref_text: str | None = None,
         **kwargs,
     ) -> None:
         super().__init__(push_start_frame=True, push_stop_frames=True, **kwargs)
@@ -303,6 +306,15 @@ class MlxTTSService(TTSService):
         self._top_p = top_p
         self._top_k = top_k
         self._repetition_penalty = repetition_penalty
+        # Voice cloning via oMLX's ref_audio/ref_text (base64-encoded WAV bytes).
+        # When set, these are sent in the request for zero-shot voice cloning,
+        # and the `voice` field is omitted (ref_audio and voice are mutually
+        # exclusive). Note: oMLX currently has a known server-side bug
+        # (`cannot import name 'resample_audio' from 'mlx_audio.utils'`) that
+        # 500s every ref_audio request regardless of sample rate -- this code
+        # wires the contract correctly and lets the server error propagate.
+        self._ref_audio_b64 = ref_audio_b64
+        self._ref_text = ref_text
 
     def can_generate_metrics(self) -> bool:
         """oMLX TTS supports processing-time metrics."""
@@ -391,6 +403,19 @@ class MlxTTSService(TTSService):
                 extra_body["top_k"] = self._top_k
             if self._repetition_penalty is not None:
                 extra_body["repetition_penalty"] = self._repetition_penalty
+            if self._ref_audio_b64 is not None:
+                extra_body["ref_audio"] = self._ref_audio_b64
+            if self._ref_text is not None:
+                extra_body["ref_text"] = self._ref_text
+
+            # `voice` is a REQUIRED keyword in the openai SDK's speech.create
+            # signature (no default -- omitting it is a client-side TypeError,
+            # verified against the installed SDK), so it is always sent even
+            # when ref_audio/ref_text cloning fields are present. oMLX accepts
+            # both together (its AudioSpeechRequest.voice is nullable and our
+            # live probes with ref_audio passed request validation); VoxCPM2
+            # has only the one stock voice, so the ref fields are what select
+            # the cloned timbre.
             async with self._client.audio.speech.with_streaming_response.create(
                 input=text,
                 model=self._model,
@@ -440,9 +465,11 @@ def build_mlx_tts(
 
     `voice="default"` is used since oMLX/VoxCPM2 has no agreed meaning for
     OpenAI's fixed voice-name list (alloy/ash/.../verse) -- "default"
-    selects VoxCPM2's stock voice. `ref_audio`/`ref_text` voice cloning is
-    supported by oMLX's endpoint but not wired up here; revisit if/when
-    voice selection becomes a real requirement (see module docstring).
+    selects VoxCPM2's stock voice. When `voice` is set to a non-"default"
+    value, this function attempts to resolve it from the voice library
+    (app/voice_library.py). If found, the reference audio is base64-encoded
+    and passed to `MlxTTSService` for voice cloning. If not found, a warning
+    is logged and the stock voice is used as a fallback.
 
     `model=None, language=None` are passed explicitly (rather than left
     unset) because `TTSSettings` is a store-mode settings object: any field
@@ -468,6 +495,20 @@ def build_mlx_tts(
     fallback `MlxTTSService.run_tts` uses when no live per-utterance tone
     has been inferred yet.
     """
+    ref_audio_b64: str | None = None
+    ref_text_value: str | None = None
+
+    if voice and voice != "default":
+        from app import voice_library
+
+        try:
+            wav_bytes, ref_text = voice_library.load_voice_ref(voice)
+            ref_audio_b64 = base64.b64encode(wav_bytes).decode("ascii")
+            ref_text_value = ref_text
+        except voice_library.VoiceNotFoundError:
+            logger.warning(f"Voice '{voice}' not found in library; falling back to default voice.")
+            voice = "default"
+
     return MlxTTSService(
         api_key=settings.omlx_api_key,
         base_url=settings.omlx_base_url,
@@ -479,5 +520,7 @@ def build_mlx_tts(
         top_p=top_p,
         top_k=top_k,
         repetition_penalty=repetition_penalty,
+        ref_audio_b64=ref_audio_b64,
+        ref_text=ref_text_value,
         settings=TTSSettings(voice=voice or "default", model=None, language=None),
     )

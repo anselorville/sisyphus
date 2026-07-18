@@ -332,12 +332,60 @@ def _cloud_adapter_id(capability: Capability) -> str:
     return f"cloud:{capability}"
 
 
+def _inject_voice_options(spec: AdapterSpec) -> AdapterSpec:
+    """Create a copy of `spec` with dynamically-injected voice options for
+    voxcpm2 (if applicable).
+
+    For the "omlx:voxcpm2" adapter, replaces the static voice options list
+    with ["default"] + [v["id"] for v in list_voices()], ensuring the UI
+    always reflects the current voice library.
+
+    Returns the modified spec (a shallow copy; the fields list is replaced).
+    For non-voxcpm2 specs, returns the spec unchanged.
+    """
+    if spec.id != "omlx:voxcpm2":
+        return spec
+
+    from app import voice_library
+
+    available_voices = [v["id"] for v in voice_library.list_voices()]
+    voice_options = ["default"] + available_voices
+
+    new_fields = []
+    for field in spec.fields:
+        if field.key == "voice":
+            new_field = ParameterSpec(
+                key=field.key,
+                label=field.label,
+                kind=field.kind,
+                min=field.min,
+                max=field.max,
+                step=field.step,
+                options=voice_options,
+                default=field.default,
+                help=field.help,
+            )
+            new_fields.append(new_field)
+        else:
+            new_fields.append(field)
+
+    return AdapterSpec(
+        id=spec.id,
+        label=spec.label,
+        capability=spec.capability,
+        fields=new_fields,
+    )
+
+
 def _local_adapter_for(
     capability: Capability, settings: Settings, *, config_model_type: str | None
 ) -> AdapterSpec:
     """Resolve the local (oMLX) adapter for `capability`: the spec matching
     the live-discovered `config_model_type`, or an "unrecognized model, no
     tuning profile yet" stub if the lookup failed or no spec file matches.
+
+    For voxcpm2, dynamically injects available voice options from the voice
+    library.
     """
     model_id = _configured_omlx_model_id(settings, capability) or "(unconfigured)"
     if config_model_type is None:
@@ -349,7 +397,7 @@ def _local_adapter_for(
     adapter_id = f"omlx:{config_model_type}"
     spec = _SPECS_BY_ID.get(adapter_id)
     if spec is not None:
-        return spec
+        return _inject_voice_options(spec)
     return _unrecognized_stub(
         adapter_id=adapter_id,
         label=f"{model_id} ({config_model_type}, no tuning profile yet)",
