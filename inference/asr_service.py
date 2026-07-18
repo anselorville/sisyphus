@@ -19,10 +19,23 @@ class ASRService:
         self.model_path = "THUDM/glm-asr-nano-2512"
         self.sample_rate = 16000
         self.frame_size = 640
-        self.accumulated_audio = []
         self.window_duration = 2.5
         self.overlap_duration = 0.5
         self.overlap_samples = int(self.sample_rate * self.overlap_duration)
+        # Streaming window buffer (live partial display only)
+        self.window_audio = []
+        # Full audio of the current utterance; re-transcribed as a whole on
+        # end_utterance so the final text keeps sentence-level punctuation.
+        self.utterance_audio = []
+        self.partial_texts = []
+        # Cap per-inference audio length when finalizing very long utterances
+        self.max_final_chunk_sec = 25.0
+        self.min_utterance_sec = 0.25
+
+    def reset_utterance(self) -> None:
+        self.window_audio = []
+        self.utterance_audio = []
+        self.partial_texts = []
 
     def load_config(self) -> None:
         config_path = os.path.join(os.path.dirname(__file__), "models.yaml")
@@ -145,27 +158,76 @@ class ASRService:
     
     async def process_audio_frame(self, audio_data: bytes) -> Optional[dict]:
         audio_float = self.pcm16_to_float32(audio_data)
-        self.accumulated_audio.extend(audio_float)
-        
+        self.window_audio.extend(audio_float)
+        self.utterance_audio.extend(audio_float)
+
         window_samples = int(self.sample_rate * self.window_duration)
-        
-        if len(self.accumulated_audio) >= window_samples:
-            audio_window = np.array(self.accumulated_audio[:window_samples])
-            
+
+        if len(self.window_audio) >= window_samples:
+            audio_window = np.array(self.window_audio[:window_samples])
+
             if self.overlap_samples > 0:
-                self.accumulated_audio = self.accumulated_audio[window_samples - self.overlap_samples:]
+                self.window_audio = self.window_audio[window_samples - self.overlap_samples:]
             else:
-                self.accumulated_audio = []
-            
+                self.window_audio = []
+
             result = await self.transcribe(audio_window)
-            result["type"] = "asr_result"
-            return result
-        
+            window_text = (result.get("final") or "").strip()
+            if window_text:
+                self.partial_texts.append(window_text)
+
+            # Window results are display-only partials; the authoritative
+            # text comes from finalize_utterance on end_utterance.
+            return {
+                "type": "asr_result",
+                "partial": " ".join(self.partial_texts),
+                "final": None,
+                "confidence": result.get("confidence", 0.0),
+            }
+
         return None
-    
+
+    async def finalize_utterance(self) -> dict:
+        """Transcribe the whole utterance in one pass.
+
+        A complete sentence gives the model enough context to produce proper
+        punctuation, and avoids the text loss / duplication that stitching
+        2.5s windows causes.
+        """
+        audio = np.array(self.utterance_audio, dtype=np.float32)
+        self.reset_utterance()
+
+        if len(audio) < int(self.sample_rate * self.min_utterance_sec):
+            return {
+                "type": "utterance_final",
+                "partial": "",
+                "final": "",
+                "confidence": 0.0,
+            }
+
+        max_samples = int(self.sample_rate * self.max_final_chunk_sec)
+        texts = []
+        for start in range(0, len(audio), max_samples):
+            chunk = audio[start:start + max_samples]
+            # Skip a trailing sliver that is too short to transcribe on its own
+            if texts and len(chunk) < int(self.sample_rate * self.min_utterance_sec):
+                break
+            result = await self.transcribe(chunk)
+            text = (result.get("final") or "").strip()
+            if text:
+                texts.append(text)
+
+        return {
+            "type": "utterance_final",
+            "partial": "",
+            "final": " ".join(texts),
+            "confidence": 0.95,
+        }
+
     async def handle_connection(self, websocket):
         print(f"New ASR connection from {websocket.remote_address}")
-        
+        self.reset_utterance()
+
         try:
             async for message in websocket:
                 if isinstance(message, bytes):
@@ -174,8 +236,16 @@ class ASRService:
                         await websocket.send(json.dumps(result))
                 elif isinstance(message, str):
                     control = json.loads(message)
-                    if control.get("type") == "reset":
-                        self.accumulated_audio = []
+                    control_type = control.get("type")
+                    if control_type == "begin_utterance":
+                        self.reset_utterance()
+                        print("Utterance started")
+                    elif control_type == "end_utterance":
+                        result = await self.finalize_utterance()
+                        await websocket.send(json.dumps(result))
+                        print(f"Utterance finalized: {result['final'][:80]}")
+                    elif control_type == "reset":
+                        self.reset_utterance()
                         print("Audio buffer reset")
         except websockets.exceptions.ConnectionClosed:
             print(f"ASR connection closed: {websocket.remote_address}")

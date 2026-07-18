@@ -13,10 +13,10 @@ use tauri::Emitter;
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 
 use crate::audio::playback::queue_playback_audio;
+use crate::audio::state::{emit_pipeline_status, TTS_HOST, TTS_OK};
 use crate::conversation::{ConversationState, Message, Role};
 
 const MIN_CHUNK_TOKENS: usize = 20;
-const TTS_HOST: &str = "ws://127.0.0.1:8766";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LlmChunk {
@@ -208,57 +208,70 @@ pub async fn stream_llm_response(
         )
     };
 
-    let mut messages: Vec<async_openai::types::ChatCompletionRequestMessage> = history
+    // Cap the context window: send only the most recent turns
+    const MAX_HISTORY_MESSAGES: usize = 20;
+    let recent = if history.len() > MAX_HISTORY_MESSAGES {
+        &history[history.len() - MAX_HISTORY_MESSAGES..]
+    } else {
+        &history[..]
+    };
+
+    let mut messages: Vec<async_openai::types::ChatCompletionRequestMessage> = recent
         .iter()
-        .map(|msg| convert_message_to_openai(msg))
+        .map(convert_message_to_openai)
         .collect::<Result<Vec<_>>>()
         .map_err(|e| format!("Failed to convert messages: {}", e))?;
 
-    let user_msg = create_user_message(user_message)
+    let user_msg = create_user_message(user_message.clone())
         .map_err(|e| format!("Failed to build user message: {}", e))?;
     messages.push(user_msg);
 
-    // Connect to TTS WebSocket
-    let tts_conn = connect_async(TTS_HOST).await;
-    let (ws_stream, _) = match tts_conn {
-        Ok(conn) => conn,
-        Err(e) => {
-            eprintln!("Failed to connect to TTS: {}", e);
-            let _ = app.emit(
-                "voice_assistant:error",
-                serde_json::json!({ "code": "TTS_CONNECTION_FAILED", "message": format!("{}", e) }),
-            );
-            return Err(format!("TTS connection failed: {}", e));
-        }
-    };
-    let (mut ws_writer, mut ws_reader) = ws_stream.split();
+    // Connect to TTS. If it's unreachable the answer must still flow as
+    // text (graceful degradation) — never fail the whole turn on TTS.
+    let (mut ws_writer, tts_receiver) = match connect_async(TTS_HOST).await {
+        Ok((ws_stream, _)) => {
+            if !TTS_OK.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                emit_pipeline_status(&app);
+            }
+            let (writer, mut ws_reader) = ws_stream.split();
 
-    // Receive TTS audio continuously while LLM stream is still generating text.
-    // This prevents the server-side send buffer from stalling and triggering ping timeouts.
-    let tts_receiver = tauri::async_runtime::spawn(async move {
-        while let Some(msg_result) = ws_reader.next().await {
-            match msg_result {
-                Ok(WsMessage::Binary(audio_data)) => {
-                    if let Err(e) = queue_playback_audio(audio_data.to_vec()) {
-                        eprintln!("Failed to queue audio: {}", e);
-                    }
-                }
-                Ok(WsMessage::Text(text)) => {
-                    if let Ok(status) = serde_json::from_str::<serde_json::Value>(&text) {
-                        if status.get("type").and_then(|v| v.as_str()) == Some("complete") {
+            // Receive TTS audio continuously while LLM stream is still generating text.
+            // This prevents the server-side send buffer from stalling and triggering ping timeouts.
+            let receiver = tauri::async_runtime::spawn(async move {
+                while let Some(msg_result) = ws_reader.next().await {
+                    match msg_result {
+                        Ok(WsMessage::Binary(audio_data)) => {
+                            if let Err(e) = queue_playback_audio(audio_data.to_vec()) {
+                                eprintln!("Failed to queue audio: {}", e);
+                            }
+                        }
+                        Ok(WsMessage::Text(text)) => {
+                            if let Ok(status) = serde_json::from_str::<serde_json::Value>(&text) {
+                                if status.get("type").and_then(|v| v.as_str()) == Some("complete") {
+                                    break;
+                                }
+                            }
+                        }
+                        Ok(WsMessage::Close(_)) => break,
+                        Err(e) => {
+                            eprintln!("TTS WebSocket error: {}", e);
                             break;
                         }
+                        _ => {}
                     }
                 }
-                Ok(WsMessage::Close(_)) => break,
-                Err(e) => {
-                    eprintln!("TTS WebSocket error: {}", e);
-                    break;
-                }
-                _ => {}
-            }
+            });
+
+            (Some(writer), Some(receiver))
         }
-    });
+        Err(e) => {
+            eprintln!("TTS unavailable, continuing text-only: {}", e);
+            if TTS_OK.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                emit_pipeline_status(&app);
+            }
+            (None, None)
+        }
+    };
 
     // Emit state change to Thinking
     let _ = app.emit(
@@ -339,8 +352,10 @@ pub async fn stream_llm_response(
                                 text_id,
                             };
 
-                            if let Ok(json) = serde_json::to_string(&tts_request) {
-                                let _ = ws_writer.send(WsMessage::Text(json.into())).await;
+                            if let (Some(writer), Ok(json)) =
+                                (ws_writer.as_mut(), serde_json::to_string(&tts_request))
+                            {
+                                let _ = writer.send(WsMessage::Text(json)).await;
                             }
 
                             text_id += 1;
@@ -372,18 +387,31 @@ pub async fn stream_llm_response(
             text_id,
         };
 
-        if let Ok(json) = serde_json::to_string(&tts_request) {
-            let _ = ws_writer.send(WsMessage::Text(json.into())).await;
+        if let (Some(writer), Ok(json)) =
+            (ws_writer.as_mut(), serde_json::to_string(&tts_request))
+        {
+            let _ = writer.send(WsMessage::Text(json)).await;
         }
     }
 
-    // Send end signal to TTS
-    let end_request = serde_json::json!({ "type": "end" });
-    let _ = ws_writer
-        .send(WsMessage::Text(end_request.to_string().into()))
-        .await;
-    let _ = ws_writer.send(WsMessage::Close(None)).await;
-    let _ = tts_receiver.await;
+    // Send end signal to TTS and wait for the remaining audio
+    if let Some(mut writer) = ws_writer {
+        let end_request = serde_json::json!({ "type": "end" });
+        let _ = writer.send(WsMessage::Text(end_request.to_string())).await;
+        let _ = writer.send(WsMessage::Close(None)).await;
+    }
+    if let Some(receiver) = tts_receiver {
+        let _ = receiver.await;
+    }
+
+    // Persist the turn so later requests carry multi-turn context
+    {
+        let mut conv = conv_state.lock().unwrap();
+        conv.add_message(Message::new(Role::User, user_message));
+        if !full_response.trim().is_empty() {
+            conv.add_message(Message::new(Role::Assistant, full_response.clone()));
+        }
+    }
 
     // Emit final complete event (empty content, just signal completion)
     let _ = app.emit(

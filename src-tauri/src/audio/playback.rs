@@ -11,6 +11,8 @@ const JITTER_BUFFER_FRAMES: usize = 5;
 const DRAIN_TIMEOUT_CALLBACKS: u32 = 50; // Wait ~50 callbacks (~1 sec) before stopping
 
 static PLAYING: AtomicBool = AtomicBool::new(false);
+// Barge-in pause: output silence but keep the queue cached for resume.
+static PAUSED: AtomicBool = AtomicBool::new(false);
 static STREAM_ACTIVE: AtomicBool = AtomicBool::new(false);
 static AUDIO_QUEUE: OnceLock<Arc<Mutex<VecDeque<Vec<u8>>>>> = OnceLock::new();
 static APP_HANDLE: OnceLock<Arc<Mutex<Option<tauri::AppHandle>>>> = OnceLock::new();
@@ -118,6 +120,12 @@ impl AudioPlayback {
     }
 }
 
+/// True when TTS audio is actually coming out of the speakers right now
+/// (used by the VAD to raise its trigger threshold against self-echo).
+pub fn is_audibly_playing() -> bool {
+    PLAYING.load(Ordering::SeqCst) && !PAUSED.load(Ordering::SeqCst)
+}
+
 /// Resample from 16kHz mono to target rate and channels
 fn resample_for_playback(input: &[i16], target_rate: u32, target_channels: u16) -> Vec<f32> {
     // First, convert to f32
@@ -194,8 +202,11 @@ pub fn queue_playback_audio(audio_data: Vec<u8>) -> Result<(), String> {
     let mut q = queue.lock().unwrap();
     q.push_back(audio_data);
 
-    // Only start if we have enough frames AND no stream is active yet
-    let should_start = q.len() >= JITTER_BUFFER_FRAMES && !STREAM_ACTIVE.load(Ordering::SeqCst);
+    // Only start if we have enough frames AND no stream is active yet.
+    // While paused (barge-in) just keep caching; resume will start playback.
+    let should_start = q.len() >= JITTER_BUFFER_FRAMES
+        && !STREAM_ACTIVE.load(Ordering::SeqCst)
+        && !PAUSED.load(Ordering::SeqCst);
     drop(q);
 
     if should_start {
@@ -256,6 +267,12 @@ fn start_playback_internal() -> Result<(), String> {
                     return;
                 }
 
+                // Paused for barge-in: emit silence, keep the queue cached,
+                // and don't let the drain counter run down to "complete".
+                if PAUSED.load(Ordering::SeqCst) {
+                    return;
+                }
+
                 // First, try to use resampled buffer
                 let mut resampled = resampled_buffer_clone.lock().unwrap();
                 let mut output_idx = 0;
@@ -300,10 +317,11 @@ fn start_playback_internal() -> Result<(), String> {
                     *counter += 1;
 
                     // Only signal completion after timeout period
-                    if *counter >= DRAIN_TIMEOUT_CALLBACKS && PLAYING.load(Ordering::SeqCst) {
-                        if !PLAYBACK_COMPLETE_FLAG.swap(true, Ordering::SeqCst) {
-                            PLAYING.store(false, Ordering::SeqCst);
-                        }
+                    if *counter >= DRAIN_TIMEOUT_CALLBACKS
+                        && PLAYING.load(Ordering::SeqCst)
+                        && !PLAYBACK_COMPLETE_FLAG.swap(true, Ordering::SeqCst)
+                    {
+                        PLAYING.store(false, Ordering::SeqCst);
                     }
                 }
             },
@@ -368,9 +386,57 @@ pub fn start_playback(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Pause playback for barge-in: audio keeps arriving from TTS and is cached
+/// in the queue; the output callback plays silence until resume.
+pub fn pause_playback_internal(app: &tauri::AppHandle) {
+    let has_pending = STREAM_ACTIVE.load(Ordering::SeqCst)
+        || PLAYING.load(Ordering::SeqCst)
+        || !get_queue().lock().unwrap().is_empty();
+
+    if !has_pending {
+        return;
+    }
+
+    if !PAUSED.swap(true, Ordering::SeqCst) {
+        *get_drain_counter().lock().unwrap() = 0;
+        let _ = app.emit("voice_assistant:playback_paused", ());
+    }
+}
+
+/// Resume playback from the cached queue after barge-in.
+pub fn resume_playback_internal(app: &tauri::AppHandle) {
+    if !PAUSED.swap(false, Ordering::SeqCst) {
+        return;
+    }
+
+    *get_drain_counter().lock().unwrap() = 0;
+    let _ = app.emit("voice_assistant:playback_resumed", ());
+
+    // If audio was cached while no stream was running, start one now
+    let has_audio = !get_queue().lock().unwrap().is_empty();
+    if has_audio && !STREAM_ACTIVE.load(Ordering::SeqCst) {
+        if let Err(e) = start_playback_internal() {
+            eprintln!("Failed to resume playback: {}", e);
+        }
+    }
+}
+
+#[tauri::command]
+pub fn pause_playback(app: tauri::AppHandle) -> Result<(), String> {
+    pause_playback_internal(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn resume_playback(app: tauri::AppHandle) -> Result<(), String> {
+    resume_playback_internal(&app);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn stop_playback(app: tauri::AppHandle) -> Result<(), String> {
     PLAYING.store(false, Ordering::SeqCst);
+    PAUSED.store(false, Ordering::SeqCst);
     STREAM_ACTIVE.store(false, Ordering::SeqCst);
     get_queue().lock().unwrap().clear();
 
