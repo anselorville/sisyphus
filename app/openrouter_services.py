@@ -125,6 +125,7 @@ from openai.types.audio import Transcription
 from pipecat.frames.frames import ErrorFrame, Frame, TranscriptionFrame
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.openai.tts import OpenAITTSService
+from pipecat.services.settings import STTSettings
 from pipecat.services.stt_service import SegmentedSTTService
 from pipecat.services.stt_latency import WHISPER_TTFS_P99
 from pipecat.utils.time import time_now_iso8601
@@ -135,6 +136,15 @@ from app.config import Settings
 # oMLX's per-install `base_url` (there's exactly one OpenRouter API, fronting
 # many backing providers/models behind it).
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+# DeepSeek's first-party OpenAI-compatible API. Note NO "/v1" -- DeepSeek
+# documents https://api.deepseek.com as the base (it also accepts /v1 as an
+# alias). Verified live from this machine: GET /models responds, and a
+# streamed chat completion delivered its first content token in ~0.4s with a
+# 28ms TLS handshake -- this route does not suffer the ~5s handshake tax the
+# openrouter.ai route does from this network, which is the whole reason this
+# provider exists as a separate option.
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 # `openai`'s own default httpx connect-timeout (`DEFAULT_TIMEOUT = httpx.
 # Timeout(timeout=600, connect=5.0)`, see openai/_constants.py). Measured
@@ -157,6 +167,19 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 # default real-time translation will never approach.
 OPENROUTER_CONNECT_TIMEOUT_SECS = 15.0
 
+# How often the keep-warm loop (see `OpenRouterLLMService`) re-touches the
+# OpenRouter connection. Measured live on this network: a FRESH TLS handshake
+# to openrouter.ai costs ~5.1s (TCP connect 6ms, DNS 5ms -- the handshake
+# itself is what's slow on this route), and that tax lands on the first LLM
+# request of every new connection. With a warm pooled connection the same
+# streaming translation request drops from ~6.8s to ~1.2s first-token
+# (measured back-to-back, this session). The client-side pool already never
+# expires connections (`keepalive_expiry=None` below), but Cloudflare-fronted
+# servers close idle connections after ~90-100s -- so a periodic no-cost GET
+# keeps one TLS connection hot across the silent gaps a real conversation is
+# full of. 60s sits safely under that server-side idle window.
+OPENROUTER_KEEP_WARM_INTERVAL_SECS = 60.0
+
 
 class OpenRouterLLMService(OpenAILLMService):
     """`OpenAILLMService` subclass that overrides `create_client()` to give
@@ -169,7 +192,50 @@ class OpenRouterLLMService(OpenAILLMService):
     only an explicit `timeout=`. Everything else -- request building,
     streaming, the `reasoning`-disable `extra_body` from
     `build_openrouter_llm` -- is inherited unchanged.
+
+    Also runs a keep-warm loop for the pipeline's lifetime (started on
+    `StartFrame`, cancelled on End/Cancel): an immediate warm-up GET when the
+    session starts (so the FIRST utterance doesn't pay the ~5s cold-TLS tax
+    this network route imposes -- see `OPENROUTER_KEEP_WARM_INTERVAL_SECS`)
+    and a re-touch every interval thereafter to stop the server side from
+    closing the idle connection between conversational turns.
     """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._keep_warm_task = None
+
+    async def start(self, frame):
+        await super().start(frame)
+        if self._keep_warm_task is None:
+            self._keep_warm_task = self.create_task(self._keep_warm_loop())
+
+    async def stop(self, frame):
+        await self._cancel_keep_warm()
+        await super().stop(frame)
+
+    async def cancel(self, frame):
+        await self._cancel_keep_warm()
+        await super().cancel(frame)
+
+    async def _cancel_keep_warm(self):
+        if self._keep_warm_task is not None:
+            await self.cancel_task(self._keep_warm_task)
+            self._keep_warm_task = None
+
+    async def _keep_warm_loop(self):
+        import asyncio
+
+        while True:
+            try:
+                # GET {base_url}/models through the SAME pooled http client
+                # the chat completions use: free (no tokens), and both opens
+                # the TLS connection on session start and keeps it alive
+                # across idle gaps.
+                await self._client.models.list()
+            except Exception as exc:
+                logger.debug(f"OpenRouter keep-warm ping failed (harmless): {exc}")
+            await asyncio.sleep(OPENROUTER_KEEP_WARM_INTERVAL_SECS)
 
     def create_client(self, api_key=None, base_url=None, organization=None, project=None, default_headers=None, **kwargs):
         return AsyncOpenAI(
@@ -246,6 +312,48 @@ def build_openrouter_llm(
             model=model,
             system_instruction=system_prompt,
             extra={"extra_body": {"reasoning": {"enabled": False}}},
+            **overrides,
+        ),
+    )
+
+
+def build_deepseek_llm(
+    settings: Settings,
+    system_prompt: str,
+    model: str,
+    *,
+    temperature: float | None = None,
+    top_p: float | None = None,
+    max_tokens: int | None = None,
+) -> OpenRouterLLMService:
+    """Construct a DeepSeek-first-party translation LLM service.
+
+    Reuses `OpenRouterLLMService` (the class is provider-agnostic: an
+    OpenAI-compatible chat service with a generous connect timeout and the
+    keep-warm loop) pointed at `DEEPSEEK_BASE_URL` with the DeepSeek API
+    key. The keep-warm loop's `GET {base}/models` works identically against
+    DeepSeek's API (verified live) -- less critical here since this route's
+    TLS handshake is only ~28ms, but it also keeps the first utterance's
+    request on an already-open connection.
+
+    No `reasoning` extra_body: `deepseek-chat` is DeepSeek's non-thinking
+    model (the right one for real-time translation -- measured ~0.4s to
+    first streamed token from this machine); `deepseek-reasoner` thinks by
+    design and there is no flag that makes it not.
+    """
+    overrides: dict[str, float | int] = {}
+    if temperature is not None:
+        overrides["temperature"] = temperature
+    if top_p is not None:
+        overrides["top_p"] = top_p
+    if max_tokens is not None:
+        overrides["max_tokens"] = max_tokens
+    return OpenRouterLLMService(
+        api_key=settings.deepseek_api_key,
+        base_url=DEEPSEEK_BASE_URL,
+        settings=OpenRouterLLMService.Settings(
+            model=model,
+            system_instruction=system_prompt,
             **overrides,
         ),
     )
@@ -491,6 +599,15 @@ class OpenRouterSTTService(SegmentedSTTService):
         # mlx_services.py) also bypasses the Settings machinery for its own
         # custom HTTP call.
         super().__init__(
+            # model/language are set to None: this service uses its own
+            # `self._model`/`self._language_hint` directly in `run_stt`,
+            # bypassing the parent's `self._settings` entirely -- but the
+            # parent validates that `self._settings.model`/`language` are
+            # NOT `NOT_GIVEN` at startup, so we explicitly set them to
+            # `None` to satisfy the validation without lying about a
+            # meaningful value (this service doesn't use `self._settings`
+            # for its actual HTTP request at all).
+            settings=STTSettings(model=None, language=None),
             # `ttfs_p99_latency`: no Pipecat-published P99 benchmark exists
             # for OpenRouter's ASR endpoint specifically (unlike OpenAI's
             # Whisper, which has `WHISPER_TTFS_P99`) -- reusing Whisper's
@@ -593,7 +710,7 @@ def build_openrouter_stt(
     settings: Settings, *, model: str, language_hint: str | None = None
 ) -> OpenRouterSTTService:
     """Construct the OpenRouter STT service (`OpenRouterSTTService`, pointed
-    at OpenRouter's `/v1/audio/transcriptions` endpoint).
+    at OpenRouter's `/v1/audio/transcriptions` endpoint.
 
     See `OpenRouterSTTService` for why a bespoke httpx-based class (rather
     than `OpenAISTTService`/`MlxSTTService`) was required, and for why
@@ -606,3 +723,75 @@ def build_openrouter_stt(
         model=model,
         language_hint=language_hint,
     )
+
+
+def build_stt_from_manifest(
+    settings: Settings, *, model: str, language_hint: str | None = None
+) -> "OpenRouterSTTService | ManifestSTTService":
+    """Construct an STT service using the transport-adapter + manifest pattern
+    when a matching manifest exists; falls back to the legacy hardcoded
+    ``OpenRouterSTTService`` when no manifest matches ``model``.
+
+    This is the migration path: new manifests in ``docs/`` automatically
+    drive ``HttpRestTransport`` with their declared request template and
+    response path, no code changes needed.  Models without a manifest
+    (yet) still get the legacy service class.
+    """
+    from app.model_adapters.manifest import get_manifest
+    from app.model_adapters.transport import HttpRestTransport
+
+    manifest = get_manifest("openrouter", model)
+    if manifest is not None and manifest.transport_protocol == "http":
+        transport = HttpRestTransport(manifest, api_key=settings.openrouter_api_key)
+        return ManifestSTTService(
+            transport=transport,
+            language_hint=language_hint,
+        )
+    # Fall back to legacy hardcoded service
+    return build_openrouter_stt(settings, model=model, language_hint=language_hint)
+
+
+class ManifestSTTService(SegmentedSTTService):
+    """Thin Pipecat ``SegmentedSTTService`` wrapper that delegates the actual
+    HTTP request to a ``HttpRestTransport`` adapter, which reads its request
+    shape and response parsing from a ``ModelManifest``.
+
+    This separates "Pipecat frame lifecycle" (start/stop/VAD buffering --
+    handled by the base class) from "how to talk to this specific model's
+    HTTP endpoint" (handled by the transport adapter + manifest).  Adding
+    a new HTTP-based ASR model is now a matter of dropping a manifest JSON
+    into ``docs/`` -- no Python code changes needed.
+    """
+
+    def __init__(
+        self,
+        *,
+        transport: "HttpRestTransport",
+        language_hint: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(
+            settings=STTSettings(model=None, language=None),
+            ttfs_p99_latency=WHISPER_TTFS_P99,
+            **kwargs,
+        )
+        self._transport = transport
+        self._language_hint = language_hint
+
+    def can_generate_metrics(self) -> bool:
+        return True
+
+    async def run_stt(self, audio: bytes) -> AsyncGenerator[Frame, None]:
+        """Delegate to the transport adapter for the actual HTTP request.
+        The transport knows the URL, request template, and response path
+        from its manifest -- this class only owns the Pipecat frame lifecycle.
+        """
+        try:
+            await self.start_processing_metrics()
+            await self._transport.start()
+            async for frame in self._transport.run_stt(audio):
+                yield frame
+            await self._transport.stop()
+            await self.stop_processing_metrics()
+        except Exception as exc:
+            yield ErrorFrame(error=f"ManifestSTTService failed: {exc}")

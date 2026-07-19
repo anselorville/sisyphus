@@ -62,8 +62,8 @@ AVAILABLE_LOCAL_ENGINES: tuple[str, ...] = ("omlx",)
 # reserved placeholder capability (see `CloudCapabilityConfig`/the spec this
 # module implements), never a real dispatch target today.
 CAPABILITY_PROVIDERS: dict[ModelCapability, tuple[str, ...]] = {
-    "text": ("anthropic", "openrouter"),
-    "speech": ("edge_tts", "cartesia", "openrouter", VOXCPM2_CUDA_PROVIDER),
+    "text": ("deepseek", "anthropic", "openrouter"),
+    "speech": ("minimax", "edge_tts", "cartesia", "openrouter", VOXCPM2_CUDA_PROVIDER),
     "transcription": ("assemblyai", "deepgram", "openrouter"),
     "omni": (),
 }
@@ -85,6 +85,18 @@ ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-6"
 CARTESIA_DEFAULT_MODEL = "sonic-3.5"
 DEEPGRAM_DEFAULT_MODEL = "nova-3-general"
 ASSEMBLYAI_DEFAULT_MODEL = "universal-3-5-pro"
+# DeepSeek first-party API (app/openrouter_services.py `build_deepseek_llm`).
+# Canonical model ids per the live GET /models catalog (verified 2026-07-19:
+# exactly ["deepseek-v4-flash", "deepseek-v4-pro"]; the older
+# "deepseek-chat" name still resolves as a legacy alias but is not listed).
+# flash first: it's the real-time-translation choice.
+DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash"
+DEEPSEEK_TEXT_MODELS: tuple[str, ...] = ("deepseek-v4-flash", "deepseek-v4-pro")
+# MiniMax T2A WebSocket TTS (app/minimax_tts_services.py). "speech-2.8-hd"
+# is the capability-manifest model verified live; turbo is its faster
+# sibling, selectable but unverified from this account.
+MINIMAX_DEFAULT_TTS_MODEL = "speech-2.8-hd"
+MINIMAX_TTS_MODELS: tuple[str, ...] = ("speech-2.8-hd", "speech-2.8-turbo")
 
 # Sensible OpenRouter default to surface in the UI per capability, when the
 # user picks "openrouter" as a provider but hasn't chosen a specific model
@@ -362,8 +374,14 @@ def available_models(settings: Settings, capability: ModelCapability, provider: 
     this reordering, both of those "pick the first one" code paths would
     silently default to a model that cannot do the pipeline's actual job.
     """
+    if provider == "deepseek" and capability == "text":
+        # Env-configured catalog wins (DEEPSEEK_TEXT_MODELS, same pattern as
+        # the OPENROUTER_* catalogs); built-in default when unset.
+        return list(settings.deepseek_text_models) or list(DEEPSEEK_TEXT_MODELS)
     if provider == "anthropic" and capability == "text":
         return [ANTHROPIC_DEFAULT_MODEL]
+    if provider == "minimax" and capability == "speech":
+        return list(MINIMAX_TTS_MODELS)
     if provider == "edge_tts" and capability == "speech":
         return ["auto"]
     if provider == "cartesia" and capability == "speech":
@@ -375,16 +393,37 @@ def available_models(settings: Settings, capability: ModelCapability, provider: 
     if provider == "assemblyai" and capability == "transcription":
         return [ASSEMBLYAI_DEFAULT_MODEL]
     if provider == "openrouter":
+        # Primary source: env-var catalog (OPENROUTER_TEXT_MODELS, etc.)
         if capability == "text":
             catalog = list(settings.openrouter_text_models)
             if OPENROUTER_SUGGESTED_TEXT_MODEL in catalog:
                 catalog.remove(OPENROUTER_SUGGESTED_TEXT_MODEL)
                 catalog.insert(0, OPENROUTER_SUGGESTED_TEXT_MODEL)
-            return catalog
-        if capability == "speech":
-            return list(settings.openrouter_tts_models)
-        if capability == "transcription":
-            return list(settings.openrouter_asr_models)
+        elif capability == "speech":
+            catalog = list(settings.openrouter_tts_models)
+        elif capability == "transcription":
+            catalog = list(settings.openrouter_asr_models)
+        else:
+            return []
+
+        # Supplement: models discovered from docs/*/voice-capability-*/manifest.json
+        # that aren't already in the env catalog.  This means dropping a
+        # manifest JSON into docs/ automatically makes that model selectable
+        # in the Model Provider UI, no env-var editing needed.
+        try:
+            from app.model_adapters.manifest import manifests_for_provider
+
+            for m in manifests_for_provider("openrouter"):
+                if m.kind == capability and m.model not in catalog:
+                    catalog.append(m.model)
+                    logger.debug(
+                        f"available_models: adding manifest-discovered "
+                        f"model {m.model!r} to {capability} catalog"
+                    )
+        except Exception:
+            pass  # manifest loading is best-effort; never break model listing
+
+        return catalog
     return []
 
 

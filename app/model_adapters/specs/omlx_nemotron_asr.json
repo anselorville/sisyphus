@@ -2,6 +2,7 @@
   "id": "omlx:nemotron_asr",
   "label": "Nemotron ASR (oMLX, local)",
   "capability": "transcription",
+  "note": "Supports 40 language-locales including hu-HU. See app/language_map.py for the full per-model language list. The `language_hint` field accepts locale codes (e.g. \"hu-HU\"), not bare ISO codes. Leave empty for auto-detect.",
   "fields": [
     {
       "key": "language_hint",

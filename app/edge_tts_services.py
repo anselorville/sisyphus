@@ -32,15 +32,18 @@ from pipecat.frames.frames import ErrorFrame, Frame, TTSAudioRawFrame
 from pipecat.services.settings import TTSSettings
 from pipecat.services.tts_service import TTSService
 
-# Voices selected for natural-sounding output in each language.
-# XiaoxiaoNeural: Microsoft's recommended Mandarin Chinese neural voice.
-# AriaNeural: Microsoft's recommended US English neural voice for assistant use.
+# Per-language default voice, sourced from app/language_map.py's
+# EDGE_TTS_LANGUAGES (single source of truth for every TTS model's
+# language→voice mapping).  The *available* voices per language are
+# richer -- see app.language_map.tts_voices("edge_tts", iso) for the
+# full list including alternate genders.
+from app.language_map import EDGE_TTS_LANGUAGES, tts_default_voice as _edge_default
+
 EDGE_TTS_VOICES: dict[str, str] = {
-    "zh": "zh-CN-XiaoxiaoNeural",
-    "en": "en-US-AriaNeural",
+    iso: lang.param_value for iso, lang in EDGE_TTS_LANGUAGES.items()
 }
 
-EDGE_TTS_DEFAULT_VOICE = "en-US-AriaNeural"
+EDGE_TTS_DEFAULT_VOICE: str = _edge_default("edge_tts", "en") or "en-US-AriaNeural"
 
 # Edge TTS always outputs 24kHz 48kbps mono MP3 (audio-24khz-48kbitrate-mono-mp3).
 # We decode to PCM at this same rate -- resampler is a near-no-op but ensures

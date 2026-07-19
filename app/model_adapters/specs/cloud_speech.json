@@ -2,6 +2,7 @@
   "id": "cloud:speech",
   "label": "Cloud (speech / TTS)",
   "capability": "speech",
+  "note": "Voice and language support vary by the active cloud speech provider (Cartesia / Edge TTS / MiniMax / OpenRouter). See app/language_map.py for the authoritative per-model language→voice catalog. The `voice` field below accepts free text by default; Model Lab dynamically injects per-provider voice options based on the active SOURCE_LANG/TARGET_LANG at request time.",
   "fields": [
     {
       "key": "voice",

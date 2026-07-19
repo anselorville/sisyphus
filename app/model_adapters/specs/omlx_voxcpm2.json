@@ -2,6 +2,7 @@
   "id": "omlx:voxcpm2",
   "label": "VoxCPM2 (oMLX, local)",
   "capability": "speech",
+  "note": "VoxCPM2 supports 30 languages (ar/my/zh/da/nl/en/fi/fr/de/el/he/hi/id/it/ja/km/ko/lo/ms/no/pl/pt/ru/es/sw/sv/tl/th/tr/vi). Hungarian (hu) is NOT supported -- TTS will fall back to English for hu utterances on this engine. See app/language_map.py for the full list and per-language voice catalog.",
   "fields": [
     {
       "key": "voice",

@@ -405,6 +405,61 @@ def _local_adapter_for(
     )
 
 
+def _cloud_adapter_for(capability: Capability) -> AdapterSpec:
+    """Resolve the shared cloud adapter for `capability`, with
+    provider-aware dynamic voice options for speech.
+
+    When the configured cloud speech provider is `minimax`, the `voice`
+    field becomes a select over the known MiniMax voice_id catalog (327
+    system voices, see app/minimax_voices.json) instead of a free-text
+    field -- same shallow-copy-don't-mutate pattern as
+    `_inject_voice_options` for the voxcpm2 voice library. Any other
+    provider (Cartesia UUIDs, OpenRouter Azure-locale ids, ...) keeps the
+    free-text field, since those vocabularies aren't enumerable here.
+    """
+    spec = _SPECS_BY_ID.get(_cloud_adapter_id(capability))
+    if spec is None:
+        return _unrecognized_stub(
+            adapter_id=_cloud_adapter_id(capability),
+            label=f"Cloud ({capability})",
+            capability=capability,
+        )
+    if capability != "speech":
+        return spec
+
+    from app.minimax_tts_services import minimax_voice_ids
+    from app.model_providers import load_model_providers
+
+    if load_model_providers().cloud.speech.provider != "minimax":
+        return spec
+    voices = minimax_voice_ids()
+    if not voices:
+        return spec
+
+    new_fields = []
+    for field_spec in spec.fields:
+        if field_spec.key == "voice":
+            new_fields.append(
+                ParameterSpec(
+                    key=field_spec.key,
+                    label=field_spec.label,
+                    kind="select",
+                    min=field_spec.min,
+                    max=field_spec.max,
+                    step=field_spec.step,
+                    options=voices,
+                    default=field_spec.default,
+                    help=(
+                        "MiniMax system voice (voice_id). Leave on Default "
+                        "to use the built-in default voice."
+                    ),
+                )
+            )
+        else:
+            new_fields.append(field_spec)
+    return AdapterSpec(id=spec.id, label=spec.label, capability=spec.capability, fields=new_fields)
+
+
 def list_adapters(capability: Capability, settings: Settings) -> list[AdapterSpec]:
     """The full list of adapters selectable for `capability`: always exactly
     one `cloud:<capability>` adapter, plus the local adapter matching
@@ -418,11 +473,7 @@ def list_adapters(capability: Capability, settings: Settings) -> list[AdapterSpe
     `/api/model-lab/schema` request). See `list_adapters_async` for an
     async-friendly equivalent FastAPI handlers should prefer.
     """
-    cloud = _SPECS_BY_ID.get(_cloud_adapter_id(capability)) or _unrecognized_stub(
-        adapter_id=_cloud_adapter_id(capability),
-        label=f"Cloud ({capability})",
-        capability=capability,
-    )
+    cloud = _cloud_adapter_for(capability)
     model_id = _configured_omlx_model_id(settings, capability)
     config_model_type = omlx_config_model_type(settings, model_id) if model_id else None
     local = _local_adapter_for(capability, settings, config_model_type=config_model_type)
@@ -431,11 +482,7 @@ def list_adapters(capability: Capability, settings: Settings) -> list[AdapterSpe
 
 async def list_adapters_async(capability: Capability, settings: Settings) -> list[AdapterSpec]:
     """Async equivalent of `list_adapters`, for use inside FastAPI handlers."""
-    cloud = _SPECS_BY_ID.get(_cloud_adapter_id(capability)) or _unrecognized_stub(
-        adapter_id=_cloud_adapter_id(capability),
-        label=f"Cloud ({capability})",
-        capability=capability,
-    )
+    cloud = _cloud_adapter_for(capability)
     model_id = _configured_omlx_model_id(settings, capability)
     config_model_type = await _omlx_config_model_type_async(settings, model_id) if model_id else None
     local = _local_adapter_for(capability, settings, config_model_type=config_model_type)
