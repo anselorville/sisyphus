@@ -46,8 +46,28 @@ class Settings:
     deepgram_api_key: str
     assemblyai_api_key: str
     cartesia_api_key: str
+    # DeepSeek's own first-party API (https://api.deepseek.com, OpenAI-
+    # compatible). Preferred text provider on this network: measured live,
+    # TLS handshake 28ms and first streaming token ~0.4s -- vs ~5s TLS and
+    # 3-7s first token through openrouter.ai from the same machine.
+    deepseek_api_key: str
+    # Selectable DeepSeek text-model catalog (env DEEPSEEK_TEXT_MODELS,
+    # comma-separated, same pattern as the OPENROUTER_*_MODELS catalogs).
+    # Empty means "use the built-in default catalog" (see
+    # app/model_providers.py DEEPSEEK_TEXT_MODELS). Note DeepSeek offers
+    # TEXT models only -- there is no DeepSeek TTS/ASR, so no
+    # DEEPSEEK_TTS_MODELS/DEEPSEEK_ASR_MODELS counterparts exist.
+    deepseek_text_models: list[str]
+    # MiniMax T2A v2 WebSocket TTS (see app/minimax_tts_services.py --
+    # persistent-connection streaming, measured ~0.2-0.3s per-utterance
+    # time-to-first-audio from this machine).
+    minimax_api_key: str
     source_lang: str
     target_lang: str
+    # "translator" (default): LLM is a bidirectional speech translator.
+    # "assistant": LLM is an open-ended personal voice assistant (Cartesia-
+    # style conversational agent -- no translation, no direction tags).
+    conversation_mode: str
     webrtc_host: str
     webrtc_port: int
 
@@ -64,6 +84,16 @@ class Settings:
     # engine="offline"/engine="cloud" (see `_resolve_engine` below) if
     # `ENGINE` itself isn't set.
     engine: str
+
+    # --- Turn-taking mode ---
+    # "manual" (default): the user turn is bounded by the client's mic button
+    # (open = start speaking, close = done -> translate now). VAD never
+    # starts/stops turns and never interrupts TTS -- deliberate mic presses
+    # are the only interruption source. This is the noisy-environment mode:
+    # ambient sound physically cannot start a turn or cut off playback.
+    # "auto": fully hands-free -- VAD/transcription start turns and
+    # interruptions are enabled (the original real-time behavior).
+    turn_mode: str
 
     # --- Offline/local fallback configuration ---
     # See app/connectivity.py for the startup connectivity check and
@@ -229,11 +259,24 @@ def load_settings() -> Settings:
         deepgram_api_key=os.environ.get("DEEPGRAM_API_KEY", ""),
         assemblyai_api_key=os.environ.get("ASSEMBLYAI_API_KEY", ""),
         cartesia_api_key=os.environ.get("CARTESIA_API_KEY", ""),
+        deepseek_api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
+        deepseek_text_models=_parse_csv_env("DEEPSEEK_TEXT_MODELS"),
+        minimax_api_key=os.environ.get("MINIMAX_API_KEY", ""),
         source_lang=os.environ.get("SOURCE_LANG", "Chinese"),
         target_lang=os.environ.get("TARGET_LANG", "English"),
+        conversation_mode=os.environ.get("CONVERSATION_MODE", "translator"),
         webrtc_host=os.environ.get("WEBRTC_HOST", "0.0.0.0"),
         webrtc_port=webrtc_port,
         engine=engine,
+        # "manual" is the shipping default: real-time VAD turn-taking proved
+        # unusable in noisy environments (ambient noise starts turns, feeds
+        # the ASR garbage, and cuts off TTS playback), so the mic button owns
+        # utterance boundaries unless TURN_MODE=auto explicitly opts back in.
+        turn_mode=(
+            os.environ.get("TURN_MODE", "manual").strip().lower()
+            if os.environ.get("TURN_MODE", "manual").strip().lower() in ("manual", "auto")
+            else "manual"
+        ),
         # "small" is a reasonable multilingual faster-whisper model for a Pi
         # 5: noticeably better accuracy than "base"/"tiny" while still
         # CPU-feasible. Tune down to "base"/"tiny" (faster, less accurate) or

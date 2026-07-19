@@ -17,6 +17,7 @@ or, after `uv sync`:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -132,6 +133,11 @@ async def status() -> dict[str, str]:
         "engine": _resolved_engine,
         "source_lang": _startup_settings.source_lang,
         "target_lang": _startup_settings.target_lang,
+        # "manual": the client renders the mic-button turn UX (service
+        # switch = connection, mic button = utterance boundaries) and must
+        # send {"type": "mic", "open": bool} data-channel messages.
+        # "auto": hands-free VAD turn-taking, no mic gating UI.
+        "turn_mode": _startup_settings.turn_mode,
     }
 
 
@@ -736,11 +742,37 @@ async def put_model_providers(request: dict) -> dict:
     return effective_providers_payload(settings)
 
 
-async def run_bot(webrtc_connection: SmallWebRTCConnection) -> None:
-    """Build and run the translation pipeline for one WebRTC connection."""
-    logger.info("Starting translator pipeline for new connection")
+async def run_bot(
+    webrtc_connection: SmallWebRTCConnection,
+    source_lang: str | None = None,
+    target_lang: str | None = None,
+    conversation_mode: str | None = None,
+) -> None:
+    """Build and run the translation pipeline for one WebRTC connection.
 
+    `source_lang`/`target_lang` are the client's language-pair selection,
+    carried in the /api/offer body -- the UI's language picker is the
+    authority for a conversation's languages, with .env's
+    SOURCE_LANG/TARGET_LANG only the fallback when the client sends none
+    (older clients, curl tests). Free-text names ("Chinese", "French", ...),
+    the same vocabulary the env vars accept.
+
+    `conversation_mode` is "translator" (default) or "assistant", also
+    from the client's Settings screen -- "assistant" replaces the
+    translation prompt with a Cartesia-style open-ended voice-agent persona.
+    """
     settings = load_settings()
+    if source_lang:
+        settings = dataclasses.replace(settings, source_lang=source_lang)
+    if target_lang:
+        settings = dataclasses.replace(settings, target_lang=target_lang)
+    if conversation_mode:
+        settings = dataclasses.replace(settings, conversation_mode=conversation_mode)
+    logger.info(
+        f"Starting translator pipeline for new connection "
+        f"({settings.source_lang} <-> {settings.target_lang}, "
+        f"mode={settings.conversation_mode})"
+    )
     worker = build_pipeline_worker(webrtc_connection, settings)
 
     @webrtc_connection.event_handler("closed")
@@ -781,7 +813,26 @@ async def offer(request: dict, background_tasks: BackgroundTasks):
             logger.info(f"Discarding peer connection: {conn.pc_id}")
             pcs_map.pop(conn.pc_id, None)
 
-        background_tasks.add_task(run_bot, connection)
+        # Language pair from the client's picker (optional, free-text names).
+        # Length-capped defensive copy -- these end up inside the LLM system
+        # prompt, so an absurdly long value is rejected rather than injected.
+        def _lang(field: str) -> str | None:
+            value = request.get(field)
+            if isinstance(value, str):
+                value = value.strip()
+                if 0 < len(value) <= 40:
+                    return value
+            return None
+
+        def _mode() -> str | None:
+            value = request.get("mode")
+            if isinstance(value, str) and value.strip() in ("translator", "assistant"):
+                return value.strip()
+            return None
+
+        background_tasks.add_task(
+            run_bot, connection, _lang("source_lang"), _lang("target_lang"), _mode()
+        )
 
     answer = connection.get_answer()
     pcs_map[answer["pc_id"]] = connection

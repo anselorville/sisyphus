@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from dataclasses import dataclass
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -60,15 +61,25 @@ from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
     CancelFrame,
+    DataFrame,
     EndFrame,
     Frame,
+    InputAudioRawFrame,
+    InputTransportMessageFrame,
+    InterruptionFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
     OutputTransportMessageUrgentFrame,
     TranscriptionFrame,
+    TTSAudioRawFrame,
+    TTSStartedFrame,
+    TTSStoppedFrame,
     TTSTextFrame,
+    UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
+    VADUserStartedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
@@ -89,10 +100,12 @@ from pipecat.transcriptions.language import Language
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
+from pipecat.turns.user_start.base_user_turn_start_strategy import BaseUserTurnStartStrategy
 from pipecat.turns.user_start.transcription_user_turn_start_strategy import (
     TranscriptionUserTurnStartStrategy,
 )
 from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
+from pipecat.turns.user_stop.base_user_turn_stop_strategy import BaseUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from app.config import Settings
@@ -100,10 +113,12 @@ from app.connectivity import has_internet_connection
 from app.edge_tts_services import build_edge_tts
 from app.latency import build_latency_observer
 from app.local_services import build_local_llm, build_local_stt, build_local_tts
+from app.minimax_tts_services import build_minimax_tts
 from app.mlx_services import build_mlx_llm, build_mlx_stt, build_mlx_tts
 from app.model_providers import (
     AVAILABLE_LOCAL_ENGINES,
     ASSEMBLYAI_DEFAULT_MODEL,
+    DEEPSEEK_DEFAULT_MODEL,
     CARTESIA_DEFAULT_MODEL,
     DEEPGRAM_DEFAULT_MODEL,
     CloudProviderConfig,
@@ -113,7 +128,12 @@ from app.model_providers import (
     model_providers_configured,
 )
 from app.model_settings import ModelLabValues, load_model_settings, values_for
-from app.openrouter_services import build_openrouter_llm, build_openrouter_stt, build_openrouter_tts
+from app.openrouter_services import (
+    build_deepseek_llm,
+    build_openrouter_llm,
+    build_openrouter_stt,
+    build_openrouter_tts,
+)
 from app.voxcpm_tts_services import VOXCPM2_CUDA_PROVIDER, build_voxcpm2_cuda_tts
 
 # Cartesia voice per language, keyed by the *short* language code we parse
@@ -131,6 +151,8 @@ CARTESIA_VOICE_IDS: dict[str, str] = {
     "es": CARTESIA_RELEASE_VOICE_ID,
     "it": CARTESIA_RELEASE_VOICE_ID,
     "zh": CARTESIA_RELEASE_VOICE_ID,
+    "hu": CARTESIA_RELEASE_VOICE_ID,
+    "ja": CARTESIA_RELEASE_VOICE_ID,
 }
 
 # Maps the free-text language names accepted by SOURCE_LANG/TARGET_LANG (see
@@ -151,6 +173,10 @@ _LANGUAGE_CODES: dict[str, str] = {
     "chinese": "zh",
     "mandarin": "zh",
     "中文": "zh",
+    "hungarian": "hu",
+    "magyar": "hu",
+    "japanese": "ja",
+    "日本語": "ja",
 }
 
 _PIPECAT_LANGUAGE_BY_CODE: dict[str, Language] = {
@@ -160,6 +186,8 @@ _PIPECAT_LANGUAGE_BY_CODE: dict[str, Language] = {
     "es": Language.ES,
     "it": Language.IT,
     "zh": Language.ZH,
+    "hu": getattr(Language, "HU", Language.EN),  # fallback if pipecat < hu support
+    "ja": getattr(Language, "JA", Language.EN),  # fallback if pipecat < ja support
 }
 
 _DIRECTION_PREFIX_RE = re.compile(r"^\s*\[([A-Za-z]{2,3})\s*->\s*([A-Za-z]{2,3})\]\s*")
@@ -333,6 +361,11 @@ def build_translation_system_prompt(
         f"not know in advance which one. You also receive the recent "
         f"conversation history (your own prior translations included) -- use it "
         f"as context. "
+        f"Translate ONLY the most recent user message. If several consecutive "
+        f"user messages appear with no assistant reply between them, the "
+        f"earlier ones are already being translated in parallel -- do NOT "
+        f"re-translate or merge them into your output; translate the last "
+        f"message alone. "
         f"Step 1: detect which of the two configured languages the utterance is in. "
         f"Step 2: translate into the OTHER configured language (if the utterance "
         f"is in {source_lang}, translate into {target_lang}; if it is in {target_lang}, "
@@ -358,6 +391,125 @@ def build_translation_system_prompt(
         f"(not even the tag)."
     )
     return f"{persona} {format_contract}"
+
+
+def build_assistant_system_prompt(user_lang: str) -> str:
+    """Build the system prompt for the "personal assistant" conversation mode.
+
+    Based on Cartesia's voice-agent reference prompt (see
+    docs/cartesia/system-prompt.md).  The model acts as a warm, curious
+    conversational partner -- no translation, no direction/tone tags, no
+    language-pair constraint.  It answers questions, discusses topics, and
+    keeps responses concise (1-2 sentences for a spoken conversation).
+
+    ``user_lang`` is the free-text language name the user configured as
+    their own language (e.g. "Chinese", "English") -- the assistant will
+    speak this language.
+    """
+    # Language-specific brevity targets: every extra character costs latency
+    # in both LLM generation AND TTS synthesis, so these are hard caps, not
+    # suggestions.  ~50 Chinese/Japanese chars or ~30 English words is about
+    # 3-5 seconds of spoken audio -- long enough for substance, short enough
+    # that the user isn't waiting.
+    _lang_iso = _lang_code(user_lang)
+    _is_cjk = _lang_iso in ("zh", "ja", "ko")
+    _len_hint = (
+        "at most 50 characters" if _is_cjk
+        else "at most 30 words"
+    )
+    _too_long_example = (
+        "\"你说的这个问题很有意思。从历史上来看,人类社会的发展经历了多个阶段,每一个阶段都有其独特的特征和挑战。\""
+        if _is_cjk
+        else "\"That's a fascinating question. Throughout human history, societies have progressed through distinct stages, each with its own characteristics and challenges, and I think there are several perspectives worth considering here.\""
+    )
+    _right_example = (
+        "\"这个问题挺有意思的。你是想问现在的情况,还是历史上是怎么演变的?\""
+        if _is_cjk
+        else "\"That's a good one. Are you asking about how it works today, or the history behind it?\""
+    )
+
+    return (
+        f"You are a friendly personal voice assistant built for real-time "
+        f"spoken conversation. You speak {user_lang}. Respond in {user_lang} "
+        f"only. "
+        f"\n\n"
+        f"# Your role\n"
+        f"You are a conversational partner, NOT a translator. The user wants "
+        f"to talk WITH you -- ask you questions, bounce ideas, hear your "
+        f"thoughts. Never echo back their words or paraphrase them. Always "
+        f"add your own conversational response: an answer, an opinion, a "
+        f"follow-up question, a story. "
+        f"\n\n"
+        f"# Brevity — THIS IS THE MOST IMPORTANT RULE\n"
+        f"You are a VOICE agent. Every word you output must be spoken aloud "
+        f"by a text-to-speech engine. Long responses directly hurt the user "
+        f"experience: they wait longer for the LLM to generate, then wait "
+        f"longer to hear it spoken. "
+        f"Keep every response to {_len_hint}. If you cannot say it that "
+        f"briefly, ask a follow-up question instead -- let the user guide "
+        f"you to what they actually want to hear more about. "
+        f"Short responses with follow-up questions are ALWAYS better than "
+        f"one long answer. "
+        f"\n"
+        f"Example — DO NOT write like this:\n"
+        f"  {_too_long_example}\n"
+        f"Write like THIS instead:\n"
+        f"  {_right_example}\n"
+        f"\n"
+        f"# Personality\n"
+        f"Warm, curious, genuine, lighthearted. Knowledgeable but never "
+        f"showy or pedantic. You're a thoughtful friend, not a professor "
+        f"or a customer-service bot.\n"
+        f"\n"
+        f"# Voice and tone\n"
+        f"Use natural, casual phrasing -- the way people actually talk. "
+        f"Match the user's energy: playful when they're playful, grounded "
+        f"when they're serious. Show genuine curiosity: \"Oh that's "
+        f"interesting, tell me more\" or \"Hmm, let me think about that.\" "
+        f"Never use filler compliments like \"Great question!\"\n"
+        f"\n"
+        f"# Response style\n"
+        f"Natural spoken prose only -- no lists, no bullet points, no "
+        f"markdown. One idea per response. If there's more to say, ask "
+        f"whether the user wants to go deeper. End with a question often "
+        f"-- it keeps the conversation moving.\n"
+        f"\n"
+        f"# Handling common situations\n"
+        f"- Didn't catch what the user said: \"Sorry, I missed that -- say "
+        f"it again?\"\n"
+        f"- Genuinely don't know the answer: \"I'm actually not sure about "
+        f"that one.\" (Don't make things up.)\n"
+        f"- User seems frustrated or upset: Acknowledge it briefly, then "
+        f"shift approach. \"That sounds frustrating. Want to talk about it?\"\n"
+        f"- Off-topic or unusual request: Go with it. You can talk about "
+        f"anything.\n"
+        f"- Silence or very short input: \"Still there?\" or pick up the "
+        f"last topic naturally.\n"
+        f"\n"
+        f"# What you can talk about\n"
+        f"Anything: daily life, travel, science, culture, relationships, "
+        f"work, philosophy, food, books, movies, personal decisions, "
+        f"random thoughts. You're here for whatever the user wants to "
+        f"discuss. If they seem unsure what to talk about, suggest "
+        f"something light: \"Want to hear something interesting I learned "
+        f"recently?\"\n"
+        f"\n"
+        f"# What you MUST NOT do\n"
+        f"- Do NOT translate, echo, or paraphrase the user's words.\n"
+        f"- Do NOT give long monologues -- if you need more than "
+        f"{_len_hint}, stop and ask a question instead.\n"
+        f"- Do NOT use structured formatting (lists, markdown, numbered "
+        f"steps).\n"
+        f"- Do NOT say \"As an AI assistant\" or similar meta-commentary.\n"
+        f"- Do NOT output anything except your spoken response text -- "
+        f"no prefixes, no tags, no role labels, no metadata.\n"
+        f"- Do NOT ask more than one question at a time.\n"
+        f"\n"
+        f"# REMEMBER\n"
+        f"Short + natural + one-idea-per-response. If in doubt, say less "
+        f"and ask a question. The user can always ask for more detail -- "
+        f"but they can't un-hear a long, slow answer."
+    )
 
 
 def parse_direction_prefix(text: str) -> tuple[str | None, str | None, str]:
@@ -766,6 +918,255 @@ class SemanticBufferProcessor(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
+class SentenceUserTurnStopStrategy(BaseUserTurnStopStrategy):
+    """Manual mode's speculative-pipelining half: end the user turn on EVERY
+    final `TranscriptionFrame`, not just on mic close.
+
+    By the time a final TranscriptionFrame reaches the aggregator it has
+    passed `SemanticBufferProcessor`, which only forwards sentence-complete
+    text -- so "a final arrived" means "a complete sentence is ready to
+    translate". Ending the turn right there sends that sentence to the LLM
+    (-> TTS) WHILE THE USER IS STILL TALKING, instead of parking everything
+    until the mic closes. The full-duplex payoff: by mic close, every
+    sentence except the last is already translated and synthesized (the
+    audio waits in `TTSOutputGateProcessor` until the mic closes), so the
+    user only ever waits for the LAST sentence's LLM+TTS.
+
+    The next sentence's transcription then starts a NEW turn via
+    `TranscriptionUserTurnStartStrategy(enable_interruptions=False)` -- see
+    `build_pipeline`'s manual-mode strategy list; interruptions must stay
+    off there or each new sentence would cancel the previous sentence's
+    in-flight translation.
+
+    Interim transcriptions are deliberately ignored (only exact final
+    `TranscriptionFrame`s trigger) -- interims are partial text for the UI,
+    not translate-ready sentences.
+
+    Per-sentence translation trades a little cross-sentence context within
+    one utterance for the latency win; the conversation history in
+    `LLMContext` (each mini-turn sees prior sentences AND their
+    translations) is what keeps the quality loss small.
+    """
+
+    async def process_frame(self, frame: Frame):  # type: ignore[override]
+        from pipecat.turns.types import ProcessFrameResult
+
+        if type(frame) is TranscriptionFrame:
+            await self.trigger_user_turn_stopped()
+            return ProcessFrameResult.STOP
+        return ProcessFrameResult.CONTINUE
+
+
+class MicButtonUserTurnStartStrategy(BaseUserTurnStartStrategy):
+    """User-turn start strategy for manual (mic-button) turn mode.
+
+    Identical in shape to Pipecat's own `ExternalUserTurnStartStrategy`
+    (react to a `UserStartedSpeakingFrame` some other processor emitted --
+    here, `MicGateProcessor` when the client's mic button opens) except that
+    interruptions are ENABLED: opening the mic while the bot is speaking is
+    a deliberate user act ("stop, my turn"), so it should cancel in-flight
+    LLM/TTS exactly like VAD barge-in does in auto mode. The stock External
+    strategy hardcodes `enable_interruptions=False`, which would leave the
+    user unable to ever cut the bot off in manual mode -- the opposite
+    failure from the noisy-environment problem manual mode exists to fix
+    (ambient noise interrupting TTS). With this strategy the ONLY
+    interruption source is the mic button; noise has no path to one.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(enable_interruptions=True, enable_user_speaking_frames=False, **kwargs)
+
+    async def process_frame(self, frame: Frame):  # type: ignore[override]
+        from pipecat.turns.types import ProcessFrameResult
+
+        if isinstance(frame, UserStartedSpeakingFrame):
+            await self.trigger_user_turn_started()
+            return ProcessFrameResult.STOP
+        return ProcessFrameResult.CONTINUE
+
+
+@dataclass
+class MicStateFrame(DataFrame):
+    """Mic open/close state change, emitted downstream by `MicGateProcessor`
+    so processors later in the pipeline (specifically
+    `TTSOutputGateProcessor`) can react to the mic WITHOUT holding a
+    reference back to the gate. A DataFrame (not SystemFrame) so it travels
+    in order with the audio/text frames around it.
+    """
+
+    open: bool = False
+
+
+# How long to wait after the client's "mic closed" data-channel message
+# before emitting the turn-stop frames. The mic message rides the SCTP data
+# channel while audio rides RTP -- there is NO cross-transport ordering
+# guarantee, so the stop signal can overtake the last ~100-200ms of speech
+# audio. (The legacy prototype hit exactly this race and solved it with a
+# single FIFO -- see legacy/src-tauri/src/audio/state.rs `CaptureMsg`. A
+# short grace period is the WebRTC-shaped equivalent.) Closing the mic is a
+# deliberate "I'm done" gesture, so 200ms here is imperceptible next to the
+# STT/LLM/TTS work that follows.
+MIC_CLOSE_AUDIO_GRACE_SECONDS = 0.2
+
+
+class MicGateProcessor(FrameProcessor):
+    """Manual turn mode's server-side half: turns the client's mic-button
+    data-channel messages into Pipecat turn frames, and hard-gates input
+    audio while the mic is closed.
+
+    Sits immediately after `transport.input()`. Handles:
+
+    - `InputTransportMessageFrame` with `{"type": "mic", "open": bool}`
+      (sent by the client whenever the mic button toggles; consumed here,
+      never forwarded downstream):
+      - open: push `VADUserStartedSpeakingFrame` + `UserStartedSpeakingFrame`
+        downstream. The latter triggers `MicButtonUserTurnStartStrategy`
+        (turn start + interruption of any in-flight bot speech).
+      - close: after `MIC_CLOSE_AUDIO_GRACE_SECONDS` (see above), push
+        `VADUserStoppedSpeakingFrame` + `UserStoppedSpeakingFrame`. The VAD
+        variant is what streaming STT services key their force-finalization
+        on (verified in Pipecat 1.4: `AssemblyAISTTService` sends
+        `ForceEndpoint` on `VADUserStoppedSpeakingFrame`, and the two frame
+        types are NOT in a subclass relationship, so both must be sent);
+        the plain variant flushes `SemanticBufferProcessor`, whose flushed
+        tail sentence then ends the final mini-turn via
+        `SentenceUserTurnStopStrategy`.
+    - `InputAudioRawFrame` while the mic is closed: replaced with an
+      equal-length frame of silence. Zeroing (rather than dropping) keeps
+      the streaming STT connection fed and alive across arbitrarily long
+      idle stretches while guaranteeing ambient noise cannot reach the ASR
+      -- the client also disables its audio track when the mic closes, so
+      this is defense in depth, not the only gate.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._mic_open = False
+        self._pending_close: asyncio.Task | None = None
+
+    @staticmethod
+    def _is_mic_message(frame: InputTransportMessageFrame) -> bool:
+        return isinstance(frame.message, dict) and frame.message.get("type") == "mic"
+
+    async def _emit_stop_after_grace(self, direction: FrameDirection) -> None:
+        await asyncio.sleep(MIC_CLOSE_AUDIO_GRACE_SECONDS)
+        await self.push_frame(VADUserStoppedSpeakingFrame(), direction)
+        await self.push_frame(UserStoppedSpeakingFrame(), direction)
+        # Grace over: from here on the audio gate (see process_frame) zeroes
+        # incoming audio until the mic re-opens.
+        self._pending_close = None
+
+    async def _cancel_pending_close(self) -> None:
+        if self._pending_close is not None and not self._pending_close.done():
+            self._pending_close.cancel()
+        self._pending_close = None
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, InputTransportMessageFrame) and self._is_mic_message(frame):
+            open_requested = bool(frame.message.get("open"))
+            if open_requested and not self._mic_open:
+                self._mic_open = True
+                # Re-opening during the close grace period: the previous
+                # turn's stop frames must not fire into the new turn.
+                await self._cancel_pending_close()
+                await self.push_frame(MicStateFrame(open=True), direction)
+                await self.push_frame(VADUserStartedSpeakingFrame(), direction)
+                await self.push_frame(UserStartedSpeakingFrame(), direction)
+            elif not open_requested and self._mic_open:
+                self._mic_open = False
+                await self._cancel_pending_close()
+                # The output gate flushes on this immediately -- earlier
+                # sentences' already-synthesized audio starts playing right
+                # away; only the turn-stop frames wait for the tail-audio
+                # grace below.
+                await self.push_frame(MicStateFrame(open=False), direction)
+                self._pending_close = asyncio.ensure_future(
+                    self._emit_stop_after_grace(direction)
+                )
+            return  # mic control messages are consumed, never forwarded
+
+        # Zero audio only once fully closed -- while the close grace period
+        # is still pending, the whole point is letting the tail of the
+        # user's speech (which may arrive after the mic message, see
+        # MIC_CLOSE_AUDIO_GRACE_SECONDS) through to the STT.
+        if (
+            isinstance(frame, InputAudioRawFrame)
+            and not self._mic_open
+            and self._pending_close is None
+        ):
+            frame.audio = b"\x00" * len(frame.audio)
+            await self.push_frame(frame, direction)
+            return
+
+        if isinstance(frame, (CancelFrame, EndFrame)):
+            await self._cancel_pending_close()
+
+        await self.push_frame(frame, direction)
+
+
+class TTSOutputGateProcessor(FrameProcessor):
+    """Holds synthesized speech while the user's mic is open, releasing it
+    the moment the mic closes -- the output half of manual-mode speculative
+    pipelining (see `SentenceUserTurnStopStrategy`).
+
+    While the mic is open, upstream is already translating and synthesizing
+    each completed sentence. Letting that audio play immediately would talk
+    over the user (and feed the bot's own voice back into the open mic);
+    dropping it would waste the pre-work. So TTS frames (started/audio/
+    text/stopped) are buffered here in arrival order and flushed downstream
+    as soon as `MicStateFrame(open=False)` arrives. Frames arriving while
+    the mic is closed (the normal tail: the LAST sentence's TTS finishing
+    after mic close) pass straight through behind the flushed buffer, so
+    ordering is preserved end-to-end.
+
+    On interruption (the user re-opened the mic while buffered/playing
+    audio existed -- the only interruption source in manual mode) the
+    buffer is dropped: cancelled speech must not resurface at the next mic
+    close. `MicStateFrame`s are consumed here; everything else non-TTS
+    passes through untouched (transcript tap messages included, so the UI
+    shows text the moment each sentence is translated, ahead of its audio).
+    """
+
+    _GATED_FRAME_TYPES = (TTSStartedFrame, TTSAudioRawFrame, TTSTextFrame, TTSStoppedFrame)
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._holding = False
+        self._buffer: list[tuple[Frame, FrameDirection]] = []
+
+    async def _flush(self) -> None:
+        buffered, self._buffer = self._buffer, []
+        for buffered_frame, buffered_direction in buffered:
+            await self.push_frame(buffered_frame, buffered_direction)
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, MicStateFrame):
+            self._holding = frame.open
+            if not frame.open:
+                await self._flush()
+            return  # consumed: the transport has no use for it
+
+        if isinstance(frame, InterruptionFrame):
+            self._buffer.clear()
+            await self.push_frame(frame, direction)
+            return
+
+        if isinstance(frame, (CancelFrame, EndFrame)):
+            self._buffer.clear()
+            await self.push_frame(frame, direction)
+            return
+
+        if self._holding and isinstance(frame, self._GATED_FRAME_TYPES):
+            self._buffer.append((frame, direction))
+            return
+
+        await self.push_frame(frame, direction)
+
+
 def select_engine(settings: Settings) -> str:
     """Decide which engine ("cloud", "offline", or "omlx") to use for this
     run, at startup only.
@@ -962,6 +1363,15 @@ def _require_assemblyai_key(settings: Settings) -> None:
         )
 
 
+def _require_deepseek_key(settings: Settings) -> None:
+    if not settings.deepseek_api_key:
+        raise RuntimeError(
+            "The text capability is set to provider 'deepseek', but "
+            "DEEPSEEK_API_KEY is missing. Add it to .env or export it in "
+            "your shell."
+        )
+
+
 def _require_openrouter_key(settings: Settings) -> None:
     if not settings.openrouter_api_key:
         raise RuntimeError(
@@ -1020,6 +1430,24 @@ def _build_cloud_text_service(
     temperature = values.get("temperature")
     top_p = values.get("top_p")
     max_tokens = values.get("max_tokens")
+
+    if provider == "deepseek":
+        _require_deepseek_key(settings)
+        # Explicit Model Provider selection wins; else the first entry of the
+        # env catalog (DEEPSEEK_TEXT_MODELS); else the built-in default.
+        deepseek_model = (
+            cloud.text.model
+            or (settings.deepseek_text_models[0] if settings.deepseek_text_models else None)
+            or DEEPSEEK_DEFAULT_MODEL
+        )
+        return build_deepseek_llm(
+            settings,
+            system_prompt,
+            deepseek_model,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+        )
 
     if provider == "openrouter":
         _require_openrouter_key(settings)
@@ -1114,6 +1542,21 @@ def _build_cloud_speech_service(
     temperature = values.get("temperature")
     top_p = values.get("top_p")
 
+    if provider == "minimax":
+        if not settings.minimax_api_key:
+            raise RuntimeError(
+                "Cloud speech capability set to provider 'minimax', but "
+                "MINIMAX_API_KEY is missing. Add it to .env or switch the "
+                "speech provider in Model Provider settings."
+            )
+        return build_minimax_tts(
+            settings,
+            direction_stripper,
+            model=cloud.speech.model,
+            voice=voice,
+            speed=speed,
+        )
+
     if provider == "edge_tts":
         return build_edge_tts(tone_source=direction_stripper)
 
@@ -1198,7 +1641,11 @@ def _build_cloud_transcription_service(
         model = _openrouter_model_or_first(
             settings, settings.openrouter_asr_models, cloud.transcription.model, "transcription"
         )
-        return build_openrouter_stt(settings, model=model, language_hint=language_hint)
+        # Prefer the manifest-driven transport adapter when a manifest
+        # exists for this model; fall back to the legacy hardcoded
+        # OpenRouterSTTService otherwise.
+        from app.openrouter_services import build_stt_from_manifest
+        return build_stt_from_manifest(settings, model=model, language_hint=language_hint)
 
     if provider == "assemblyai":
         _require_assemblyai_key(settings)
@@ -1424,12 +1871,16 @@ def build_pipeline(
     direction_stripper = TranslationDirectionStripper()
 
     engine = select_engine(settings)
+    is_assistant = settings.conversation_mode == "assistant"
+
     if engine == "offline":
         # Untouched, separate, lower-tier concern -- not part of
         # model_providers.mode at all (per this feature's explicit scope).
-        # No declared adapter for this engine (see `_build_local_service_trio`),
-        # so no persona override either -- always the default persona.
-        system_prompt = build_translation_system_prompt(settings.source_lang, settings.target_lang)
+        system_prompt = (
+            build_assistant_system_prompt(settings.source_lang)
+            if is_assistant
+            else build_translation_system_prompt(settings.source_lang, settings.target_lang)
+        )
         stt, llm, tts = _build_local_service_trio(settings, system_prompt, model_lab_values)
     elif engine == "omlx" or (model_providers_configured() and model_providers.mode == "local"):
         # "omlx" was requested explicitly via ENGINE=omlx, OR the cloud
@@ -1467,42 +1918,96 @@ def build_pipeline(
 
         llm_model_type = omlx_config_model_type(settings, settings.omlx_llm_model)
         llm_values = values_for(f"omlx:{llm_model_type}", model_lab_values) if llm_model_type else {}
-        system_prompt = build_translation_system_prompt(
-            settings.source_lang,
-            settings.target_lang,
-            persona_override=llm_values.get("system_prompt_override"),
-        )
+        if is_assistant:
+            system_prompt = build_assistant_system_prompt(settings.source_lang)
+        else:
+            system_prompt = build_translation_system_prompt(
+                settings.source_lang,
+                settings.target_lang,
+                persona_override=llm_values.get("system_prompt_override"),
+            )
         stt, llm, tts = _build_mlx_service_trio(settings, system_prompt, direction_stripper, model_lab_values)
     else:
         cloud_text_values = values_for("cloud:text", model_lab_values)
-        system_prompt = build_translation_system_prompt(
-            settings.source_lang,
-            settings.target_lang,
-            persona_override=cloud_text_values.get("system_prompt_override"),
-        )
+        if is_assistant:
+            system_prompt = build_assistant_system_prompt(settings.source_lang)
+        else:
+            system_prompt = build_translation_system_prompt(
+                settings.source_lang,
+                settings.target_lang,
+                persona_override=cloud_text_values.get("system_prompt_override"),
+            )
         stt, llm, tts = _build_cloud_services(
             settings, system_prompt, direction_stripper, model_lab_values, model_providers
         )
 
     context = LLMContext()
 
-    # Barge-in/interruption: explicitly constructed (rather than relying on
-    # library defaults) with `enable_interruptions=True` on both user-turn
-    # start strategies, so that the user speaking again while the bot is
-    # talking reliably emits an interruption frame that cancels in-flight
-    # LLM/TTS work -- VAD covers the common case, transcription is a
-    # fallback for soft speech VAD might miss.
-    user_turn_strategies = UserTurnStrategies(
-        start=[
-            VADUserTurnStartStrategy(enable_interruptions=True),
-            TranscriptionUserTurnStartStrategy(enable_interruptions=True),
-        ],
-    )
+    # Turn-taking (see Settings.turn_mode in app/config.py):
+    #
+    # - "manual" (default): the mic button owns VOICE INPUT (audio is
+    #   silenced while closed -- ambient noise cannot reach the ASR or
+    #   interrupt playback), while SENTENCES own turn boundaries for
+    #   speculative pipelining: `MicGateProcessor` converts mic messages
+    #   into turn frames + `MicStateFrame`s, `MicButtonUserTurnStartStrategy`
+    #   starts the first turn (and is the ONLY interruption source), and
+    #   `SentenceUserTurnStopStrategy` ends a mini-turn per completed
+    #   sentence so translation/TTS run WHILE the user is still talking
+    #   (audio held at `TTSOutputGateProcessor` until mic close). The Silero analyzer is still
+    #   installed (below) because segmented STT services (the oMLX engine)
+    #   need its VAD frames to slice utterances, and its mid-utterance stop
+    #   events usefully force streaming-STT finalization early -- it just
+    #   cannot start/stop turns or interrupt anymore.
+    #
+    # - "auto": the original hands-free behavior -- VAD starts turns and
+    #   interrupts, transcription is the fallback for soft speech VAD might
+    #   miss. Both explicitly constructed with enable_interruptions=True
+    #   rather than relying on library defaults.
+    if settings.turn_mode == "manual":
+        # Speculative pipelining (see SentenceUserTurnStopStrategy /
+        # TTSOutputGateProcessor): while the mic is open, every completed
+        # sentence ends a mini-turn (-> LLM -> TTS immediately, audio held
+        # at the output gate); the next sentence's transcription starts the
+        # next mini-turn WITHOUT interrupting (or it would cancel the
+        # previous sentence's in-flight translation). Only the mic button
+        # itself interrupts.
+        #
+        # SentenceUserTurnStopStrategy is deliberately the ONLY stop
+        # strategy. SemanticBufferProcessor guarantees every piece of
+        # transcript -- including the unpunctuated tail after mic close
+        # (flushed by the UserStoppedSpeakingFrame, or its 500ms timeout) --
+        # eventually arrives as a final TranscriptionFrame, so the sentence
+        # strategy covers every case. Running ExternalUserTurnStopStrategy
+        # alongside it was tried first and produced DOUBLE turn-stops for
+        # the same sentence (observed live: two stops 34ms apart -> the
+        # same sentence translated twice, duplicate TTS, and concatenated
+        # assistant context entries).
+        user_turn_strategies = UserTurnStrategies(
+            start=[
+                MicButtonUserTurnStartStrategy(),
+                TranscriptionUserTurnStartStrategy(enable_interruptions=False),
+            ],
+            stop=[SentenceUserTurnStopStrategy()],
+        )
+    else:
+        user_turn_strategies = UserTurnStrategies(
+            start=[
+                VADUserTurnStartStrategy(enable_interruptions=True),
+                TranscriptionUserTurnStartStrategy(enable_interruptions=True),
+            ],
+        )
+    # Manual mode: the controller's stop timeout is a FORGOT-TO-CLOSE-THE-MIC
+    # safety net, not the normal turn boundary (verified live: the default
+    # 5s fired before the user's deliberate mic close and ended the turn on
+    # its own). 30s keeps the net (an abandoned open mic still resolves)
+    # while making the mic button the real boundary. Auto mode keeps the
+    # library default (5s), where transcription activity resets it anyway.
     user_aggregator, _assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(),
             user_turn_strategies=user_turn_strategies,
+            user_turn_stop_timeout=30.0 if settings.turn_mode == "manual" else 5.0,
         ),
     )
 
@@ -1516,20 +2021,27 @@ def build_pipeline(
         flush_timeout=SEMANTIC_BUFFER_FLUSH_TIMEOUT_SECONDS
     )
 
-    pipeline = Pipeline(
-        [
-            transport.input(),  # Mic audio in
-            stt,  # Speech -> text (source language)
-            original_tap,  # Tap: forward raw transcript fragments to client immediately
-            semantic_buffer,  # Buffer fragments; only forward complete sentences to LLM
-            user_aggregator,  # Build user turn for the LLM
-            llm,  # Translate (Anthropic, or local Ollama model when offline)
-            direction_stripper,  # Parse+strip the "[XX->YY|tone]" prefix
-            translation_tap,  # Tap: forward one complete translated text event to client
-            tts,  # Translated text -> speech
-            transport.output(),  # Speech audio out
-        ]
-    )
+    processors: list[FrameProcessor] = [
+        transport.input(),  # Mic audio in
+        stt,  # Speech -> text (source language)
+        original_tap,  # Tap: forward raw transcript fragments to client immediately
+        semantic_buffer,  # Buffer fragments; only forward complete sentences to LLM
+        user_aggregator,  # Build user turn for the LLM
+        llm,  # Translate (Anthropic, or local Ollama model when offline)
+        direction_stripper,  # Parse+strip the "[XX->YY|tone]" prefix
+        translation_tap,  # Tap: forward one complete translated text event to client
+        tts,  # Translated text -> speech
+        transport.output(),  # Speech audio out
+    ]
+    if settings.turn_mode == "manual":
+        # Between transport input and STT: converts mic-button messages to
+        # turn frames and silences audio while the mic is closed.
+        processors.insert(1, MicGateProcessor())
+        # Before transport output: holds speculative TTS audio while the
+        # mic is open, releasing it in order the moment it closes.
+        processors.insert(len(processors) - 1, TTSOutputGateProcessor())
+
+    pipeline = Pipeline(processors)
 
     return pipeline, context
 
