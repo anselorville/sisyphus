@@ -54,5 +54,16 @@ model_presets.json
 
 # Personal research notes that may contain pasted API keys -- never commit.
 docs/refs/
-output.mp3
+
+# Raw exploratory call/session logs (e.g. from probing a vendor's own demo
+# product) can contain live bearer tokens and aren't referenced by any code
+# -- unlike the curated manifest/system-prompt docs alongside them, which
+# ARE referenced (see app/model_adapters/manifest.py, app/pipeline.py) and
+# stay tracked. Keep the log on disk, just never commit it.
+docs/cartesia/voice-call-log.md
+
+# Repo-root scratch TTS output only -- anchored so it doesn't shadow
+# legitimately-committed same-named assets elsewhere (e.g.
+# docs/minimax/voice-capability-*/assets/output.mp3, a capability sample).
+/output.mp3
 tests/
