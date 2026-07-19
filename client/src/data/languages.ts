@@ -24,6 +24,8 @@ export const LANGUAGES: LanguageOption[] = [
   { code: "DE", envValue: "German", label: "German", nativeLabel: "Deutsch" },
   { code: "ES", envValue: "Spanish", label: "Spanish", nativeLabel: "Español" },
   { code: "IT", envValue: "Italian", label: "Italian", nativeLabel: "Italiano" },
+  { code: "HU", envValue: "Hungarian", label: "Hungarian", nativeLabel: "Magyar" },
+  { code: "JA", envValue: "Japanese", label: "Japanese", nativeLabel: "日本語" },
 ];
 
 export function findLanguageByCode(code?: string | null): LanguageOption | undefined {

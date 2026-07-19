@@ -62,3 +62,39 @@
   width: 44px;
   height: 44px;
 }
+
+/* Header service switch (manual turn mode): owns the WebRTC session, so the
+   big TalkButton can own voice input instead. Same visual family as
+   .faceToFaceButton, smaller to fit the header row. */
+.serviceToggle {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--ds-radius-pill);
+  border: 1px solid var(--ds-color-border);
+  background: var(--ds-color-bg-surface);
+  color: var(--ds-color-text-secondary);
+  cursor: pointer;
+  transition:
+    background var(--ds-duration-base) var(--ds-ease-standard),
+    color var(--ds-duration-base) var(--ds-ease-standard);
+}
+
+.serviceToggle:hover {
+  color: var(--ds-color-primary-strong);
+}
+
+.serviceToggle[data-active="true"] {
+  background: var(--ds-color-primary);
+  border-color: var(--ds-color-primary);
+  color: var(--ds-color-text-on-primary, #fff);
+}
+
+.statusCluster {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

@@ -63,55 +63,79 @@
   word-break: break-word;
 }
 
+/* ASR originals ("what this side just said", echoed as confirmation) are
+   visually secondary to translations addressed to this reader. */
+.text[data-original] {
+  color: var(--ds-color-text-secondary);
+  font-weight: var(--ds-font-weight-medium);
+}
+
 .placeholder {
   margin: 0;
   font-size: var(--ds-font-size-md);
   color: var(--ds-color-text-secondary);
 }
 
-.statusRow {
+/* ── Center bar (drag handle —X— drag handle) ── */
+
+.bar {
+  flex: none;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--ds-color-text-secondary);
-}
-
-.divider {
-  flex: none;
-  height: 1px;
-  background: var(--ds-color-border);
+  gap: 6px;
   position: relative;
+  cursor: row-resize;
+  touch-action: none;
+  user-select: none;
 }
 
-.divider::after {
+/* Thin full-width divider line behind the handle + X */
+.bar::before {
   content: "";
   position: absolute;
-  inset: 0;
-  margin: auto;
-  width: 48px;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 1px;
+  background: var(--ds-color-border);
+  pointer-events: none;
+}
+
+.handle {
+  width: 100px;
   height: 4px;
   border-radius: var(--ds-radius-pill);
   background: var(--ds-color-border);
-  top: -2px;
+  pointer-events: none;
+  position: relative;
+  z-index: 1;
+}
+
+.micRow {
+  display: flex;
+  justify-content: center;
+  margin-top: auto;
+  padding-bottom: var(--ds-space-4);
 }
 
 .exitButton {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
+  position: relative;
   z-index: 5;
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: var(--ds-radius-pill);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
   border: 1px solid var(--ds-color-border);
   background: var(--ds-color-bg-surface);
   color: var(--ds-color-text-secondary);
   cursor: pointer;
-  box-shadow: var(--ds-shadow-md);
+  box-shadow: var(--ds-shadow-sm);
   transition: background-color var(--ds-duration-base) var(--ds-ease-standard);
 }
 

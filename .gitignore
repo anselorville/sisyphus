@@ -34,6 +34,7 @@ storybook-static
 
 .env
 .codegraph/
+.reasonix/
 
 # Downloaded local-model artifacts (faster-whisper cache, Piper voice
 # models, etc.) -- runtime data, not source. See app/config.py

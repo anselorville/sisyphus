@@ -20,6 +20,8 @@ export interface SettingsScreenProps {
   target: LanguageOption;
   onSourceChange: (language: LanguageOption) => void;
   onTargetChange: (language: LanguageOption) => void;
+  conversationMode?: "translator" | "assistant";
+  onConversationModeChange?: (mode: "translator" | "assistant") => void;
   serverAddress: string;
   onServerAddressChange: (value: string) => void;
   connectionState: ConnectionState;
@@ -42,6 +44,8 @@ export function SettingsScreen({
   target,
   onSourceChange,
   onTargetChange,
+  conversationMode = "translator",
+  onConversationModeChange,
   serverAddress,
   onServerAddressChange,
   connectionState,
@@ -97,15 +101,28 @@ export function SettingsScreen({
                 label="Your language"
                 value={source}
                 onChange={onSourceChange}
-                disabledCodes={[target.code]}
               />
               <LanguagePicker
                 label="Their language"
                 value={target}
                 onChange={onTargetChange}
-                disabledCodes={[source.code]}
               />
             </div>
+            {onConversationModeChange && (
+              <div className={styles.modeRow}>
+                <label className={styles.modeLabel}>
+                  <span className={styles.modeTitle}>Conversation mode</span>
+                  <select
+                    className={styles.modeSelect}
+                    value={conversationMode}
+                    onChange={(e) => onConversationModeChange(e.target.value as "translator" | "assistant")}
+                  >
+                    <option value="translator">Translator — bidirectional speech translation</option>
+                    <option value="assistant">Personal assistant — open-ended voice conversation</option>
+                  </select>
+                </label>
+              </div>
+            )}
           </section>
         </section>
 

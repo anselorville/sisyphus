@@ -12,7 +12,7 @@
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: var(--ds-space-2);
 }
 
@@ -22,7 +22,7 @@
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: var(--ds-space-3) var(--ds-space-2);
+  padding: var(--ds-space-2) var(--ds-space-1);
   border-radius: var(--ds-radius-md);
   border: 1px solid var(--ds-color-border);
   background: var(--ds-color-bg-surface);
@@ -52,7 +52,7 @@
 }
 
 .code {
-  font-size: var(--ds-font-size-md);
+  font-size: var(--ds-font-size-sm);
   font-weight: var(--ds-font-weight-extrabold);
   color: var(--ds-color-text-primary);
 }

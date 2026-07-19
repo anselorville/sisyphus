@@ -64,8 +64,23 @@ export interface UseTranslatorConnectionResult {
   setServerAddress: (value: string) => void;
   localStream: MediaStream | null;
   serverStatus: ServerStatus | null;
-  connect: () => Promise<void>;
+  /**
+   * Open the WebRTC session. `languages` (backend-recognized free-text
+   * names, e.g. {source: "Chinese", target: "French"}) and `mode`
+   * ("translator" or "assistant") ride in the offer body so the per-
+   * connection pipeline matches the UI -- omitted, the server falls back
+   * to its .env defaults.
+   */
+  connect: (languages?: { source: string; target: string; mode?: string }) => Promise<void>;
   disconnect: () => void;
+  /** Manual turn mode: whether the mic is currently open (voice input flowing). */
+  micOpen: boolean;
+  /**
+   * Manual turn mode: open/close the mic. Toggles the local audio track AND
+   * notifies the server over the data channel ({"type":"mic","open":...}) so
+   * the pipeline can start/stop the user turn. No-op unless connected.
+   */
+  setMicOpen: (open: boolean) => void;
 }
 
 export function useTranslatorConnection(): UseTranslatorConnectionResult {
@@ -74,6 +89,14 @@ export function useTranslatorConnection(): UseTranslatorConnectionResult {
   const [serverAddress, setServerAddressState] = useState<string>(() => getServerAddress());
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [serverStatus, setServerStatus] = useState<ServerStatus | null>(null);
+  const [micOpen, setMicOpenState] = useState(false);
+
+  // "manual" unless the server explicitly says "auto" -- matches the
+  // server-side default (app/config.py TURN_MODE), and errs toward the
+  // safer mode (closed mic) if /api/status hasn't loaded yet.
+  const manualTurnMode = serverStatus?.turn_mode !== "auto";
+  const manualTurnModeRef = useRef(manualTurnMode);
+  manualTurnModeRef.current = manualTurnMode;
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
@@ -94,9 +117,10 @@ export function useTranslatorConnection(): UseTranslatorConnectionResult {
       prev?.getTracks().forEach((track) => track.stop());
       return null;
     });
+    setMicOpenState(false);
   }, []);
 
-  const connect = useCallback(async () => {
+  const connect = useCallback(async (languages?: { source: string; target: string; mode?: string }) => {
     if (pcRef.current) return;
     setConnectionState("connecting");
 
@@ -106,6 +130,15 @@ export function useTranslatorConnection(): UseTranslatorConnectionResult {
     } catch {
       setConnectionState("error");
       return;
+    }
+    // Manual turn mode: the mic starts CLOSED -- the track stays live (so
+    // WebRTC keeps sending silence and the server-side STT connection stays
+    // warm) but disabled, and the user must press the mic button to open a
+    // turn. Auto mode keeps the original always-hot mic.
+    if (manualTurnModeRef.current) {
+      stream.getAudioTracks().forEach((track) => {
+        track.enabled = false;
+      });
     }
     setLocalStream(stream);
 
@@ -153,7 +186,15 @@ export function useTranslatorConnection(): UseTranslatorConnectionResult {
       const response = await fetch(`${serverAddress}/api/offer`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sdp: pc.localDescription!.sdp, type: pc.localDescription!.type }),
+        body: JSON.stringify({
+          sdp: pc.localDescription!.sdp,
+          type: pc.localDescription!.type,
+          // Language pair and mode for THIS conversation's pipeline (see
+          // the offer endpoint in app/server.py); omitted fields fall
+          // back to the server's .env defaults.
+          ...(languages ? { source_lang: languages.source, target_lang: languages.target } : {}),
+          ...(languages?.mode ? { mode: languages.mode } : {}),
+        }),
       });
       if (!response.ok) throw new Error(`server responded ${response.status}`);
       const answer = await response.json();
@@ -168,6 +209,19 @@ export function useTranslatorConnection(): UseTranslatorConnectionResult {
     teardown();
     setConnectionState("disconnected");
   }, [teardown]);
+
+  const setMicOpen = useCallback((open: boolean) => {
+    const dataChannel = dataChannelRef.current;
+    if (!pcRef.current || !dataChannel || dataChannel.readyState !== "open") return;
+    setLocalStream((stream) => {
+      stream?.getAudioTracks().forEach((track) => {
+        track.enabled = open;
+      });
+      return stream;
+    });
+    dataChannel.send(JSON.stringify({ type: "mic", open }));
+    setMicOpenState(open);
+  }, []);
 
   const setServerAddress = useCallback((value: string) => {
     setServerAddressState(value);
@@ -208,5 +262,7 @@ export function useTranslatorConnection(): UseTranslatorConnectionResult {
     serverStatus,
     connect,
     disconnect,
+    micOpen,
+    setMicOpen,
   };
 }

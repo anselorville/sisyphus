@@ -5,6 +5,8 @@ export interface ServerStatus {
   engine: "cloud" | "offline" | "omlx";
   source_lang: string;
   target_lang: string;
+  /** "manual": mic button owns turn boundaries; "auto": hands-free VAD turns. */
+  turn_mode?: "manual" | "auto";
 }
 
 /** One oMLX model's load state, as reported by GET /api/local-engine/status. */

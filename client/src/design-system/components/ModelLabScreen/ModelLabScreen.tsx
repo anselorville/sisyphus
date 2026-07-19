@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Link2, MessageSquare, Mic, Square, Trash2, Volume2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, Link2, MessageSquare, Mic, Square, Trash2, Upload, Volume2 } from "lucide-react";
 import { Button } from "../../primitives/Button";
 import { Badge } from "../../primitives/Badge";
 import { useModelLab } from "../../../hooks/useModelLab";
@@ -348,6 +348,7 @@ function TranscriptionTestPanel({
   draft: DraftMap;
   previewTranscription: (adapterId: string, draft: DraftMap, audioFile: File) => Promise<{ transcript: string; timing?: { total_ms: number } }>;
 }) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [transcript, setTranscript] = useState<string | null>(null);
   const [timing, setTiming] = useState<{ total_ms: number } | null>(null);
@@ -404,10 +405,18 @@ function TranscriptionTestPanel({
               </>
             )}
           </Button>
+          <Button
+            variant="secondary"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <Upload size={16} />
+            Pick a file
+          </Button>
           <input
+            ref={fileInputRef}
             type="file"
             accept="audio/*"
-            className={styles.fileInput}
+            className={styles.fileInputHidden}
             onChange={(event) => setFile(event.target.files?.[0] ?? null)}
           />
         </div>
@@ -424,7 +433,7 @@ function TranscriptionTestPanel({
         Run test
       </Button>
       {testError && <p className={styles.errorText}>Couldn't run the test -- try again.</p>}
-      {transcript !== null && !testError && (
+      {(transcript ?? "") !== "" && !testError && (
         <div className={styles.testResult}>
           <p className={styles.testResultLabel}>Transcript</p>
           <p className={styles.testResultText}>{transcript}</p>

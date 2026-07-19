@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Mic, Square } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Mic, Square, Upload } from "lucide-react";
 import { Button } from "../../primitives/Button";
 import { Badge } from "../../primitives/Badge";
 import { useWavRecorder } from "../../../hooks/useWavRecorder";
@@ -21,6 +21,7 @@ export interface ChainTestPanelProps {
 }
 
 export function ChainTestPanel({ adapters, buildValues, previewChain }: ChainTestPanelProps) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [result, setResult] = useState<ChainPreviewResult | null>(null);
   const [running, setRunning] = useState(false);
@@ -111,10 +112,18 @@ export function ChainTestPanel({ adapters, buildValues, previewChain }: ChainTes
               </>
             )}
           </Button>
+          <Button
+            variant="secondary"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <Upload size={16} />
+            Pick a file
+          </Button>
           <input
+            ref={fileInputRef}
             type="file"
             accept="audio/*"
-            className={styles.fileInput}
+            className={styles.fileInputHidden}
             onChange={handleFileSelect}
           />
         </div>

@@ -101,6 +101,19 @@
   border-color: transparent;
 }
 
+/* Manual turn mode: service connected, mic closed -- "ready to talk".
+   Surface look like disconnected (nothing is listening), but a primary
+   accent border signals the service is live and one tap opens the mic. */
+.button[data-state="ready"] {
+  background: var(--ds-color-bg-surface);
+  color: var(--ds-color-primary);
+  border: 2px solid var(--ds-color-primary);
+}
+
+.button[data-state="ready"] .ring {
+  border-color: var(--ds-color-border);
+}
+
 @keyframes pulse-ring {
   0%,
   100% {

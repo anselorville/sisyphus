@@ -12,9 +12,8 @@ export interface LanguagePickerProps {
 
 /**
  * A real language picker: a grid of selectable language tiles (code +
- * native name), not a raw text input. Covers the European languages the
- * backend currently supports (English, French, German, Spanish, Italian)
- * plus Chinese -- see app/pipeline.py::_LANGUAGE_CODES.
+ * native name), not a raw text input. Covers the languages the backend
+ * currently supports -- see app/pipeline.py::_LANGUAGE_CODES.
  */
 export function LanguagePicker({ label, value, onChange, disabledCodes = [] }: LanguagePickerProps) {
   return (
