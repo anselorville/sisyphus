@@ -37,6 +37,7 @@ from loguru import logger
 
 from app.config import Settings
 from app.voxcpm_tts_services import VOXCPM2_CUDA_DEFAULT_MODEL, VOXCPM2_CUDA_PROVIDER
+from app.zhipu_services import ZHIPU_ASR_DEFAULT_MODEL
 
 # Repo-root JSON file. Same conceptual tier as model_settings.json: runtime-
 # local, optional, gitignored. Overridable via MODEL_PROVIDERS_PATH for
@@ -64,7 +65,7 @@ AVAILABLE_LOCAL_ENGINES: tuple[str, ...] = ("omlx",)
 CAPABILITY_PROVIDERS: dict[ModelCapability, tuple[str, ...]] = {
     "text": ("deepseek", "anthropic", "openrouter"),
     "speech": ("minimax", "edge_tts", "cartesia", "openrouter", VOXCPM2_CUDA_PROVIDER),
-    "transcription": ("assemblyai", "deepgram", "openrouter"),
+    "transcription": ("zhipu", "assemblyai", "deepgram", "openrouter"),
     "omni": (),
 }
 
@@ -137,7 +138,7 @@ class CloudCapabilityConfig:
     """One cloud capability's selected provider/model.
 
     `provider=None` means "use today's existing hardcoded default for this
-    capability" (Anthropic for text, Cartesia for speech, Deepgram for
+    capability" (Anthropic for text, Cartesia for speech, Zhipu for
     transcription) -- see app/pipeline.py's dispatch. `omni` is always
     `provider=None, model=None` and not independently settable (see
     `apply_partial_update` below, which ignores any incoming `omni` value).
@@ -152,6 +153,11 @@ class CloudCapabilityConfig:
     first entry of the relevant `OPENROUTER_*_MODELS` catalog (reordered for
     text to prefer `OPENROUTER_SUGGESTED_TEXT_MODEL`), so there's no need to
     hardcode a specific model id here and risk it drifting from that catalog.
+
+    `transcription` is the one exception: it defaults `provider` to
+    `"zhipu"`, not `"openrouter"` -- Zhipu's GLM ASR is this product's
+    designated default cloud transcription provider (see
+    `_default_zhipu_transcription_capability` below).
     """
 
     provider: str | None = None
@@ -162,6 +168,10 @@ def _default_openrouter_capability() -> CloudCapabilityConfig:
     return CloudCapabilityConfig(provider="openrouter")
 
 
+def _default_zhipu_transcription_capability() -> CloudCapabilityConfig:
+    return CloudCapabilityConfig(provider="zhipu")
+
+
 @dataclass
 class CloudProviderConfig:
     """`mode == "cloud"` configuration: one `CloudCapabilityConfig` per
@@ -169,7 +179,9 @@ class CloudProviderConfig:
 
     text: CloudCapabilityConfig = field(default_factory=_default_openrouter_capability)
     speech: CloudCapabilityConfig = field(default_factory=_default_openrouter_capability)
-    transcription: CloudCapabilityConfig = field(default_factory=_default_openrouter_capability)
+    transcription: CloudCapabilityConfig = field(
+        default_factory=_default_zhipu_transcription_capability
+    )
     omni: CloudCapabilityConfig = field(default_factory=CloudCapabilityConfig)
 
 
@@ -261,10 +273,10 @@ def load_model_providers() -> ModelProviders:
 
     cloud_raw = raw.get("cloud") or {}
 
-    def _capability(key: str) -> CloudCapabilityConfig:
+    def _capability(key: str, default_factory=_default_openrouter_capability) -> CloudCapabilityConfig:
         data = cloud_raw.get(key) if isinstance(cloud_raw, dict) else None
         if not isinstance(data, dict):
-            return _default_openrouter_capability()
+            return default_factory()
         provider = data.get("provider")
         model = data.get("model")
         return CloudCapabilityConfig(
@@ -278,7 +290,7 @@ def load_model_providers() -> ModelProviders:
         cloud=CloudProviderConfig(
             text=_capability("text"),
             speech=_capability("speech"),
-            transcription=_capability("transcription"),
+            transcription=_capability("transcription", _default_zhipu_transcription_capability),
             # omni is never loaded from disk as a real value -- always
             # reset to the placeholder, even if a stale/hand-edited file has
             # something there (forward-compat / defends against a future
@@ -392,6 +404,8 @@ def available_models(settings: Settings, capability: ModelCapability, provider: 
         return [DEEPGRAM_DEFAULT_MODEL]
     if provider == "assemblyai" and capability == "transcription":
         return [ASSEMBLYAI_DEFAULT_MODEL]
+    if provider == "zhipu" and capability == "transcription":
+        return [ZHIPU_ASR_DEFAULT_MODEL]
     if provider == "openrouter":
         # Primary source: env-var catalog (OPENROUTER_TEXT_MODELS, etc.)
         if capability == "text":

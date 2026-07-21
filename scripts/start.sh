@@ -107,3 +107,12 @@ fi
 [[ "$BACKEND_OK" -eq 1 && "$FRONTEND_OK" -eq 1 ]] || exit 1
 echo ""
 echo "    Open http://localhost:${FRONTEND_PORT} and press the power switch to connect."
+
+# --- Open log-tail windows (macOS Terminal) ---
+if command -v osascript &>/dev/null && [[ "$(uname)" == "Darwin" ]]; then
+  echo ""
+  echo "==> Opening log-tail windows..."
+  osascript -e "tell app \"Terminal\" to do script \"echo '=== Backend log: ${BACKEND_LOG} ===' && tail -f ${BACKEND_LOG}\"" &
+  osascript -e "tell app \"Terminal\" to do script \"echo '=== Frontend log: ${FRONTEND_LOG} ===' && tail -f ${FRONTEND_LOG}\"" &
+  echo "    Two Terminal windows opened for log monitoring."
+fi

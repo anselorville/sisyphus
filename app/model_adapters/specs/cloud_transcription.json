@@ -2,7 +2,7 @@
   "id": "cloud:transcription",
   "label": "Cloud (transcription / ASR)",
   "capability": "transcription",
-  "note": "Language support varies by the active cloud transcription provider (Deepgram / AssemblyAI / OpenRouter). See app/language_map.py for the authoritative per-model language list. All currently-configured languages (zh/en/fr/de/es/it/hu) are supported by every cloud ASR provider. The `language_hint` field is optional -- leave empty for auto-detect (recommended for this bidirectional pipeline).",
+  "note": "Language support varies by the active cloud transcription provider (Zhipu / Deepgram / AssemblyAI / OpenRouter). See app/language_map.py for the authoritative per-model language list. All currently-configured languages (zh/en/fr/de/es/it/hu) are supported by every cloud ASR provider. The `language_hint` field is optional -- leave empty for auto-detect (recommended for this bidirectional pipeline).",
   "fields": [
     {
       "key": "language_hint",

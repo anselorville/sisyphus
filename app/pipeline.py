@@ -9,7 +9,7 @@ Pipeline shape:
 The STT/LLM/TTS services are one of three trios, chosen once at
 pipeline-build time by `select_engine()`:
 
-- "cloud": Deepgram + Anthropic + Cartesia.
+- "cloud": Zhipu GLM ASR + Anthropic + Cartesia.
 - "offline": Whisper (faster-whisper) + Ollama + Piper -- see
   app/local_services.py. The Raspberry Pi-portable fallback.
 - "omlx": a local oMLX server (OpenAI-API-compatible) -- see
@@ -135,6 +135,7 @@ from app.openrouter_services import (
     build_openrouter_tts,
 )
 from app.voxcpm_tts_services import VOXCPM2_CUDA_PROVIDER, build_voxcpm2_cuda_tts
+from app.zhipu_services import ZHIPU_ASR_DEFAULT_MODEL, build_zhipu_stt
 
 # Cartesia voice per language, keyed by the *short* language code we parse
 # out of SOURCE_LANG/TARGET_LANG (see `_lang_code`). Sonic 3.5 can render the
@@ -1363,6 +1364,16 @@ def _require_assemblyai_key(settings: Settings) -> None:
         )
 
 
+def _require_zhipu_key(settings: Settings) -> None:
+    if not settings.zhipu_api_key:
+        raise RuntimeError(
+            "Cloud transcription capability set to 'zhipu', but GLM_API_KEY "
+            "is missing. Add it to .env, export it in your shell, or switch "
+            "the transcription capability's provider in the Model Provider "
+            "settings."
+        )
+
+
 def _require_deepseek_key(settings: Settings) -> None:
     if not settings.deepseek_api_key:
         raise RuntimeError(
@@ -1621,18 +1632,20 @@ def _build_cloud_transcription_service(
     """Build the cloud STT service for whichever provider is configured for
     the "transcription" capability (`cloud.transcription.provider`):
 
-    - `None`/unset/`"deepgram"`: today's existing hardcoded default
-      (Deepgram), using `cloud.transcription.model` if set, else
-      Deepgram's own default model id.
+    - `None`/unset/`"zhipu"`: today's existing hardcoded default (Zhipu's
+      GLM ASR), using `cloud.transcription.model` if set, else
+      `ZHIPU_ASR_DEFAULT_MODEL`.
     - `"openrouter"`: `build_openrouter_stt`, using
       `cloud.transcription.model` if set, else the first entry of
       `settings.openrouter_asr_models`.
+    - `"assemblyai"`/`"deepgram"`: the other two fixed-model cloud STT
+      providers this product supports.
 
     Model Lab overrides come from the `cloud:transcription` adapter's saved
     values (see app/model_adapters/specs/cloud_transcription.json:
     `language_hint` only, deliberately sparse).
     """
-    provider = cloud.transcription.provider or "deepgram"
+    provider = cloud.transcription.provider or "zhipu"
     values = values_for("cloud:transcription", model_lab_values)
     language_hint = values.get("language_hint")
 
@@ -1661,28 +1674,36 @@ def _build_cloud_transcription_service(
             ),
         )
 
-    # provider == "deepgram" (default)
-    _require_deepgram_key(settings)
-    # punctuate=True: Deepgram adds terminal punctuation (。？！ / . ? !)
-    # which SemanticBufferProcessor uses to detect sentence boundaries.
-    # smart_format=True: normalizes numbers, currency, dates for cleaner output.
-    # interim_results=True: the DeepgramSTTService WebSocket delivers partial
-    # transcriptions as the user speaks -- only final TranscriptionFrame objects
-    # reach SemanticBuffer, but interim feedback shows up in the UI log faster.
-    stt_settings_kwargs: dict[str, object] = {
-        "model": cloud.transcription.model or DEEPGRAM_DEFAULT_MODEL,
-        "punctuate": True,
-        "smart_format": True,
-        "interim_results": True,
-    }
-    if language_hint:
-        try:
-            stt_settings_kwargs["language"] = Language(language_hint.strip().lower())
-        except ValueError:
-            pass
-    return DeepgramSTTService(
-        api_key=settings.deepgram_api_key,
-        settings=DeepgramSTTService.Settings(**stt_settings_kwargs),
+    if provider == "deepgram":
+        _require_deepgram_key(settings)
+        # punctuate=True: Deepgram adds terminal punctuation (。？！ / . ? !)
+        # which SemanticBufferProcessor uses to detect sentence boundaries.
+        # smart_format=True: normalizes numbers, currency, dates for cleaner output.
+        # interim_results=True: the DeepgramSTTService WebSocket delivers partial
+        # transcriptions as the user speaks -- only final TranscriptionFrame objects
+        # reach SemanticBuffer, but interim feedback shows up in the UI log faster.
+        stt_settings_kwargs: dict[str, object] = {
+            "model": cloud.transcription.model or DEEPGRAM_DEFAULT_MODEL,
+            "punctuate": True,
+            "smart_format": True,
+            "interim_results": True,
+        }
+        if language_hint:
+            try:
+                stt_settings_kwargs["language"] = Language(language_hint.strip().lower())
+            except ValueError:
+                pass
+        return DeepgramSTTService(
+            api_key=settings.deepgram_api_key,
+            settings=DeepgramSTTService.Settings(**stt_settings_kwargs),
+        )
+
+    # provider == "zhipu" (default)
+    _require_zhipu_key(settings)
+    return build_zhipu_stt(
+        settings,
+        model=cloud.transcription.model or ZHIPU_ASR_DEFAULT_MODEL,
+        language_hint=language_hint,
     )
 
 
@@ -1695,10 +1716,10 @@ def _build_cloud_services(
 ) -> tuple[STTService, LLMService, TTSService]:
     """Build the cloud STT/LLM/TTS service trio, dispatching per-capability
     on `model_providers.cloud` (see app/model_providers.py): each of
-    text/speech/transcription independently picks Anthropic/Cartesia/
-    Deepgram (today's existing hardcoded defaults, used when a capability's
-    provider is unset) or OpenRouter (a user-selected model from that
-    capability's `settings.openrouter_*_models` catalog).
+    text/speech/transcription independently picks Anthropic/Cartesia/Zhipu
+    (today's existing hardcoded defaults, used when a capability's provider
+    is unset) or OpenRouter (a user-selected model from that capability's
+    `settings.openrouter_*_models` catalog).
 
     Each per-capability builder (`_build_cloud_text_service`/
     `_build_cloud_speech_service`/`_build_cloud_transcription_service`)

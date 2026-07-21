@@ -1,11 +1,10 @@
 {
   "permissions": {
-    "allow": [
-      "*"
-    ],
+    "allow": [],
     "deny": [
-      "rm -rf /",
-      "rm -rf /*"
-    ]
+      "Bash(rm -rf /)",
+      "Bash(rm -rf /*)"
+    ],
+    "defaultMode": "dontAsk"
   }
 }

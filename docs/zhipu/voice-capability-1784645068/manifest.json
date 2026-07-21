@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "created_at": 1784645068.1758342,
+  "adapter_id": "zhipu.glm-asr-2512",
+  "provider": "zhipu",
+  "model": "glm-asr-2512",
+  "kind": "asr",
+  "api_key_env": "GLM_API_KEY",
+  "auth_required": true,
+  "transport": {
+    "protocol": "http",
+    "url": "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions",
+    "mode": "batch",
+    "description": "智谱 BigModel ASR HTTP（同步）。"
+  },
+  "parameters": {
+    "input_sample_id": "asr-input-44903975c75f",
+    "adapter_id": "zhipu.glm-asr-2512",
+    "model": "glm-asr-2512",
+    "language": null,
+    "prompt": null,
+    "temperature": null,
+    "max_tokens": null,
+    "word_timestamps": false,
+    "speech_threshold": null,
+    "speaker_labels": false
+  },
+  "assets": [
+    {
+      "path": "assets/input.webm",
+      "sha256": "d9ed0f024443aaa0312df9aa99fe8e9f0669f11f17dfa66951dc90294a72fb80",
+      "bytes": 49562
+    }
+  ]
+}

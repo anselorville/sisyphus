@@ -28,6 +28,7 @@ CLOUD_REQUIRED_KEYS = (
     "ANTHROPIC_API_KEY",
     "DEEPGRAM_API_KEY",
     "ASSEMBLYAI_API_KEY",
+    "GLM_API_KEY",
     "CARTESIA_API_KEY",
 )
 
@@ -45,6 +46,10 @@ class Settings:
     anthropic_api_key: str
     deepgram_api_key: str
     assemblyai_api_key: str
+    # Zhipu/BigModel GLM ASR (see app/zhipu_services.py). Env var name
+    # (`GLM_API_KEY`, not `ZHIPU_API_KEY`) matches the capability manifest's
+    # `api_key_env` (docs/zhipu/voice-capability-1784645068/manifest.json).
+    zhipu_api_key: str
     cartesia_api_key: str
     # DeepSeek's own first-party API (https://api.deepseek.com, OpenAI-
     # compatible). Preferred text provider on this network: measured live,
@@ -258,6 +263,7 @@ def load_settings() -> Settings:
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
         deepgram_api_key=os.environ.get("DEEPGRAM_API_KEY", ""),
         assemblyai_api_key=os.environ.get("ASSEMBLYAI_API_KEY", ""),
+        zhipu_api_key=os.environ.get("GLM_API_KEY", ""),
         cartesia_api_key=os.environ.get("CARTESIA_API_KEY", ""),
         deepseek_api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
         deepseek_text_models=_parse_csv_env("DEEPSEEK_TEXT_MODELS"),
