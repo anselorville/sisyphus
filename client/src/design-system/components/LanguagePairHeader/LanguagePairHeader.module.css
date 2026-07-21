@@ -1,0 +1,75 @@
+.header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ds-space-3);
+  padding: var(--ds-space-3) var(--ds-space-4);
+  border-bottom: 1px solid var(--ds-color-border);
+  background: var(--ds-color-bg-surface);
+}
+
+.pairRow {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  min-width: 0;
+}
+
+.pill {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ds-space-1);
+  padding: var(--ds-space-1) var(--ds-space-3);
+  border-radius: var(--ds-radius-pill);
+  background: var(--ds-color-bg-surface-muted);
+  min-width: 0;
+}
+
+.code {
+  font-size: var(--ds-font-size-sm);
+  font-weight: var(--ds-font-weight-extrabold);
+  color: var(--ds-color-text-primary);
+}
+
+.name {
+  font-size: var(--ds-font-size-xs);
+  color: var(--ds-color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.swapButton {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--ds-radius-pill);
+  border: none;
+  background: transparent;
+  color: var(--ds-color-text-secondary);
+  cursor: pointer;
+  transition:
+    transform var(--ds-duration-fast) var(--ds-ease-bounce),
+    background-color var(--ds-duration-base) var(--ds-ease-standard),
+    color var(--ds-duration-base) var(--ds-ease-standard);
+}
+
+.swapButton:hover {
+  background: var(--ds-color-bg-surface-muted);
+  color: var(--ds-color-primary-strong);
+}
+
+.swapButton:active {
+  transform: scale(0.9) rotate(180deg);
+}
+
+.actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+}

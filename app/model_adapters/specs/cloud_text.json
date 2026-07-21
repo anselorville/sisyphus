@@ -1,0 +1,41 @@
+{
+  "id": "cloud:text",
+  "label": "Cloud (text / translator LLM)",
+  "capability": "text",
+  "fields": [
+    {
+      "key": "system_prompt_override",
+      "label": "Persona / system prompt",
+      "kind": "textarea",
+      "help": "Replaces the assistant's persona and behavior instructions. The structural output format the pipeline depends on (direction/tone tagging) is always preserved underneath, regardless of what you write here. Leave empty to use the default translator persona.",
+      "default": null
+    },
+    {
+      "key": "temperature",
+      "label": "Temperature",
+      "kind": "number",
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.05,
+      "help": "Higher = more varied/creative phrasing, lower = more literal/consistent. Leave unset to use the provider's own default."
+    },
+    {
+      "key": "top_p",
+      "label": "Top-p",
+      "kind": "number",
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.05,
+      "help": "Nucleus sampling cutoff. Leave unset to use the provider's default."
+    },
+    {
+      "key": "max_tokens",
+      "label": "Max tokens",
+      "kind": "number",
+      "min": 1,
+      "max": 4096,
+      "step": 1,
+      "help": "Upper bound on the length of one response. Leave unset to use the provider's default."
+    }
+  ]
+}

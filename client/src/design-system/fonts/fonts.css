@@ -1,0 +1,7 @@
+/* Self-hosted Nunito via @fontsource (SIL OFL-1.1, see
+   node_modules/@fontsource/nunito/LICENSE). Fully offline -- Vite resolves
+   and bundles the referenced .woff2 files at build time, no CDN. */
+@import "@fontsource/nunito/400.css";
+@import "@fontsource/nunito/500.css";
+@import "@fontsource/nunito/700.css";
+@import "@fontsource/nunito/800.css";

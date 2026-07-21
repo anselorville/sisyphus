@@ -1,0 +1,47 @@
+{
+  "id": "cloud:speech",
+  "label": "Cloud (speech / TTS)",
+  "capability": "speech",
+  "note": "Voice and language support vary by the active cloud speech provider (Cartesia / Edge TTS / MiniMax / OpenRouter). See app/language_map.py for the authoritative per-model language→voice catalog. The `voice` field below accepts free text by default; Model Lab dynamically injects per-provider voice options based on the active SOURCE_LANG/TARGET_LANG at request time.",
+  "fields": [
+    {
+      "key": "voice",
+      "label": "Voice",
+      "kind": "text",
+      "help": "Provider-specific voice identifier (e.g. a Cartesia voice_id, or an OpenRouter/Azure-locale voice id like en-US-Harper:MAI-Voice-2). Leave empty to use the configured provider's default."
+    },
+    {
+      "key": "speed",
+      "label": "Speed",
+      "kind": "number",
+      "min": 0.5,
+      "max": 2.0,
+      "step": 0.05,
+      "help": "Playback speed multiplier."
+    },
+    {
+      "key": "instructions_template",
+      "label": "Style / delivery instructions",
+      "kind": "textarea",
+      "help": "Free-text style/delivery hint (where supported) -- the static fallback used until the translation LLM infers a live per-utterance tone."
+    },
+    {
+      "key": "temperature",
+      "label": "Temperature",
+      "kind": "number",
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.05,
+      "help": "Where supported by the provider. Leave unset to use the provider's default."
+    },
+    {
+      "key": "top_p",
+      "label": "Top-p",
+      "kind": "number",
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.05,
+      "help": "Where supported by the provider. Leave unset to use the provider's default."
+    }
+  ]
+}

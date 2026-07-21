@@ -1,0 +1,145 @@
+.root {
+  position: relative;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--ds-color-bg-app);
+}
+
+.half {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.half[data-rotated] {
+  transform: rotate(180deg);
+}
+
+.halfInner {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ds-space-4);
+  padding: var(--ds-space-6);
+  text-align: center;
+}
+
+.halfHeader {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ds-space-2);
+}
+
+.langCode {
+  font-size: var(--ds-font-size-lg);
+  font-weight: var(--ds-font-weight-extrabold);
+  color: var(--ds-color-primary-strong);
+}
+
+.langName {
+  font-size: var(--ds-font-size-sm);
+  color: var(--ds-color-text-secondary);
+}
+
+.textWrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  overflow-y: auto;
+}
+
+.text {
+  margin: 0;
+  font-size: var(--ds-font-size-2xl);
+  font-weight: var(--ds-font-weight-bold);
+  line-height: var(--ds-line-height-tight);
+  color: var(--ds-color-text-primary);
+  word-break: break-word;
+}
+
+/* ASR originals ("what this side just said", echoed as confirmation) are
+   visually secondary to translations addressed to this reader. */
+.text[data-original] {
+  color: var(--ds-color-text-secondary);
+  font-weight: var(--ds-font-weight-medium);
+}
+
+.placeholder {
+  margin: 0;
+  font-size: var(--ds-font-size-md);
+  color: var(--ds-color-text-secondary);
+}
+
+/* ── Center bar (drag handle —X— drag handle) ── */
+
+.bar {
+  flex: none;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  position: relative;
+  cursor: row-resize;
+  touch-action: none;
+  user-select: none;
+}
+
+/* Thin full-width divider line behind the handle + X */
+.bar::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 1px;
+  background: var(--ds-color-border);
+  pointer-events: none;
+}
+
+.handle {
+  width: 100px;
+  height: 4px;
+  border-radius: var(--ds-radius-pill);
+  background: var(--ds-color-border);
+  pointer-events: none;
+  position: relative;
+  z-index: 1;
+}
+
+.micRow {
+  display: flex;
+  justify-content: center;
+  margin-top: auto;
+  padding-bottom: var(--ds-space-4);
+}
+
+.exitButton {
+  position: relative;
+  z-index: 5;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--ds-color-border);
+  background: var(--ds-color-bg-surface);
+  color: var(--ds-color-text-secondary);
+  cursor: pointer;
+  box-shadow: var(--ds-shadow-sm);
+  transition: background-color var(--ds-duration-base) var(--ds-ease-standard);
+}
+
+.exitButton:hover {
+  background: var(--ds-color-bg-surface-muted);
+  color: var(--ds-color-text-primary);
+}

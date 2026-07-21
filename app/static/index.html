@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sisyphus Translator</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    max-width: 640px;
+    margin: 2rem auto;
+    padding: 0 1rem;
+    color: #1a1a1a;
+    background: #fafafa;
+  }
+  h1 { font-size: 1.4rem; }
+  #status {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    background: #eee;
+    color: #555;
+  }
+  #status.connecting { background: #fff3cd; color: #856404; }
+  #status.connected { background: #d4edda; color: #155724; }
+  #status.error { background: #f8d7da; color: #721c24; }
+  #status.disconnected { background: #eee; color: #555; }
+  button {
+    font-size: 1rem;
+    padding: 0.5rem 1.25rem;
+    border-radius: 6px;
+    border: 1px solid #ccc;
+    background: #fff;
+    cursor: pointer;
+  }
+  button:hover { background: #f0f0f0; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  #controls { display: flex; align-items: center; gap: 1rem; margin: 1rem 0; }
+  #transcript {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    background: #fff;
+    height: 360px;
+    overflow-y: auto;
+    padding: 0.75rem 1rem;
+  }
+  .entry { margin-bottom: 0.75rem; }
+  .entry .label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #888;
+  }
+  .entry.original .label { color: #2a6fb0; }
+  .entry.translation .label { color: #2a9d65; }
+  .entry .text { font-size: 1rem; }
+  .entry .direction {
+    display: inline-block;
+    margin-left: 0.5rem;
+    padding: 0.05rem 0.45rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    background: #eef3fb;
+    color: #2a6fb0;
+  }
+  audio { display: none; }
+</style>
+</head>
+<body>
+  <h1>Sisyphus Translator</h1>
+  <div id="controls">
+    <button id="connectBtn">Connect</button>
+    <span id="status" class="disconnected">disconnected</span>
+  </div>
+  <div id="transcript"></div>
+  <audio id="botAudio" autoplay playsinline></audio>
+
+  <script>
+    const connectBtn = document.getElementById("connectBtn");
+    const statusEl = document.getElementById("status");
+    const transcriptEl = document.getElementById("transcript");
+    const botAudioEl = document.getElementById("botAudio");
+
+    let pc = null;
+    let dataChannel = null;
+    let localStream = null;
+    let pingInterval = null;
+
+    function setStatus(text, cls) {
+      statusEl.textContent = text;
+      statusEl.className = cls;
+    }
+
+    function addTranscriptEntry(kind, text, direction) {
+      const entry = document.createElement("div");
+      entry.className = `entry ${kind}`;
+      const label = document.createElement("div");
+      label.className = "label";
+      label.textContent = kind === "original" ? "Heard" : "Translated";
+      // Direction indicator (e.g. "ZH -> FR") -- only set on the
+      // "translation" entry, since that's when the server has determined
+      // which of the two configured languages was auto-detected and which
+      // it translated into. See the `direction` field on the "transcript"
+      // data-channel message in app/pipeline.py (TranslationDirectionStripper
+      // / TranscriptTapProcessor).
+      if (direction) {
+        const dirEl = document.createElement("span");
+        dirEl.className = "direction";
+        dirEl.textContent = direction.replace("->", " → ");
+        label.appendChild(dirEl);
+      }
+      const body = document.createElement("div");
+      body.className = "text";
+      body.textContent = text;
+      entry.appendChild(label);
+      entry.appendChild(body);
+      transcriptEl.appendChild(entry);
+      transcriptEl.scrollTop = transcriptEl.scrollHeight;
+    }
+
+    async function connect() {
+      connectBtn.disabled = true;
+      setStatus("connecting", "connecting");
+
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (err) {
+        setStatus("mic permission denied", "error");
+        connectBtn.disabled = false;
+        return;
+      }
+
+      pc = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      });
+
+      localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
+
+      pc.ontrack = (event) => {
+        botAudioEl.srcObject = event.streams[0];
+      };
+
+      // The server reacts to a client-created data channel (see
+      // SmallWebRTCConnection's "datachannel" handler) -- we create it here
+      // and use it to receive transcript/translation text and to send a
+      // periodic keepalive ping.
+      dataChannel = pc.createDataChannel("transcript");
+      dataChannel.onopen = () => {
+        pingInterval = setInterval(() => {
+          if (dataChannel.readyState === "open") dataChannel.send("ping");
+        }, 3000);
+      };
+      dataChannel.onclose = () => {
+        if (pingInterval) clearInterval(pingInterval);
+      };
+      dataChannel.onmessage = (event) => {
+        if (typeof event.data !== "string" || event.data === "ping") return;
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === "transcript" && msg.text) {
+            addTranscriptEntry(msg.kind, msg.text, msg.direction);
+          }
+        } catch (err) {
+          // Ignore malformed/non-JSON messages.
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        if (!pc) return;
+        if (pc.connectionState === "connected") {
+          setStatus("connected", "connected");
+          connectBtn.textContent = "Disconnect";
+          connectBtn.disabled = false;
+        } else if (pc.connectionState === "failed" || pc.connectionState === "closed") {
+          setStatus("disconnected", "disconnected");
+          connectBtn.textContent = "Connect";
+          connectBtn.disabled = false;
+        } else if (pc.connectionState === "disconnected") {
+          setStatus("disconnected", "disconnected");
+        }
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      // Wait for ICE gathering so the offer includes candidates -- but with
+      // a timeout. Host/LAN candidates (all this local-first product
+      // actually needs -- client and server are always on the same machine
+      // or LAN) gather in milliseconds; "complete" only fires once every
+      // candidate type is done, including the STUN (srflx) one, which can
+      // hang far longer than that -- or never resolve at all on a
+      // restrictive/offline network -- and silently block the offer from
+      // ever being sent. 2s is generous for host candidates.
+      await new Promise((resolve) => {
+        if (pc.iceGatheringState === "complete") {
+          resolve();
+          return;
+        }
+        const finish = () => {
+          pc.removeEventListener("icegatheringstatechange", check);
+          clearTimeout(timer);
+          resolve();
+        };
+        const check = () => {
+          if (pc.iceGatheringState === "complete") finish();
+        };
+        const timer = setTimeout(finish, 2000);
+        pc.addEventListener("icegatheringstatechange", check);
+      });
+
+      let response;
+      try {
+        response = await fetch("/api/offer", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sdp: pc.localDescription.sdp,
+            type: pc.localDescription.type,
+          }),
+        });
+      } catch (err) {
+        setStatus("error reaching server", "error");
+        connectBtn.disabled = false;
+        return;
+      }
+
+      if (!response.ok) {
+        setStatus("server error", "error");
+        connectBtn.disabled = false;
+        return;
+      }
+
+      const answer = await response.json();
+      await pc.setRemoteDescription({ sdp: answer.sdp, type: answer.type });
+    }
+
+    async function disconnect() {
+      if (pingInterval) clearInterval(pingInterval);
+      if (dataChannel) {
+        dataChannel.close();
+        dataChannel = null;
+      }
+      if (pc) {
+        pc.close();
+        pc = null;
+      }
+      if (localStream) {
+        localStream.getTracks().forEach((track) => track.stop());
+        localStream = null;
+      }
+      setStatus("disconnected", "disconnected");
+      connectBtn.textContent = "Connect";
+      connectBtn.disabled = false;
+    }
+
+    connectBtn.addEventListener("click", () => {
+      if (pc) {
+        disconnect();
+      } else {
+        connect();
+      }
+    });
+  </script>
+</body>
+</html>

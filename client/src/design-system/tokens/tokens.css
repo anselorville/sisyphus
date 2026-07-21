@@ -1,0 +1,198 @@
+/*
+ * Sisyphus Translator design tokens.
+ * Warm & friendly, light-mode-first, dark reserved.
+ * Color scale numbered 50-900; semantic aliases layer on top so components
+ * consume --ds-color-{role} (theme-able) rather than raw scale steps.
+ */
+
+:root {
+  /* Coral (brand/primary/translation output) */
+  --ds-color-coral-50: #fff1ee;
+  --ds-color-coral-100: #ffdcd4;
+  --ds-color-coral-300: #ff9f8e;
+  --ds-color-coral-500: #ff6f59; /* decorative/large-surface fills */
+  --ds-color-coral-600: #e85b45;
+  --ds-color-coral-700: #bf5343; /* 4.63:1 on white -- text/icon safe */
+
+  /* Sage (secondary/heard-input/connected) */
+  --ds-color-sage-50: #eef7f1;
+  --ds-color-sage-100: #d7eede;
+  --ds-color-sage-300: #94ccaa;
+  --ds-color-sage-500: #5fa777;
+  --ds-color-sage-600: #4f9268;
+  --ds-color-sage-700: #477d59; /* 4.83:1 on white -- text/icon safe */
+
+  /* Amber (accent/pending/connecting/direction chip) */
+  --ds-color-amber-50: #fef6e7;
+  --ds-color-amber-100: #fce6b8;
+  --ds-color-amber-300: #f8c764;
+  --ds-color-amber-500: #f5a623;
+  --ds-color-amber-700: #9f6c17; /* 4.53:1 on white -- text/icon safe */
+
+  /* Terracotta (danger/error) */
+  --ds-color-terracotta-50: #fbeae8;
+  --ds-color-terracotta-100: #f5cac6;
+  --ds-color-terracotta-300: #e6857c;
+  --ds-color-terracotta-500: #d64545;
+  --ds-color-terracotta-700: #cb4242; /* 4.78:1 on white -- text/icon safe */
+
+  /* Warm neutrals (replace pure gray/black) */
+  --ds-color-neutral-0: #ffffff;
+  --ds-color-neutral-25: #fff8f4;
+  --ds-color-neutral-50: #fbf1ea;
+  --ds-color-neutral-100: #f3e6dc;
+  --ds-color-neutral-200: #e6d5c8;
+  --ds-color-neutral-300: #d2bbaa;
+  --ds-color-neutral-500: #9c8a7d;
+  --ds-color-neutral-600: #6b5f57; /* secondary text, 5.88:1 on neutral-25 */
+  --ds-color-neutral-800: #3a2f27;
+  --ds-color-neutral-900: #2b2118; /* primary text, 14.99:1 on neutral-25 */
+
+  /* Semantic aliases -- light mode */
+  --ds-color-bg-app: var(--ds-color-neutral-25);
+  --ds-color-bg-surface: var(--ds-color-neutral-0);
+  --ds-color-bg-surface-muted: var(--ds-color-neutral-50);
+  --ds-color-border: var(--ds-color-neutral-200);
+  --ds-color-text-primary: var(--ds-color-neutral-900);
+  --ds-color-text-secondary: var(--ds-color-neutral-600);
+  --ds-color-text-on-accent: var(--ds-color-neutral-0);
+
+  --ds-color-primary: var(--ds-color-coral-500);
+  --ds-color-primary-strong: var(--ds-color-coral-700);
+  --ds-color-primary-subtle: var(--ds-color-coral-50);
+
+  --ds-color-secondary: var(--ds-color-sage-500);
+  --ds-color-secondary-strong: var(--ds-color-sage-700);
+  --ds-color-secondary-subtle: var(--ds-color-sage-50);
+
+  --ds-color-accent: var(--ds-color-amber-500);
+  --ds-color-accent-strong: var(--ds-color-amber-700);
+  --ds-color-accent-subtle: var(--ds-color-amber-50);
+
+  --ds-color-danger: var(--ds-color-terracotta-500);
+  --ds-color-danger-strong: var(--ds-color-terracotta-700);
+  --ds-color-danger-subtle: var(--ds-color-terracotta-50);
+
+  --ds-color-neutral: var(--ds-color-neutral-500);
+  --ds-color-neutral-strong: var(--ds-color-neutral-600);
+  --ds-color-neutral-subtle: var(--ds-color-neutral-100);
+
+  /* Spacing scale (4px base) */
+  --ds-space-1: 4px;
+  --ds-space-2: 8px;
+  --ds-space-3: 12px;
+  --ds-space-4: 16px;
+  --ds-space-5: 20px;
+  --ds-space-6: 24px;
+  --ds-space-8: 32px;
+  --ds-space-10: 40px;
+  --ds-space-12: 48px;
+
+  /* Radius scale */
+  --ds-radius-sm: 8px;
+  --ds-radius-md: 12px;
+  --ds-radius-lg: 16px;
+  --ds-radius-pill: 999px;
+
+  /* Shadow scale (warm-tinted, not pure black) */
+  --ds-shadow-sm: 0 1px 2px 0 rgba(43, 33, 24, 0.08);
+  --ds-shadow-md: 0 4px 12px -2px rgba(43, 33, 24, 0.12), 0 2px 4px -1px rgba(43, 33, 24, 0.08);
+  --ds-shadow-lg: 0 12px 24px -6px rgba(43, 33, 24, 0.16), 0 4px 8px -2px rgba(43, 33, 24, 0.1);
+  --ds-shadow-glow-coral: 0 0 0 4px rgba(255, 111, 89, 0.18);
+
+  /* Typography scale */
+  --ds-font-family-base: "Nunito", system-ui, -apple-system, sans-serif;
+  --ds-font-size-xs: 12px;
+  --ds-font-size-sm: 14px;
+  --ds-font-size-md: 16px;
+  --ds-font-size-lg: 18px;
+  --ds-font-size-xl: 22px;
+  --ds-font-size-2xl: 28px;
+  --ds-font-weight-regular: 400;
+  --ds-font-weight-medium: 500;
+  --ds-font-weight-bold: 700;
+  --ds-font-weight-extrabold: 800;
+  --ds-line-height-tight: 1.25;
+  --ds-line-height-body: 1.5;
+
+  /* Motion scale */
+  --ds-duration-fast: 120ms;
+  --ds-duration-base: 200ms;
+  --ds-duration-slow: 400ms;
+  --ds-ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ds-ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+[data-theme="dark"] {
+  --ds-color-bg-app: #1e1814;
+  --ds-color-bg-surface: #2e2521;
+  --ds-color-bg-surface-muted: #251e1a;
+  --ds-color-border: #46392f;
+  --ds-color-text-primary: #f5ede6;
+  --ds-color-text-secondary: #b8aba1;
+  --ds-color-text-on-accent: #1e1814;
+
+  --ds-color-primary: #ff8a77;
+  --ds-color-primary-strong: #ffa694;
+  --ds-color-primary-subtle: #3a241d;
+
+  --ds-color-secondary: #7cc399;
+  --ds-color-secondary-strong: #98d4af;
+  --ds-color-secondary-subtle: #1f3527;
+
+  --ds-color-accent: #f7bc55;
+  --ds-color-accent-strong: #facd7c;
+  --ds-color-accent-subtle: #3d2e12;
+
+  --ds-color-danger: #e8716b;
+  --ds-color-danger-strong: #f08f8a;
+  --ds-color-danger-subtle: #3a1f1d;
+
+  --ds-color-neutral: #b8aba1;
+  --ds-color-neutral-strong: #d8cbc1;
+  --ds-color-neutral-subtle: #2e2521;
+
+  --ds-shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+  --ds-shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.24);
+  --ds-shadow-lg: 0 12px 24px -6px rgba(0, 0, 0, 0.45), 0 4px 8px -2px rgba(0, 0, 0, 0.3);
+}
+
+/* Dark mode reserved/secondary: auto-applies via OS preference unless the
+   app explicitly opts into light (data-theme="light") or dark
+   (data-theme="dark") -- duplicated value block is an accepted tradeoff for
+   staying plain-CSS / preprocessor-free. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ds-color-bg-app: #1e1814;
+    --ds-color-bg-surface: #2e2521;
+    --ds-color-bg-surface-muted: #251e1a;
+    --ds-color-border: #46392f;
+    --ds-color-text-primary: #f5ede6;
+    --ds-color-text-secondary: #b8aba1;
+    --ds-color-text-on-accent: #1e1814;
+
+    --ds-color-primary: #ff8a77;
+    --ds-color-primary-strong: #ffa694;
+    --ds-color-primary-subtle: #3a241d;
+
+    --ds-color-secondary: #7cc399;
+    --ds-color-secondary-strong: #98d4af;
+    --ds-color-secondary-subtle: #1f3527;
+
+    --ds-color-accent: #f7bc55;
+    --ds-color-accent-strong: #facd7c;
+    --ds-color-accent-subtle: #3d2e12;
+
+    --ds-color-danger: #e8716b;
+    --ds-color-danger-strong: #f08f8a;
+    --ds-color-danger-subtle: #3a1f1d;
+
+    --ds-color-neutral: #b8aba1;
+    --ds-color-neutral-strong: #d8cbc1;
+    --ds-color-neutral-subtle: #2e2521;
+
+    --ds-shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+    --ds-shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.4), 0 2px 4px -1px rgba(0, 0, 0, 0.24);
+    --ds-shadow-lg: 0 12px 24px -6px rgba(0, 0, 0, 0.45), 0 4px 8px -2px rgba(0, 0, 0, 0.3);
+  }
+}

@@ -1,0 +1,53 @@
+[project]
+name = "sisyphus-translator"
+version = "0.1.0"
+description = "Real-time Chinese<->European-language speech translator built on Pipecat."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # NOTE: confirmed against PyPI (pipecat-ai 1.4.0) at the time this file was
+    # written. Extras below match the package's published `provides_extra` list:
+    # silero, deepgram, cartesia, anthropic, webrtc, whisper, piper.
+    # Re-verify with `uv add "pipecat-ai[...]"` before relying on this, in
+    # case the extras or version pinning need adjusting for your environment.
+    #
+    # - whisper: pulls in faster-whisper (CTranslate2-based, CPU-friendly --
+    #   no torch/CUDA needed) for the local/offline STT fallback
+    #   (app/local_services.py -> WhisperSTTService). This is the right
+    #   choice for a Raspberry Pi target; the `mlx-whisper` extra is
+    #   Apple-Silicon-only and deliberately NOT included here (it pulls in
+    #   torch and is irrelevant on Pi hardware). If you're developing on a
+    #   Mac and want the MLX-accelerated backend instead, add it yourself
+    #   with `uv add "pipecat-ai[mlx-whisper]"`.
+    # - piper: pulls in piper-tts for the local/offline TTS fallback
+    #   (app/local_services.py -> PiperTTSService).
+    # - The local/offline LLM (translation) fallback uses Pipecat's
+    #   OLLamaLLMService, which talks to a locally-running Ollama server over
+    #   its OpenAI-compatible HTTP API via the `openai` client -- already a
+    #   base dependency of pipecat-ai, so no extra is needed for it. Ollama
+    #   itself is a separate program the user installs and runs outside this
+    #   project (see README.md).
+    "pipecat-ai[silero,deepgram,cartesia,anthropic,webrtc,whisper,piper]>=1.4.0",
+    # SmallWebRTCTransport's signaling endpoint (/api/offer) is served over
+    # HTTP via FastAPI/uvicorn; pipecat-ai does not pull these in itself.
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+    "python-dotenv>=1.0.0",
+    # Used directly by app/server.py's /api/local-engine/* endpoints to talk
+    # to the local oMLX server's model load/unload control API. Already a
+    # transitive dependency of pipecat-ai, but declared explicitly since we
+    # now import it directly.
+    "httpx>=0.27.0",
+    "python-multipart>=0.0.32",
+    "edge-tts>=7.2.8",
+]
+
+[project.scripts]
+sisyphus-translator = "app.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]

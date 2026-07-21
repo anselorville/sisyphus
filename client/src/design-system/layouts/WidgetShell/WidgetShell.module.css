@@ -1,0 +1,23 @@
+.widget {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-3);
+  padding: var(--ds-space-2) var(--ds-space-4);
+  border-radius: var(--ds-radius-pill);
+  background: var(--ds-color-bg-surface);
+  box-shadow: var(--ds-shadow-md);
+  border: 1px solid var(--ds-color-border);
+  max-width: 360px;
+}
+
+.text {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  font-size: var(--ds-font-size-sm);
+  font-weight: var(--ds-font-weight-medium);
+  color: var(--ds-color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

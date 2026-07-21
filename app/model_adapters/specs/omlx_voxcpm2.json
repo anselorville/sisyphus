@@ -1,0 +1,67 @@
+{
+  "id": "omlx:voxcpm2",
+  "label": "VoxCPM2 (oMLX, local)",
+  "capability": "speech",
+  "note": "VoxCPM2 supports 30 languages (ar/my/zh/da/nl/en/fi/fr/de/el/he/hi/id/it/ja/km/ko/lo/ms/no/pl/pt/ru/es/sw/sv/tl/th/tr/vi). Hungarian (hu) is NOT supported -- TTS will fall back to English for hu utterances on this engine. See app/language_map.py for the full list and per-language voice catalog.",
+  "fields": [
+    {
+      "key": "voice",
+      "label": "Voice",
+      "kind": "select",
+      "options": ["default"],
+      "help": "VoxCPM2 currently exposes only its stock voice; voice cloning (ref_audio/ref_text) is supported by oMLX's endpoint but not wired up in this app yet."
+    },
+    {
+      "key": "speed",
+      "label": "Speed",
+      "kind": "number",
+      "min": 0.5,
+      "max": 2.0,
+      "step": 0.05,
+      "default": 1.0,
+      "help": "Playback speed multiplier (AudioSpeechRequest.speed)."
+    },
+    {
+      "key": "instructions",
+      "label": "Style / delivery instructions",
+      "kind": "textarea",
+      "help": "Free-text style/delivery hint sent to the model (e.g. \"speak warmly and a little slower\"). Verified live to measurably change generated audio. This is the static fallback used until the translation LLM infers a live per-utterance tone."
+    },
+    {
+      "key": "temperature",
+      "label": "Temperature",
+      "kind": "number",
+      "min": 0.0,
+      "max": 2.0,
+      "step": 0.05,
+      "help": "Sampling temperature for VoxCPM2's generation (AudioSpeechRequest.temperature)."
+    },
+    {
+      "key": "top_p",
+      "label": "Top-p",
+      "kind": "number",
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.05,
+      "help": "Nucleus sampling cutoff (AudioSpeechRequest.top_p)."
+    },
+    {
+      "key": "top_k",
+      "label": "Top-k",
+      "kind": "number",
+      "min": 0,
+      "max": 200,
+      "step": 1,
+      "help": "Top-k sampling cutoff (AudioSpeechRequest.top_k)."
+    },
+    {
+      "key": "repetition_penalty",
+      "label": "Repetition penalty",
+      "kind": "number",
+      "min": 0.5,
+      "max": 2.0,
+      "step": 0.05,
+      "help": "Penalizes repeated tokens during generation (AudioSpeechRequest.repetition_penalty)."
+    }
+  ]
+}

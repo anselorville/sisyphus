@@ -1,0 +1,133 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ds-space-3);
+}
+
+.button {
+  position: relative;
+  width: 104px;
+  height: 104px;
+  border-radius: var(--ds-radius-pill);
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ds-color-primary);
+  color: var(--ds-color-text-on-accent);
+  box-shadow: var(--ds-shadow-lg);
+  transition:
+    transform var(--ds-duration-fast) var(--ds-ease-bounce),
+    background-color var(--ds-duration-base) var(--ds-ease-standard);
+}
+
+.button:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--ds-color-primary-strong);
+  outline-offset: 4px;
+}
+
+.button:disabled {
+  cursor: not-allowed;
+}
+
+.icon {
+  position: relative;
+  z-index: 2;
+  display: flex;
+}
+
+/* Static ring -- always present, gives the button a defined "dial" edge. */
+.ring {
+  position: absolute;
+  inset: -8px;
+  border-radius: var(--ds-radius-pill);
+  border: 2px solid var(--ds-color-primary-subtle);
+  z-index: 0;
+  transition: border-color var(--ds-duration-base) var(--ds-ease-standard);
+}
+
+/* Reactive glow -- scales/opacity driven by --ds-talk-level while connected. */
+.glow {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--ds-radius-pill);
+  z-index: 1;
+  box-shadow: var(--ds-shadow-glow-coral);
+  opacity: 0;
+  transform: scale(1);
+  transition: opacity var(--ds-duration-base) var(--ds-ease-standard);
+}
+
+.button[data-state="connected"] .glow {
+  opacity: 1;
+  transform: scale(calc(1 + var(--ds-talk-level, 0) * 0.45));
+  transition: transform 90ms linear, opacity var(--ds-duration-base) var(--ds-ease-standard);
+}
+
+.button[data-state="connected"] {
+  background: var(--ds-color-primary);
+}
+
+.button[data-state="connecting"] {
+  background: var(--ds-color-accent);
+}
+
+.button[data-state="connecting"] .ring {
+  border-color: var(--ds-color-accent-subtle);
+  animation: pulse-ring 1.4s var(--ds-ease-standard) infinite;
+}
+
+.button[data-state="error"] {
+  background: var(--ds-color-danger);
+}
+
+.button[data-state="error"] .ring {
+  border-color: var(--ds-color-danger-subtle);
+}
+
+.button[data-state="disconnected"] {
+  background: var(--ds-color-bg-surface);
+  color: var(--ds-color-text-secondary);
+  border: 2px solid var(--ds-color-border);
+}
+
+.button[data-state="disconnected"] .ring {
+  border-color: transparent;
+}
+
+/* Manual turn mode: service connected, mic closed -- "ready to talk".
+   Surface look like disconnected (nothing is listening), but a primary
+   accent border signals the service is live and one tap opens the mic. */
+.button[data-state="ready"] {
+  background: var(--ds-color-bg-surface);
+  color: var(--ds-color-primary);
+  border: 2px solid var(--ds-color-primary);
+}
+
+.button[data-state="ready"] .ring {
+  border-color: var(--ds-color-border);
+}
+
+@keyframes pulse-ring {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 0.6;
+  }
+}
+
+.label {
+  font-size: var(--ds-font-size-sm);
+  font-weight: var(--ds-font-weight-bold);
+  color: var(--ds-color-text-secondary);
+}

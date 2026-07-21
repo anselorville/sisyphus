@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "created_at": 1784391256.0452201,
+  "adapter_id": "minimax.speech-2.8-hd",
+  "provider": "minimax",
+  "model": "speech-2.8-hd",
+  "kind": "tts",
+  "api_key_env": "MINIMAX_API_KEY",
+  "auth_required": true,
+  "transport": {
+    "protocol": "websocket",
+    "url": "wss://api.minimaxi.com/ws/v1/t2a_v2",
+    "mode": "stream",
+    "description": "connected_success → task_start → task_continue → is_final。"
+  },
+  "parameters": {
+    "adapter_id": "minimax.speech-2.8-hd",
+    "text": "Claude Code 团队刚刚发布了一门关于使用 Fable 5 进行循环工程的免费课程。",
+    "language_boost": "Chinese",
+    "voice_id": "male-qn-badao-jingpin",
+    "speed": 1,
+    "pitch": 0,
+    "volume": 1,
+    "format": "mp3",
+    "sample_rate": null,
+    "bitrate": null,
+    "channel": null,
+    "english_normalization": false
+  },
+  "assets": [
+    {
+      "path": "assets/output.mp3",
+      "sha256": "0a55438dded39f872606abfd225ff998129fa819ed12c7c64dbeb766c3b90174",
+      "bytes": 100269
+    }
+  ]
+}

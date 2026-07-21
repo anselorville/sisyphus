@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "created_at": 1784453184.875894,
+  "adapter_id": "openrouter.qwen/qwen3-asr-flash-2026-02-10",
+  "provider": "openrouter",
+  "model": "qwen/qwen3-asr-flash-2026-02-10",
+  "kind": "asr",
+  "api_key_env": "OPENROUTER_API_KEY",
+  "auth_required": true,
+  "transport": {
+    "protocol": "http",
+    "url": "https://openrouter.ai/api/v1/audio/transcriptions",
+    "mode": "batch",
+    "description": "OpenRouter ASR HTTP。"
+  },
+  "parameters": {
+    "input_sample_id": "asr-input-3c31d8d53d10",
+    "adapter_id": "openrouter.qwen/qwen3-asr-flash-2026-02-10",
+    "model": "qwen/qwen3-asr-flash-2026-02-10",
+    "language": null,
+    "temperature": null,
+    "max_tokens": null,
+    "word_timestamps": false,
+    "speech_threshold": null,
+    "speaker_labels": false
+  },
+  "assets": [
+    {
+      "path": "assets/input.webm",
+      "sha256": "b9cc54193df1921b5762e79c09753b87d60445df1d971b379da4474b7af0a2db",
+      "bytes": 74678
+    }
+  ]
+}

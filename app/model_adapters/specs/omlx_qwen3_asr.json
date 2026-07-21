@@ -1,0 +1,14 @@
+{
+  "id": "omlx:qwen3_asr",
+  "label": "Qwen3-ASR (oMLX, local)",
+  "capability": "transcription",
+  "note": "Supports 30 languages including Hungarian (hu). See app/language_map.py for the full per-model language list. The `language_hint` field accepts full language names (e.g. \"Hungarian\"), not ISO codes. Leave empty for auto-detect.",
+  "fields": [
+    {
+      "key": "language_hint",
+      "label": "Language hint (optional)",
+      "kind": "text",
+      "help": "Leave empty for auto-detect (recommended -- this is a bidirectional pipeline, so locking to one language will misdetect the other). Verified live against oMLX's /v1/audio/transcriptions: correctly auto-detects both Chinese and English from the same model, with and without an explicit hint."
+    }
+  ]
+}

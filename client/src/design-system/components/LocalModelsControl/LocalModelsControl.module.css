@@ -1,0 +1,23 @@
+.control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-3);
+}
+
+.modelList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ds-space-2);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-3);
+}
+
+.errorText {
+  margin: 0;
+  font-size: var(--ds-font-size-sm);
+  color: var(--ds-color-danger-strong);
+}
