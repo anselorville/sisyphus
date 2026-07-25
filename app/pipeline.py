@@ -51,35 +51,20 @@ and ultimately passed to TTS as an expressiveness hint (see
 
 from __future__ import annotations
 
-import asyncio
 import re
-from dataclasses import dataclass
 from collections.abc import AsyncGenerator
 from typing import Any
 
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
-    CancelFrame,
-    DataFrame,
-    EndFrame,
     Frame,
-    InputAudioRawFrame,
-    InputTransportMessageFrame,
-    InterruptionFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
     OutputTransportMessageUrgentFrame,
     TranscriptionFrame,
-    TTSAudioRawFrame,
-    TTSStartedFrame,
-    TTSStoppedFrame,
     TTSTextFrame,
-    UserStartedSpeakingFrame,
-    UserStoppedSpeakingFrame,
-    VADUserStartedSpeakingFrame,
-    VADUserStoppedSpeakingFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
@@ -100,12 +85,10 @@ from pipecat.transcriptions.language import Language
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
-from pipecat.turns.user_start.base_user_turn_start_strategy import BaseUserTurnStartStrategy
 from pipecat.turns.user_start.transcription_user_turn_start_strategy import (
     TranscriptionUserTurnStartStrategy,
 )
 from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
-from pipecat.turns.user_stop.base_user_turn_stop_strategy import BaseUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from app.config import Settings
@@ -133,6 +116,18 @@ from app.openrouter_services import (
     build_openrouter_llm,
     build_openrouter_stt,
     build_openrouter_tts,
+)
+from app.realtime.audio_gate import (
+    MIC_CLOSE_AUDIO_GRACE_SECONDS,
+    MicGateProcessor,
+    MicStateFrame,
+    TTSOutputGateProcessor,
+)
+from app.realtime.turn_detection import (
+    SEMANTIC_BUFFER_FLUSH_TIMEOUT_SECONDS,
+    MicButtonUserTurnStartStrategy,
+    SemanticBufferProcessor,
+    SentenceUserTurnStopStrategy,
 )
 from app.voxcpm_tts_services import VOXCPM2_CUDA_PROVIDER, build_voxcpm2_cuda_tts
 from app.zhipu_services import ZHIPU_ASR_DEFAULT_MODEL, build_zhipu_stt
@@ -769,422 +764,6 @@ class TranslationTranscriptTapProcessor(FrameProcessor):
             return
 
         await self.push_frame(frame, direction)
-
-
-_SENTENCE_END_RE = re.compile(r"[。！？!?]+")
-
-# Maximum extra wait for an unpunctuated final STT fragment. This delay sits
-# directly inside the user-perceived user-stop -> bot-speech latency budget.
-SEMANTIC_BUFFER_FLUSH_TIMEOUT_SECONDS = 0.5
-
-
-class SemanticBufferProcessor(FrameProcessor):
-    """Buffers STT transcription fragments until a sentence boundary is reached,
-    then forwards semantically complete sentences to the LLM while keeping any
-    incomplete remainder buffered for the next incoming fragment.
-
-    Why this is needed: Deepgram streaming STT emits a final TranscriptionFrame
-    per VAD-detected utterance. In real environments (background noise, speech
-    hesitations, fast talking), utterances are frequently fragmented mid-sentence
-    -- e.g. "我手里有你要的东" before "西。" arrives separately. Sending each
-    fragment directly to the LLM causes garbage translations of incomplete inputs
-    and leaves the LLM guessing at truncated meaning.
-
-    This processor solves it by:
-    1. Accumulating each TranscriptionFrame's text into a rolling buffer
-    2. On each append, checking if the buffer ends with terminal punctuation
-       (。！？!?) -- Deepgram adds punctuation via `punctuate=True`
-    3. If yes: extracting everything up to (and including) the last sentence-end,
-       pushing it as a single complete TranscriptionFrame, and keeping any
-       remainder buffered
-    4. If no: starting a flush timer (`flush_timeout` seconds). If no new
-       fragment arrives before the timer fires, the buffer is force-flushed so
-       the pipeline never stalls (handles unpunctuated speech or a long trailing
-       pause)
-
-    Position in pipeline: AFTER `original_tap` (so the UI immediately shows
-    raw transcription fragments for real-time feedback) but BEFORE
-    `user_aggregator` (so the LLM only ever sees complete sentences).
-    """
-
-    def __init__(
-        self,
-        flush_timeout: float = SEMANTIC_BUFFER_FLUSH_TIMEOUT_SECONDS,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(**kwargs)
-        self._buffer: str = ""
-        self._flush_timeout = flush_timeout
-        self._flush_task: "asyncio.Task[None] | None" = None
-        self._last_user_id: str = ""
-        self._last_timestamp: str = ""
-
-    @property
-    def buffered_text(self) -> str:
-        """Return the transcription suffix still awaiting a turn boundary."""
-        return self._buffer
-
-    def _split_at_last_sentence_end(self, text: str) -> tuple[str, str]:
-        """Split at the last terminal punctuation in text.
-
-        Returns (complete_part, remainder). `complete_part` is everything up
-        to and including the last sentence-end marker; `remainder` is whatever
-        follows (may be empty). Returns ("", text) if no terminal punctuation
-        is found.
-        """
-        matches = list(_SENTENCE_END_RE.finditer(text))
-        if not matches:
-            return "", text
-        last_end = matches[-1].end()
-        return text[:last_end].strip(), text[last_end:].strip()
-
-    async def _cancel_flush_timer(self) -> None:
-        if self._flush_task and not self._flush_task.done():
-            self._flush_task.cancel()
-            try:
-                await self._flush_task
-            except asyncio.CancelledError:
-                pass
-        self._flush_task = None
-
-    async def _schedule_flush(self, direction: FrameDirection) -> None:
-        try:
-            await asyncio.sleep(self._flush_timeout)
-            if self._buffer:
-                logger.debug(
-                    f"{self}: Force-flushing incomplete buffer [{self._buffer}]"
-                )
-                await self._flush_buffer(direction)
-        except asyncio.CancelledError:
-            pass
-
-    async def _flush_buffer(self, direction: FrameDirection) -> None:
-        """Push the pending transcription once and clear it atomically."""
-        text = self._buffer.strip()
-        self._buffer = ""
-        if text:
-            await self.push_frame(
-                TranscriptionFrame(
-                    text=text,
-                    user_id=self._last_user_id,
-                    timestamp=self._last_timestamp,
-                ),
-                direction,
-            )
-
-    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-
-        if isinstance(frame, TranscriptionFrame):
-            await self._cancel_flush_timer()
-            text = frame.text.strip()
-            if not text:
-                return
-
-            self._last_user_id = frame.user_id
-            self._last_timestamp = frame.timestamp
-            self._buffer = (self._buffer + text) if self._buffer else text
-
-            complete, remainder = self._split_at_last_sentence_end(self._buffer)
-            if complete:
-                self._buffer = remainder
-                await self.push_frame(
-                    TranscriptionFrame(text=complete, user_id=frame.user_id, timestamp=frame.timestamp),
-                    direction,
-                )
-                if remainder:
-                    self._flush_task = asyncio.ensure_future(self._schedule_flush(direction))
-            else:
-                self._flush_task = asyncio.ensure_future(self._schedule_flush(direction))
-            return
-
-        if isinstance(frame, UserStoppedSpeakingFrame):
-            await self._cancel_flush_timer()
-            await self._flush_buffer(direction)
-            await self.push_frame(frame, direction)
-            return
-
-        if isinstance(frame, CancelFrame):
-            await self._cancel_flush_timer()
-            self._buffer = ""
-            await self.push_frame(frame, direction)
-            return
-
-        if isinstance(frame, EndFrame):
-            await self._cancel_flush_timer()
-            await self._flush_buffer(direction)
-            await self.push_frame(frame, direction)
-            return
-
-        await self.push_frame(frame, direction)
-
-
-class SentenceUserTurnStopStrategy(BaseUserTurnStopStrategy):
-    """Manual mode's speculative-pipelining half: end the user turn on EVERY
-    final `TranscriptionFrame`, not just on mic close.
-
-    By the time a final TranscriptionFrame reaches the aggregator it has
-    passed `SemanticBufferProcessor`, which only forwards sentence-complete
-    text -- so "a final arrived" means "a complete sentence is ready to
-    translate". Ending the turn right there sends that sentence to the LLM
-    (-> TTS) WHILE THE USER IS STILL TALKING, instead of parking everything
-    until the mic closes. The full-duplex payoff: by mic close, every
-    sentence except the last is already translated and synthesized (the
-    audio waits in `TTSOutputGateProcessor` until the mic closes), so the
-    user only ever waits for the LAST sentence's LLM+TTS.
-
-    The next sentence's transcription then starts a NEW turn via
-    `TranscriptionUserTurnStartStrategy(enable_interruptions=False)` -- see
-    `build_pipeline`'s manual-mode strategy list; interruptions must stay
-    off there or each new sentence would cancel the previous sentence's
-    in-flight translation.
-
-    Interim transcriptions are deliberately ignored (only exact final
-    `TranscriptionFrame`s trigger) -- interims are partial text for the UI,
-    not translate-ready sentences.
-
-    Per-sentence translation trades a little cross-sentence context within
-    one utterance for the latency win; the conversation history in
-    `LLMContext` (each mini-turn sees prior sentences AND their
-    translations) is what keeps the quality loss small.
-    """
-
-    async def process_frame(self, frame: Frame):  # type: ignore[override]
-        from pipecat.turns.types import ProcessFrameResult
-
-        if type(frame) is TranscriptionFrame:
-            await self.trigger_user_turn_stopped()
-            return ProcessFrameResult.STOP
-        return ProcessFrameResult.CONTINUE
-
-
-class MicButtonUserTurnStartStrategy(BaseUserTurnStartStrategy):
-    """User-turn start strategy for manual (mic-button) turn mode.
-
-    Identical in shape to Pipecat's own `ExternalUserTurnStartStrategy`
-    (react to a `UserStartedSpeakingFrame` some other processor emitted --
-    here, `MicGateProcessor` when the client's mic button opens) except that
-    interruptions are ENABLED: opening the mic while the bot is speaking is
-    a deliberate user act ("stop, my turn"), so it should cancel in-flight
-    LLM/TTS exactly like VAD barge-in does in auto mode. The stock External
-    strategy hardcodes `enable_interruptions=False`, which would leave the
-    user unable to ever cut the bot off in manual mode -- the opposite
-    failure from the noisy-environment problem manual mode exists to fix
-    (ambient noise interrupting TTS). With this strategy the ONLY
-    interruption source is the mic button; noise has no path to one.
-    """
-
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(enable_interruptions=True, enable_user_speaking_frames=False, **kwargs)
-
-    async def process_frame(self, frame: Frame):  # type: ignore[override]
-        from pipecat.turns.types import ProcessFrameResult
-
-        if isinstance(frame, UserStartedSpeakingFrame):
-            await self.trigger_user_turn_started()
-            return ProcessFrameResult.STOP
-        return ProcessFrameResult.CONTINUE
-
-
-@dataclass
-class MicStateFrame(DataFrame):
-    """Mic open/close state change, emitted downstream by `MicGateProcessor`
-    so processors later in the pipeline (specifically
-    `TTSOutputGateProcessor`) can react to the mic WITHOUT holding a
-    reference back to the gate. A DataFrame (not SystemFrame) so it travels
-    in order with the audio/text frames around it.
-    """
-
-    open: bool = False
-
-
-# How long to wait after the client's "mic closed" data-channel message
-# before emitting the turn-stop frames. The mic message rides the SCTP data
-# channel while audio rides RTP -- there is NO cross-transport ordering
-# guarantee, so the stop signal can overtake the last ~100-200ms of speech
-# audio. (The legacy prototype hit exactly this race and solved it with a
-# single FIFO -- see legacy/src-tauri/src/audio/state.rs `CaptureMsg`. A
-# short grace period is the WebRTC-shaped equivalent.) Closing the mic is a
-# deliberate "I'm done" gesture, so 200ms here is imperceptible next to the
-# STT/LLM/TTS work that follows.
-MIC_CLOSE_AUDIO_GRACE_SECONDS = 0.2
-
-
-class MicGateProcessor(FrameProcessor):
-    """Manual turn mode's server-side half: turns the client's mic-button
-    data-channel messages into Pipecat turn frames, and hard-gates input
-    audio while the mic is closed.
-
-    Sits immediately after `transport.input()`. Handles:
-
-    - `InputTransportMessageFrame` with `{"type": "mic", "open": bool}`
-      (sent by the client whenever the mic button toggles; consumed here,
-      never forwarded downstream):
-      - open: push `VADUserStartedSpeakingFrame` + `UserStartedSpeakingFrame`
-        downstream. The latter triggers `MicButtonUserTurnStartStrategy`
-        (turn start + interruption of any in-flight bot speech).
-      - close: after `MIC_CLOSE_AUDIO_GRACE_SECONDS` (see above), push
-        `VADUserStoppedSpeakingFrame` + `UserStoppedSpeakingFrame`. The VAD
-        variant is what streaming STT services key their force-finalization
-        on (verified in Pipecat 1.4: `AssemblyAISTTService` sends
-        `ForceEndpoint` on `VADUserStoppedSpeakingFrame`, and the two frame
-        types are NOT in a subclass relationship, so both must be sent);
-        the plain variant flushes `SemanticBufferProcessor`, whose flushed
-        tail sentence then ends the final mini-turn via
-        `SentenceUserTurnStopStrategy`.
-    - `InputAudioRawFrame` while the mic is closed: replaced with an
-      equal-length frame of silence. Zeroing (rather than dropping) keeps
-      the streaming STT connection fed and alive across arbitrarily long
-      idle stretches while guaranteeing ambient noise cannot reach the ASR
-      -- the client also disables its audio track when the mic closes, so
-      this is defense in depth, not the only gate.
-    """
-
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self._mic_open = False
-        self._pending_close: asyncio.Task | None = None
-
-    @staticmethod
-    def _is_mic_message(frame: InputTransportMessageFrame) -> bool:
-        return isinstance(frame.message, dict) and frame.message.get("type") == "mic"
-
-    async def _emit_stop_after_grace(self, direction: FrameDirection) -> None:
-        await asyncio.sleep(MIC_CLOSE_AUDIO_GRACE_SECONDS)
-        await self.push_frame(VADUserStoppedSpeakingFrame(), direction)
-        await self.push_frame(UserStoppedSpeakingFrame(), direction)
-        # Grace over: from here on the audio gate (see process_frame) zeroes
-        # incoming audio until the mic re-opens.
-        self._pending_close = None
-
-    async def _cancel_pending_close(self) -> None:
-        if self._pending_close is not None and not self._pending_close.done():
-            self._pending_close.cancel()
-        self._pending_close = None
-
-    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-
-        if isinstance(frame, InputTransportMessageFrame) and self._is_mic_message(frame):
-            open_requested = bool(frame.message.get("open"))
-            if open_requested and not self._mic_open:
-                self._mic_open = True
-                # Re-opening during the close grace period: the previous
-                # turn's stop frames must not fire into the new turn.
-                await self._cancel_pending_close()
-                await self.push_frame(MicStateFrame(open=True), direction)
-                await self.push_frame(VADUserStartedSpeakingFrame(), direction)
-                await self.push_frame(UserStartedSpeakingFrame(), direction)
-            elif not open_requested and self._mic_open:
-                self._mic_open = False
-                await self._cancel_pending_close()
-                # The output gate flushes on this immediately -- earlier
-                # sentences' already-synthesized audio starts playing right
-                # away; only the turn-stop frames wait for the tail-audio
-                # grace below.
-                await self.push_frame(MicStateFrame(open=False), direction)
-                self._pending_close = asyncio.ensure_future(
-                    self._emit_stop_after_grace(direction)
-                )
-            return  # mic control messages are consumed, never forwarded
-
-        # Zero audio only once fully closed -- while the close grace period
-        # is still pending, the whole point is letting the tail of the
-        # user's speech (which may arrive after the mic message, see
-        # MIC_CLOSE_AUDIO_GRACE_SECONDS) through to the STT.
-        if (
-            isinstance(frame, InputAudioRawFrame)
-            and not self._mic_open
-            and self._pending_close is None
-        ):
-            frame.audio = b"\x00" * len(frame.audio)
-            await self.push_frame(frame, direction)
-            return
-
-        if isinstance(frame, (CancelFrame, EndFrame)):
-            await self._cancel_pending_close()
-
-        await self.push_frame(frame, direction)
-
-
-class TTSOutputGateProcessor(FrameProcessor):
-    """Holds synthesized speech while the user's mic is open, releasing it
-    the moment the mic closes -- the output half of manual-mode speculative
-    pipelining (see `SentenceUserTurnStopStrategy`).
-
-    While the mic is open, upstream is already translating and synthesizing
-    each completed sentence. Letting that audio play immediately would talk
-    over the user (and feed the bot's own voice back into the open mic);
-    dropping it would waste the pre-work. So TTS frames (started/audio/
-    text/stopped) are buffered here in arrival order and flushed downstream
-    as soon as `MicStateFrame(open=False)` arrives. Frames arriving while
-    the mic is closed (the normal tail: the LAST sentence's TTS finishing
-    after mic close) pass straight through behind the flushed buffer, so
-    ordering is preserved end-to-end.
-
-    On interruption (the user re-opened the mic while buffered/playing
-    audio existed -- the only interruption source in manual mode) the
-    buffer is dropped: cancelled speech must not resurface at the next mic
-    close. `MicStateFrame`s are consumed here; everything else non-TTS
-    passes through untouched (transcript tap messages included, so the UI
-    shows text the moment each sentence is translated, ahead of its audio).
-    """
-
-    _GATED_FRAME_TYPES = (TTSStartedFrame, TTSAudioRawFrame, TTSTextFrame, TTSStoppedFrame)
-
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self._holding = False
-        self._buffer: list[tuple[Frame, FrameDirection]] = []
-
-    async def _flush(self) -> None:
-        buffered, self._buffer = self._buffer, []
-        for buffered_frame, buffered_direction in buffered:
-            await self.push_frame(buffered_frame, buffered_direction)
-
-    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
-        await super().process_frame(frame, direction)
-
-        if isinstance(frame, MicStateFrame):
-            self._holding = frame.open
-            if not frame.open:
-                await self._flush()
-            return  # consumed: the transport has no use for it
-
-        if isinstance(frame, InterruptionFrame):
-            self._buffer.clear()
-            await self.push_frame(frame, direction)
-            return
-
-        if isinstance(frame, (CancelFrame, EndFrame)):
-            self._buffer.clear()
-            await self.push_frame(frame, direction)
-            return
-
-        if self._holding and isinstance(frame, self._GATED_FRAME_TYPES):
-            self._buffer.append((frame, direction))
-            return
-
-        await self.push_frame(frame, direction)
-
-
-# Compatibility exports during the realtime package migration. The pipeline
-# itself uses these names below, while existing callers may still import them
-# from this module.
-from app.realtime.audio_gate import (  # noqa: E402
-    MIC_CLOSE_AUDIO_GRACE_SECONDS,
-    MicGateProcessor,
-    MicStateFrame,
-    TTSOutputGateProcessor,
-)
-from app.realtime.turn_detection import (  # noqa: E402
-    SEMANTIC_BUFFER_FLUSH_TIMEOUT_SECONDS,
-    MicButtonUserTurnStartStrategy,
-    SemanticBufferProcessor,
-    SentenceUserTurnStopStrategy,
-)
-
-
 def select_engine(settings: Settings) -> str:
     """Decide which engine ("cloud", "offline", or "omlx") to use for this
     run, at startup only.
