@@ -1,0 +1,101 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-3);
+  padding: var(--ds-space-4);
+  border-top: 1px solid var(--ds-color-border);
+  min-width: 0;
+}
+
+.heading {
+  margin: 0;
+  font-size: var(--ds-font-size-sm);
+  font-weight: var(--ds-font-weight-bold);
+  color: var(--ds-color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.notice {
+  margin: 0;
+  font-size: var(--ds-font-size-xs);
+  color: var(--ds-color-accent-strong);
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ds-space-1);
+  min-width: 0;
+}
+
+.rowHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  min-width: 0;
+}
+
+.rowIcon {
+  flex: none;
+  display: flex;
+  color: var(--ds-color-text-secondary);
+}
+
+.rowLabel {
+  flex: none;
+  font-size: var(--ds-font-size-sm);
+  font-weight: var(--ds-font-weight-medium);
+  color: var(--ds-color-text-primary);
+}
+
+.rowBand {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  font-size: var(--ds-font-size-xs);
+  font-weight: var(--ds-font-weight-bold);
+  color: var(--ds-color-text-secondary);
+}
+
+.gauge {
+  display: flex;
+  gap: var(--ds-space-1);
+}
+
+.segment {
+  flex: 1 1 0;
+  height: 8px;
+  min-width: 0;
+  border-radius: var(--ds-radius-sm);
+  background: var(--ds-color-neutral-subtle);
+  border: 1px solid transparent;
+}
+
+.segment[data-filled="true"] {
+  background: var(--ds-color-secondary);
+}
+
+.row[data-band="conserving"] .segment[data-filled="true"],
+.row[data-band="reserve"] .segment[data-filled="true"] {
+  background: var(--ds-color-accent);
+}
+
+.row[data-band="hibernating"] .segment[data-filled="true"] {
+  background: var(--ds-color-danger);
+}
+
+.segment[data-dashed="true"] {
+  background: transparent;
+  border-color: var(--ds-color-border);
+  border-style: dashed;
+}
+
+.description {
+  margin: 0;
+  font-size: var(--ds-font-size-xs);
+  color: var(--ds-color-text-secondary);
+}
