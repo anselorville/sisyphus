@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    sisyphus_translator_client_lib::run()
+    sisyphus_voice_agent_client_lib::run()
 }

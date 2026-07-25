@@ -1,5 +1,6 @@
-"""OpenRouter-backed equivalents of the cloud STT, translation (LLM), and TTS
-services used by app/pipeline.py.
+"""OpenRouter-backed equivalents of the cloud STT, LLM, and TTS services
+used by app/providers/ (see app/providers/transcription.py and
+app/providers/speech.py).
 
 OpenRouter is a single account/API key that fronts many third-party models
 across all three capabilities this pipeline needs -- unlike

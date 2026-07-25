@@ -1,5 +1,5 @@
 {
-  "name": "sisyphus-translator-client",
+  "name": "sisyphus-voice-agent-client",
   "private": true,
   "version": "0.1.0",
   "type": "module",

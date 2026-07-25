@@ -1,12 +1,10 @@
 import { useEffect, useState } from "react";
 import { ArrowLeft, ChevronDown, Cloud, FlaskConical, HardDrive, Server } from "lucide-react";
 import { Button } from "../../primitives/Button";
-import { LanguagePicker } from "../LanguagePicker";
 import { ServerAddressInput } from "../ServerAddressInput";
 import { EngineStatusChip, type EngineMode } from "../EngineStatusChip";
 import { LocalModelsControl } from "../LocalModelsControl";
 import { useModelProviders } from "../../../hooks/useModelProviders";
-import type { LanguageOption } from "../../../data/languages";
 import type { ConnectionState, ModelProviderMode } from "../../../hooks/useTranslatorConnection.types";
 import styles from "./SettingsScreen.module.css";
 
@@ -16,12 +14,6 @@ const ENGINE_MODE_TABS: { key: ModelProviderMode; label: string; icon: typeof Ha
 ];
 
 export interface SettingsScreenProps {
-  source: LanguageOption;
-  target: LanguageOption;
-  onSourceChange: (language: LanguageOption) => void;
-  onTargetChange: (language: LanguageOption) => void;
-  conversationMode?: "translator" | "assistant";
-  onConversationModeChange?: (mode: "translator" | "assistant") => void;
   serverAddress: string;
   onServerAddressChange: (value: string) => void;
   connectionState: ConnectionState;
@@ -33,19 +25,12 @@ export interface SettingsScreenProps {
 
 /**
  * Screen-level settings experience (replaces the old small overlay panel).
- * Language pair selection is the primary, most prominent control; engine
- * mode is a read-only status display for now (see EngineStatusChip --
- * real wiring is pending a backend endpoint); server address is tucked
+ * Engine mode is a read-only status display for now (see EngineStatusChip
+ * -- real wiring is pending a backend endpoint); server address is tucked
  * into a collapsed "Developer" section since it's a dev/debug affordance,
  * not a primary user-facing setting.
  */
 export function SettingsScreen({
-  source,
-  target,
-  onSourceChange,
-  onTargetChange,
-  conversationMode = "translator",
-  onConversationModeChange,
   serverAddress,
   onServerAddressChange,
   connectionState,
@@ -89,43 +74,6 @@ export function SettingsScreen({
       </header>
 
       <div className={styles.content}>
-        <section className={styles.group}>
-          <h2 className={styles.groupTitle}>Conversation</h2>
-          <section className={styles.section}>
-            <h3 className={styles.sectionTitle}>Language pair</h3>
-            <p className={styles.sectionHint}>
-              Translation runs both directions automatically -- pick the two languages in this conversation.
-            </p>
-            <div className={styles.pickerStack}>
-              <LanguagePicker
-                label="Your language"
-                value={source}
-                onChange={onSourceChange}
-              />
-              <LanguagePicker
-                label="Their language"
-                value={target}
-                onChange={onTargetChange}
-              />
-            </div>
-            {onConversationModeChange && (
-              <div className={styles.modeRow}>
-                <label className={styles.modeLabel}>
-                  <span className={styles.modeTitle}>Conversation mode</span>
-                  <select
-                    className={styles.modeSelect}
-                    value={conversationMode}
-                    onChange={(e) => onConversationModeChange(e.target.value as "translator" | "assistant")}
-                  >
-                    <option value="translator">Translator — bidirectional speech translation</option>
-                    <option value="assistant">Personal assistant — open-ended voice conversation</option>
-                  </select>
-                </label>
-              </div>
-            )}
-          </section>
-        </section>
-
         <section className={styles.group}>
           <h2 className={styles.groupTitle}>Infrastructure</h2>
 

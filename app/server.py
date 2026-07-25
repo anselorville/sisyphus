@@ -64,9 +64,9 @@ from app.model_settings import (
     load_model_settings,
     save_model_settings,
 )
-from app.pipeline import build_pipeline_worker, select_engine
-from app.providers import stt_provider_name, tts_provider_name
+from app.providers import select_engine, stt_provider_name, tts_provider_name
 from app.realtime.event_bridge import SidecarEventBridge
+from app.realtime.media_pipeline import build_pipeline_worker
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -489,7 +489,7 @@ async def post_model_lab_preview_text(request: dict) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         # Missing API key / unconfigured provider, etc. -- same class of
-        # error app/pipeline.py's own builders raise at pipeline-build time.
+        # error app/providers's own builders raise at pipeline-build time.
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"output_text": output_text, "timing": timing}
 

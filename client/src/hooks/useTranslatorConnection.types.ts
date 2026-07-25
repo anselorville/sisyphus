@@ -1,14 +1,5 @@
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
 
-/** Shape of the JSON returned by GET /api/status (see app/server.py). */
-export interface ServerStatus {
-  engine: "cloud" | "offline" | "omlx";
-  source_lang: string;
-  target_lang: string;
-  /** "manual": mic button owns turn boundaries; "auto": hands-free VAD turns. */
-  turn_mode?: "manual" | "auto";
-}
-
 /** One oMLX model's load state, as reported by GET /api/local-engine/status. */
 export interface LocalEngineModel {
   id: string;
@@ -194,16 +185,6 @@ export interface ModelLabVoice {
   language: string | null;
   created_at: string;
 }
-
-interface TranscriptEventBase {
-  id: string;
-  timestamp: number;
-  text: string;
-}
-
-export type TranscriptEvent =
-  | ({ kind: "original" } & TranscriptEventBase)
-  | ({ kind: "translation"; direction?: string } & TranscriptEventBase);
 
 /** Result from a full chain preview (STT → LLM → TTS). */
 export interface ChainPreviewResult {

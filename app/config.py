@@ -14,11 +14,12 @@ load_dotenv()
 
 # Cloud API keys are intentionally NOT validated here at module/settings-load
 # time. Whether they're required depends entirely on which engine ends up
-# selected (see `ENGINE` below and `app/pipeline.py`'s `select_engine()`) --
-# a local-only or oMLX-only user should be able to run this server with zero
-# cloud keys set. The cloud-service builder (`_build_cloud_services` in
-# app/pipeline.py) is responsible for validating these are present, and only
-# at the point the cloud engine is actually about to be built.
+# selected (see `ENGINE` below and `app/providers/transcription.py`'s
+# `select_engine()`) -- a local-only or oMLX-only user should be able to run
+# this server with zero cloud keys set. Each provider's own cloud-service
+# builder (`app/providers/transcription.py`'s/`app/providers/speech.py`'s
+# `_build_cloud_*`) is responsible for validating these are present, and
+# only at the point the cloud engine is actually about to be built.
 CLOUD_REQUIRED_KEYS = (
     "DEEPGRAM_API_KEY",
     "ASSEMBLYAI_API_KEY",
@@ -36,7 +37,7 @@ class Settings:
     """Resolved runtime configuration for the voice-agent media plane."""
 
     # Cloud credentials: may be empty strings if unset -- only validated (in
-    # app/pipeline.py) if/when the cloud engine path is actually selected.
+    # app/providers/) if/when the cloud engine path is actually selected.
     anthropic_api_key: str
     deepgram_api_key: str
     assemblyai_api_key: str
@@ -211,10 +212,10 @@ def load_settings() -> Settings:
 
     Note: cloud API keys (ANTHROPIC_API_KEY/DEEPGRAM_API_KEY/CARTESIA_API_KEY)
     are deliberately NOT validated here -- they're read as-is (possibly
-    empty strings) and only checked for presence in app/pipeline.py's
-    cloud-service builder, at the point the cloud engine is actually
-    selected and about to be built. This lets local-only/oMLX-only users run
-    the server with zero cloud keys configured.
+    empty strings) and only checked for presence in each provider's own
+    cloud-service builder (app/providers/), at the point the cloud engine is
+    actually selected and about to be built. This lets local-only/oMLX-only
+    users run the server with zero cloud keys configured.
 
     Raises:
         RuntimeError: if `WEBRTC_PORT` isn't a valid integer, or if `ENGINE`

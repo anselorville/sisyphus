@@ -1,11 +1,14 @@
-"""Local/offline equivalents of the cloud STT, translation (LLM), and TTS
-services used by app/pipeline.py.
+"""Local/offline equivalents of the cloud STT and TTS services used by
+app/providers/ (see app/providers/transcription.py and app/providers/speech.py).
 
-These mirror the shape of the cloud service construction in app/pipeline.py
-exactly -- same constructor pattern, same role in the pipeline -- so that
-`build_pipeline()` can swap between cloud and local services without
-changing the pipeline's shape (VAD -> STT -> LLM -> TTS stays identical;
-only the concrete service classes differ).
+These mirror the shape of the cloud service construction in app/providers/
+exactly -- same constructor pattern, same role in the media pipeline -- so
+that `app.realtime.media_pipeline.build_media_pipeline()` can swap between
+cloud and local services without changing the pipeline's shape. The media
+pipeline itself is STT -> TTS only (no LLM/reasoning step runs inside
+Pipecat -- that lives in the TypeScript agent-runtime sidecar); `build_local_llm`
+below is kept as offline-completion infrastructure for callers that need a
+standalone local LLM call, but is not currently wired into the media pipeline.
 
 Stack used (see README.md for the operator-facing setup instructions):
 
@@ -14,11 +17,10 @@ Stack used (see README.md for the operator-facing setup instructions):
   No network access or external process required -- the model is downloaded
   once (from Hugging Face) and cached locally, then loaded directly into
   this process.
-- Translation (LLM): `pipecat.services.ollama.llm.OLLamaLLMService`, which
-  talks to a locally-running Ollama server over its OpenAI-compatible HTTP
-  API. Ollama itself must be installed and running separately, with a small
-  instruct model pulled (default: `qwen2.5:1.5b`). This keeps the exact same
-  prompt-based translation-only approach as the cloud Anthropic path.
+- LLM: `pipecat.services.ollama.llm.OLLamaLLMService`, which talks to a
+  locally-running Ollama server over its OpenAI-compatible HTTP API. Ollama
+  itself must be installed and running separately, with a small instruct
+  model pulled (default: `qwen2.5:1.5b`).
 - TTS: `pipecat.services.piper.tts.PiperTTSService`, which wraps the Piper
   TTS engine in-process (no separate server needed). The voice model is
   downloaded once and cached locally.
@@ -33,11 +35,12 @@ unconditionally attempts `import mlx_whisper` at module-import time on any
 Darwin/arm64 host (e.g. an Apple Silicon dev machine), regardless of which
 Whisper backend you actually want, and raises ImportError if the optional
 `mlx-whisper` extra isn't installed. Deferring the import means
-`import app.local_services` (and transitively `import app.pipeline`)
-succeeds on every platform -- including a Mac dev machine without
-`mlx-whisper` installed -- and the local stack only needs to actually be
-importable on the platform where it's actually used (the Pi/Linux target,
-where this Darwin-only branch never executes).
+`import app.local_services` (and transitively `import
+app.providers.transcription`, which imports this module to build the
+offline STT service) succeeds on every platform -- including a Mac dev
+machine without `mlx-whisper` installed -- and the local stack only needs
+to actually be importable on the platform where it's actually used (the
+Pi/Linux target, where this Darwin-only branch never executes).
 """
 
 from __future__ import annotations
@@ -58,8 +61,7 @@ def build_local_stt(settings: Settings, language_hint: str | None = None) -> "Wh
     WhisperSTTService).
 
     Language is left unset (auto-detect) by default, to match the cloud
-    Deepgram path's behavior in app/pipeline.py, since the translation
-    prompt downstream already handles whichever source language shows up.
+    Deepgram path's behavior (see app/providers/transcription.py).
     `language_hint` (from `Settings.stt.language_hint`, the Model Lab
     feature -- see app/model_settings.py) forces a specific language when
     given and recognized; an unrecognized code is ignored rather than
@@ -87,9 +89,8 @@ def build_local_llm(
     temperature: float | None = None,
     top_p: float | None = None,
 ) -> "OLLamaLLMService":
-    """Construct the local/offline translation LLM service (Ollama via
-    Pipecat's OLLamaLLMService, using the same translation-only system
-    prompt as the cloud Anthropic path).
+    """Construct a local/offline LLM completion service (Ollama via
+    Pipecat's OLLamaLLMService) with the given system prompt.
 
     Requires a locally-running Ollama server (default
     http://localhost:11434) with `settings.ollama_model` already pulled.
@@ -127,9 +128,8 @@ def build_local_tts(settings: Settings) -> "PiperTTSService":
     on first use if not already present there.
 
     No tone/expressiveness wiring here (unlike `MlxTTSService.run_tts` in
-    app/mlx_services.py, or the Cartesia `EMOTION_TAG()` wrapper in
-    app/pipeline.py's `ToneAwareCartesiaTTSService`), and this is a
-    deliberate "leave it out" rather than an oversight: checked Pipecat's
+    app/mlx_services.py, which does accept an `instructions` field), and this
+    is a deliberate "leave it out" rather than an oversight: checked Pipecat's
     `pipecat.services.piper.tts.PiperTTSService`/`PiperHttpTTSService`
     (both `run_tts` implementations) and Piper's own `PiperVoice.synthesize`
     call -- neither the Pipecat wrapper nor Piper's underlying request/API
@@ -137,12 +137,11 @@ def build_local_tts(settings: Settings) -> "PiperTTSService":
     the in-process binding) exposes any style/emotion/instructions
     parameter at all. Piper is a classical neural TTS model with no
     expressiveness control surface in this library, unlike VoxCPM2's
-    `instructions` field (oMLX) or Cartesia's `<emotion>` tag. This path is
-    also the lowest priority of the three per the task's own framing (the
-    Pi-portable fallback, not where most live testing happens), so rather
-    than fabricate an unverifiable mechanism, the tone hint is simply
-    dropped on this path -- offline/Piper TTS stays exactly as flat as it
-    was before this feature.
+    `instructions` field (oMLX). This path is also the lowest priority of
+    the three per the task's own framing (the Pi-portable fallback, not
+    where most live testing happens), so rather than fabricate an
+    unverifiable mechanism, the tone hint is simply dropped on this path --
+    offline/Piper TTS stays exactly as flat as it was before this feature.
     """
     from pipecat.services.piper.tts import PiperTTSService
 

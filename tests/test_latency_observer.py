@@ -5,7 +5,7 @@ from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
 
 from app.latency import build_latency_observer
-from app.pipeline import build_pipeline_worker
+from app.realtime.media_pipeline import build_pipeline_worker
 
 
 class LatencyObserverTests(unittest.IsolatedAsyncioTestCase):
@@ -30,8 +30,8 @@ class LatencyObserverTests(unittest.IsolatedAsyncioTestCase):
     def test_pipeline_worker_includes_configured_latency_observer(self) -> None:
         sentinel = UserBotLatencyObserver()
         with (
-            patch("app.pipeline.build_media_pipeline", return_value=(Pipeline([]), object())),
-            patch("app.pipeline.build_latency_observer", return_value=sentinel),
+            patch("app.realtime.media_pipeline.build_media_pipeline", return_value=(Pipeline([]), object())),
+            patch("app.realtime.media_pipeline.build_latency_observer", return_value=sentinel),
         ):
             worker = build_pipeline_worker(object(), object())
 

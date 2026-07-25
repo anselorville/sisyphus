@@ -91,7 +91,7 @@ export function ChainTestPanel({ adapters, buildValues, previewChain }: ChainTes
     <div className={styles.testPanel}>
       <h3 className={styles.testTitle}>Full chain</h3>
       <p className={styles.fieldHelp}>
-        Records speech, then runs STT → translation → speech with your current draft settings — the same path a live call takes.
+        Records speech, then runs STT → LLM → speech with your current draft settings — the same path a live call takes.
       </p>
 
       <div className={styles.recordingControls}>
@@ -162,7 +162,7 @@ export function ChainTestPanel({ adapters, buildValues, previewChain }: ChainTes
 
           <div className={styles.chainResultSection}>
             <div className={styles.chainResultHeader}>
-              <p className={styles.testResultLabel}>Translated</p>
+              <p className={styles.testResultLabel}>Response</p>
               {result.direction && <Badge tone="neutral">{result.direction}</Badge>}
             </div>
             <p className={styles.testResultText}>{result.translatedText}</p>

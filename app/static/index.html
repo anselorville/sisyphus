@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Sisyphus Translator</title>
+<title>Sisyphus Voice Agent</title>
 <style>
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -71,7 +71,7 @@
 </style>
 </head>
 <body>
-  <h1>Sisyphus Translator</h1>
+  <h1>Sisyphus Voice Agent</h1>
   <div id="controls">
     <button id="connectBtn">Connect</button>
     <span id="status" class="disconnected">disconnected</span>
@@ -100,13 +100,13 @@
       entry.className = `entry ${kind}`;
       const label = document.createElement("div");
       label.className = "label";
-      label.textContent = kind === "original" ? "Heard" : "Translated";
-      // Direction indicator (e.g. "ZH -> FR") -- only set on the
-      // "translation" entry, since that's when the server has determined
-      // which of the two configured languages was auto-detected and which
-      // it translated into. See the `direction` field on the "transcript"
-      // data-channel message in app/pipeline.py (TranslationDirectionStripper
-      // / TranscriptTapProcessor).
+      label.textContent = kind === "original" ? "Heard" : "Response";
+      // Optional direction indicator (e.g. "ZH -> FR"), if this build's
+      // server ever tags a "transcript" data-channel message with a
+      // `direction` field. Nothing in the current media plane populates
+      // this -- see app/realtime/transcription.py's TranscriptEventProcessor
+      // for the actual event shape -- so this is a no-op display hook kept
+      // for forward compatibility rather than a live feature.
       if (direction) {
         const dirEl = document.createElement("span");
         dirEl.className = "direction";

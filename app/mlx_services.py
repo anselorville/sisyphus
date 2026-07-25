@@ -1,11 +1,11 @@
-"""oMLX-backed equivalents of the cloud/local STT, translation (LLM), and TTS
-services used by app/pipeline.py.
+"""oMLX-backed equivalents of the cloud/local STT, LLM, and TTS services
+used by app/providers/ (see app/providers/transcription.py and
+app/providers/speech.py).
 
 These mirror the shape of the cloud/local service construction in
-app/pipeline.py and app/local_services.py exactly -- same constructor
-pattern, same role in the pipeline -- so that `build_pipeline()` can swap in
-the oMLX trio without changing the pipeline's shape (VAD -> STT -> LLM -> TTS
-stays identical; only the concrete service classes differ).
+app/providers/ and app/local_services.py exactly -- same constructor
+pattern, same role in the media pipeline -- so the STT/TTS builders can
+swap in the oMLX pair without changing the pipeline's shape.
 
 **This engine is NOT Pi-portable.** oMLX is built on Apple's MLX framework,
 which only runs on Apple Silicon (it has no CPU/Linux/Raspberry Pi backend).

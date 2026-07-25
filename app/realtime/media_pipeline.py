@@ -5,11 +5,13 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from pipecat.pipeline.pipeline import Pipeline
+from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 from app.config import Settings
+from app.latency import build_latency_observer
 from app.providers import build_stt, build_tts
 
 from .audio_gate import MicGateProcessor, TTSOutputGateProcessor
@@ -70,3 +72,26 @@ def build_media_pipeline(
         "transcript_events": transcript_events,
         "speech_queue": speech_queue,
     }
+
+
+def build_pipeline_worker(
+    webrtc_connection: SmallWebRTCConnection,
+    settings: Settings,
+    agent_link: object | None = None,
+) -> PipelineWorker:
+    """Build the media pipeline for one connection and wrap it in a
+    PipelineWorker with the configured latency observer attached.
+
+    This is the sole entry point ``app/server.py`` needs per connection --
+    it used to be provided by the now-deleted ``app/pipeline.py``
+    compatibility shim, which just forwarded to ``build_media_pipeline()``
+    above and attached the same observer; that indirection served no purpose
+    once every caller had migrated off the old module, so the logic now
+    lives directly alongside the pipeline it wraps.
+    """
+    pipeline, _resources = build_media_pipeline(webrtc_connection, settings, agent_link)
+    return PipelineWorker(
+        pipeline,
+        observers=[build_latency_observer()],
+        params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
+    )
