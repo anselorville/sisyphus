@@ -47,13 +47,20 @@ class FakeSidecarServer:
         self._connections.append(connection)
         try:
             async for raw in connection:
-                envelope = msgspec.json.decode(raw)
-                if not isinstance(envelope, dict) or envelope.get("kind") != "event":
+                # Wire shape is a *bare* RealtimeEvent (no envelope), text
+                # frame -- matches the real sidecar's actual wire contract
+                # (agent-runtime/src/protocol/schema.ts's decodeEvent/
+                # encodeEvent) and app/realtime/event_bridge.py's
+                # `_transmit`, which this fake server stands in for.
+                try:
+                    event = msgspec.convert(msgspec.json.decode(raw), type=RealtimeEvent)
+                except (msgspec.DecodeError, msgspec.ValidationError, TypeError):
                     continue
-                event = msgspec.convert(envelope["event"], type=RealtimeEvent)
                 self.received.append(event)
                 if not self._suppress_ack:
-                    await connection.send(msgspec.json.encode({"kind": "ack", "sequence": event.sequence}))
+                    await connection.send(
+                        msgspec.json.encode({"kind": "ack", "sequence": event.sequence}), text=True
+                    )
         except ConnectionClosed:
             pass
 
@@ -81,10 +88,14 @@ class FakeSidecarServer:
 
     async def send_event_to_client(self, event: RealtimeEvent) -> None:
         """Push a sidecar-originated (inbound, from the bridge's point of
-        view) event down to the currently connected client."""
+        view) event down to the currently connected client.
+
+        Bare RealtimeEvent, no envelope, text frame -- see `_handle`'s
+        comment for why.
+        """
         await self._wait_until(lambda: len(self._connections) >= 1)
         connection = self._connections[-1]
-        await connection.send(msgspec.json.encode({"kind": "event", "event": event}))
+        await connection.send(msgspec.json.encode(event), text=True)
 
     async def close(self) -> None:
         if self._server is not None:

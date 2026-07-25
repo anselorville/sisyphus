@@ -68,6 +68,28 @@ export interface CreateTaskInput {
   readonly metadata?: Record<string, unknown>;
 }
 
+/**
+ * Reserved `metadata` key: when a caller sets `metadata.sourceEventId` on
+ * create(), create() becomes idempotent for that value -- a second create()
+ * call carrying the same sourceEventId returns the already-existing task
+ * instead of making a duplicate. This exists specifically to make crash
+ * recovery safe: RuntimeWebSocketServer's own inbound-event dedup
+ * (../transport/websocket-server.ts's seenInboundEventIds) lives only in
+ * memory for one connection and does not survive a reconnect, so a durable
+ * event whose ack was lost to a crash can arrive at a fresh connection and
+ * reach create() a second time -- exactly the case
+ * ../tasks/inbound-event-router.ts's `metadata: { sourceEventId: event.event_id }`
+ * is written to guard against. Checked/populated by both create() and
+ * recoverPending(), so the guarantee holds across a restart, not just within
+ * one process lifetime.
+ */
+const IDEMPOTENCY_METADATA_KEY = "sourceEventId";
+
+function readIdempotencyKey(metadata: Record<string, unknown>): string | undefined {
+  const value = metadata[IDEMPOTENCY_METADATA_KEY];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
 export class TaskNotFoundError extends Error {
   constructor(taskId: string) {
     super(`no task found with id "${taskId}"`);
@@ -103,6 +125,8 @@ export class TaskNest {
   private readonly maxActiveTasks: number;
   private readonly now: () => Date;
   private readonly tasks = new Map<string, TaskRecord>();
+  /** sourceEventId (see IDEMPOTENCY_METADATA_KEY) -> taskId, for every task currently held in memory. Kept in lockstep with `tasks`: populated by create()/recoverPending(), pruned by evictOldestTerminal() -- never grows past `tasks`' own size. */
+  private readonly byIdempotencyKey = new Map<string, string>();
 
   constructor(options: TaskNestOptions) {
     this.db = options.db;
@@ -120,8 +144,25 @@ export class TaskNest {
     return this.tasks.get(taskId);
   }
 
-  /** Creates a new task in `pending` status, durably persisted through the DB Worker before returning. */
+  /**
+   * Creates a new task in `pending` status, durably persisted through the DB
+   * Worker before returning. Idempotent when `input.metadata.sourceEventId`
+   * is set (see IDEMPOTENCY_METADATA_KEY): a call carrying a sourceEventId
+   * that already maps to a task currently held in memory returns that
+   * existing record unchanged -- no new task, no capacity consumed, no DB
+   * write -- rather than creating a duplicate.
+   */
   async create(input: CreateTaskInput): Promise<TaskRecord> {
+    const metadata = input.metadata ?? {};
+    const idempotencyKey = readIdempotencyKey(metadata);
+    if (idempotencyKey !== undefined) {
+      const existingId = this.byIdempotencyKey.get(idempotencyKey);
+      const existing = existingId !== undefined ? this.tasks.get(existingId) : undefined;
+      if (existing) {
+        return existing;
+      }
+    }
+
     this.reserveCapacity();
 
     const timestamp = this.now().toISOString();
@@ -132,13 +173,16 @@ export class TaskNest {
       status: "pending",
       roleId: null,
       parentTaskId: input.parentTaskId ?? null,
-      metadata: input.metadata ?? {},
+      metadata,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
 
     // Synchronous, before any `await`: see the module doc comment.
     this.tasks.set(record.id, record);
+    if (idempotencyKey !== undefined) {
+      this.byIdempotencyKey.set(idempotencyKey, record.id);
+    }
 
     await this.db.request({
       type: "task.insert",
@@ -185,6 +229,10 @@ export class TaskNest {
       }
       const record = fromRow(row);
       this.tasks.set(record.id, record);
+      const idempotencyKey = readIdempotencyKey(record.metadata);
+      if (idempotencyKey !== undefined) {
+        this.byIdempotencyKey.set(idempotencyKey, record.id);
+      }
       recovered.push(record);
     }
 
@@ -239,10 +287,19 @@ export class TaskNest {
     for (const [id, task] of this.tasks) {
       if (TERMINAL_STATUSES.has(task.status)) {
         this.tasks.delete(id);
+        this.removeIdempotencyIndexFor(task);
         return true;
       }
     }
     return false;
+  }
+
+  /** Keeps byIdempotencyKey in lockstep with an evicted task -- never left pointing at an id no longer in `tasks`. */
+  private removeIdempotencyIndexFor(task: TaskRecord): void {
+    const idempotencyKey = readIdempotencyKey(task.metadata);
+    if (idempotencyKey !== undefined && this.byIdempotencyKey.get(idempotencyKey) === task.id) {
+      this.byIdempotencyKey.delete(idempotencyKey);
+    }
   }
 }
 

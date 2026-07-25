@@ -23,6 +23,10 @@ dist-ssr
 storybook-static
 *.local
 
+# agent-runtime sidecar's default local SQLite state (src/config.ts's
+# DEFAULT_DB_PATH) -- generated runtime data, not source.
+agent-runtime/data/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

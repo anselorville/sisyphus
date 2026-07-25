@@ -167,6 +167,84 @@ describe("recoverPending", () => {
   });
 });
 
+describe("idempotent create via metadata.sourceEventId", () => {
+  it("returns the existing task instead of creating a duplicate for a repeated sourceEventId", async () => {
+    const db = await openDb();
+    const nest = new TaskNest({ db });
+
+    const first = await nest.create({ goal: "send the report", interactionId: "i1", metadata: { sourceEventId: "evt-1" } });
+    const second = await nest.create({ goal: "send the report", interactionId: "i1", metadata: { sourceEventId: "evt-1" } });
+
+    expect(second.id).toBe(first.id);
+    expect(nest.size).toBe(1);
+  });
+
+  it("still creates distinct tasks when sourceEventId differs or is absent", async () => {
+    const db = await openDb();
+    const nest = new TaskNest({ db });
+
+    await nest.create({ goal: "a", interactionId: "i1", metadata: { sourceEventId: "evt-a" } });
+    await nest.create({ goal: "b", interactionId: "i1", metadata: { sourceEventId: "evt-b" } });
+    await nest.create({ goal: "c", interactionId: "i1" });
+    await nest.create({ goal: "d", interactionId: "i1" });
+
+    expect(nest.size).toBe(4);
+  });
+
+  it("recognizes a sourceEventId recovered from a prior process, not just one created this process lifetime", async () => {
+    const dbPath = join(tempDir, "idempotent-recover.sqlite3");
+
+    const firstProcess = await openDb(dbPath);
+    const firstNest = new TaskNest({ db: firstProcess });
+    const original = await firstNest.create({
+      goal: "email me a summary",
+      interactionId: "conv-crash",
+      metadata: { sourceEventId: "evt-crash-1" },
+    });
+    await firstProcess.close();
+
+    // Simulated restart: brand-new TaskNest, same db file, event redelivered
+    // after recoverPending() -- exactly the crash-recovery race this
+    // mechanism exists to close (see IDEMPOTENCY_METADATA_KEY's doc comment).
+    const secondProcess = await openDb(dbPath);
+    const secondNest = new TaskNest({ db: secondProcess });
+    await secondNest.recoverPending();
+
+    const redelivered = await secondNest.create({
+      goal: "email me a summary",
+      interactionId: "conv-crash",
+      metadata: { sourceEventId: "evt-crash-1" },
+    });
+
+    expect(redelivered.id).toBe(original.id);
+    expect(secondNest.size).toBe(1);
+  });
+
+  it("does not block a fresh task once the earlier task with the same sourceEventId has been evicted", async () => {
+    const db = await openDb();
+    const nest = new TaskNest({ db, maxActiveTasks: 2 });
+
+    const first = await nest.create({ goal: "first", interactionId: "i1", metadata: { sourceEventId: "evt-1" } });
+    await nest.transition(first.id, "completed");
+    await nest.create({ goal: "second", interactionId: "i1" });
+    // Hits capacity (size 2 >= cap 2): evicts `first` (the only terminal
+    // task) to make room -- which also clears "evt-1" from
+    // byIdempotencyKey (see TaskNest.removeIdempotencyIndexFor).
+    const third = await nest.create({ goal: "third", interactionId: "i1" });
+    expect(nest.get(first.id)).toBeUndefined(); // confirms first really was evicted
+
+    await nest.transition(third.id, "completed");
+    // Reusing "evt-1" now must create a genuinely new task -- proving the
+    // stale index entry was actually cleared, not just coincidentally safe
+    // because of the `tasks.get()` miss inside create()'s idempotency check.
+    const fourth = await nest.create({ goal: "fourth", interactionId: "i1", metadata: { sourceEventId: "evt-1" } });
+
+    expect(fourth.id).not.toBe(first.id);
+    expect(fourth.goal).toBe("fourth");
+    expect(nest.size).toBe(2);
+  });
+});
+
 describe("capacity cap", () => {
   it("evicts the oldest terminal-state task to admit a new one when full", async () => {
     const db = await openDb();

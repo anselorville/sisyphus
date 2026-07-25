@@ -17,6 +17,7 @@ or, after `uv sync`:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -104,22 +105,79 @@ async def _start_event_bridge(settings: Settings) -> SidecarEventBridge | None:
     return bridge
 
 
+async def _cache_ecology_and_food_state(app: FastAPI, bridge: SidecarEventBridge) -> None:
+    """Background task: mirrors the sidecar's last-known ecology/food state
+    onto `app.state` so `GET /api/agent-runtime/status` never has to reach
+    across the bridge (or block) to answer.
+
+    `ecology.state.changed` and `budget.updated` are the only two
+    RealtimeEvent types that ever carry a food-state payload -- see
+    agent-runtime/src/economy/types.ts's `FoodState` ("prosperous" |
+    "conserving" | "reserve" | "hibernating") and
+    agent-runtime/src/voice/voice-herald.ts's own handling of those same two
+    event types (`event.payload.state`). Every other inbound event type is
+    ignored here -- this is a small last-known-value cache for the status
+    endpoint, never a general event log or a history (deliberately not
+    persisted; "unknown" again after a restart is correct, since that's
+    genuinely the true state of our knowledge until the sidecar says
+    otherwise again).
+
+    Runs for as long as `bridge.events()` keeps yielding. That async
+    generator returns (does not raise) once `bridge.close()` releases every
+    subscription -- see event_bridge.py's `events()`/`close()` -- so this
+    task ends on its own during a normal shutdown; `lifespan()` cancels it
+    defensively anyway in case that generator is ever left running for some
+    other reason.
+    """
+    async for event in bridge.events():
+        if event.type == "ecology.state.changed":
+            state = event.payload.get("state")
+            if isinstance(state, str):
+                app.state.ecology_status = state
+        elif event.type == "budget.updated":
+            state = event.payload.get("state")
+            if isinstance(state, str):
+                app.state.food_status = state
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.event_bridge = await _start_event_bridge(_startup_settings)
+    app.state.ecology_status = "unknown"
+    app.state.food_status = "unknown"
+
+    ecology_food_task: asyncio.Task[None] | None = None
+    if app.state.event_bridge is not None:
+        ecology_food_task = asyncio.create_task(
+            _cache_ecology_and_food_state(app, app.state.event_bridge),
+            name="ecology-food-cache",
+        )
+
     yield
+
     coros = [pc.disconnect() for pc in pcs_map.values()]
     await asyncio.gather(*coros, return_exceptions=True)
     pcs_map.clear()
     # SidecarEventBridge.close() itself does the "stop accepting new work,
     # then flush durable events, then close the connection" sequence -- see
-    # its docstring.
+    # its docstring. Closing it releases the `events()` subscription the
+    # ecology/food cache task above is iterating, which makes that task's
+    # `async for` loop return on its own (see its own docstring) -- the
+    # explicit cancel below is a defensive backstop, not the primary way
+    # this task is expected to end.
     if app.state.event_bridge is not None:
         await app.state.event_bridge.close()
+    if ecology_food_task is not None:
+        if not ecology_food_task.done():
+            ecology_food_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await ecology_food_task
 
 
 app = FastAPI(lifespan=lifespan)
 app.state.event_bridge = None
+app.state.ecology_status = "unknown"
+app.state.food_status = "unknown"
 # The client is always a separate process/origin from this server (Tauri
 # webview or Vite dev server talking to the Python backend over HTTP), never
 # same-origin, so CORS must be open for the API to be reachable at all.
@@ -161,6 +219,55 @@ async def status() -> dict[str, str]:
         "stt_provider": stt_provider_name(_startup_settings),
         "tts_provider": tts_provider_name(_startup_settings),
         "turn_mode": _startup_settings.turn_mode,
+    }
+
+
+@app.get("/api/agent-runtime/status")
+async def agent_runtime_status() -> dict:
+    """Combined health snapshot: the Pipecat/WebRTC media plane (this
+    process, always answerable about itself) plus whatever this process
+    currently knows about the TypeScript agent-runtime sidecar.
+
+    Four top-level keys (a superset-safe shape -- callers should only rely
+    on keys they know about; more may be added later without breaking
+    anyone):
+
+    - "media": this process's own media-plane health. Reuses the same
+      provider/engine resolution as GET /api/status. "status" is always
+      "ok" here -- if this handler is running at all, the media plane's
+      host process is up; WebRTC/STT/TTS liveness genuinely just *is*
+      "this process is alive and serving", nothing more, per this
+      project's standing constraint that the media plane must keep
+      working regardless of the sidecar's state.
+    - "sidecar": whether `app.state.event_bridge` was ever constructed at
+      startup ("configured" -- False only if construction itself raised,
+      see `_start_event_bridge`) and whether it currently holds a live
+      connection ("connected", `SidecarEventBridge.is_connected`). Both
+      can be False (sidecar never reachable) with the media plane still
+      fully working.
+    - "ecology"/"food": the last FoodState band ("prosperous" |
+      "conserving" | "reserve" | "hibernating") the sidecar has ever
+      reported over `ecology.state.changed`/`budget.updated` events,
+      cached by the background task `lifespan()` starts alongside the
+      bridge (see `_cache_ecology_and_food_state`). "unknown" until the
+      first such event ever arrives -- there is no way for this process
+      to know either value before the sidecar has said so at least once.
+    """
+    bridge = app.state.event_bridge
+    return {
+        "media": {
+            "status": "ok",
+            "engine": _resolved_engine,
+            "stt_provider": stt_provider_name(_startup_settings),
+            "tts_provider": tts_provider_name(_startup_settings),
+            "active_connections": len(pcs_map),
+        },
+        "sidecar": {
+            "configured": bridge is not None,
+            "connected": bool(bridge is not None and bridge.is_connected),
+        },
+        "ecology": getattr(app.state, "ecology_status", "unknown"),
+        "food": getattr(app.state, "food_status", "unknown"),
     }
 
 

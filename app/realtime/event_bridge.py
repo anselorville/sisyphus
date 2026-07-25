@@ -47,9 +47,11 @@ from .queueing import BoundedEventQueue, EventPriority, QueueClosed
 # room for that envelope).
 MAX_EVENT_BYTES = 64 * 1024
 
-# websockets' `max_size` bounds the whole wire frame (envelope + event), so it
-# needs headroom above MAX_EVENT_BYTES for the `{"kind":"event","event":...}`
-# wrapper; 4KiB is generous for that fixed overhead.
+# websockets' `max_size` bounds the whole wire frame. Outbound event frames
+# are a bare RealtimeEvent (see `_transmit`) with no extra wrapper, so this
+# ceiling could equal MAX_EVENT_BYTES exactly -- the 4KiB headroom is kept
+# anyway as slack for the small `{"kind":"ack",...}` control frames (see
+# `_send_ack`) and any other unforeseen small non-event frame.
 _MAX_WIRE_FRAME_BYTES = MAX_EVENT_BYTES + 4096
 
 _RECONNECT_INITIAL_BACKOFF_SECONDS = 0.2
@@ -159,6 +161,19 @@ class SidecarEventBridge:
     def queue_depth(self) -> int:
         """Current depth of the local outbound queue (see `_queue_depth`)."""
         return _queue_depth(self._outbound)
+
+    @property
+    def is_connected(self) -> bool:
+        """Whether the bridge currently holds a live connection to the sidecar.
+
+        Mirrors the same state the sender awaits on (`_connection_ready`)
+        before transmitting -- never blocks, never touches the network,
+        just reflects the receiver task's current view of the connection.
+        Used by `GET /api/agent-runtime/status` (app/server.py) to report
+        sidecar connectivity, and by tests that need to wait for a
+        (re)connection instead of guessing with a fixed sleep.
+        """
+        return self._connection is not None
 
     async def start(self) -> None:
         """Start the sender/receiver tasks. Never blocks on the sidecar
@@ -290,12 +305,44 @@ class SidecarEventBridge:
                 self._remember_pending(event)
 
     async def _transmit(self, connection: ClientConnection, event: RealtimeEvent) -> None:
+        # Wire shape is a *bare* RealtimeEvent -- no envelope -- per
+        # .proj-init/04-...software-design.md section 10.3's own worked
+        # example, and matching what the TypeScript sidecar's
+        # decodeEvent()/encodeEvent() (agent-runtime/src/protocol/schema.ts)
+        # actually parse/produce: `decodeEvent` requires event_id/sequence/
+        # source/type/timestamp/payload as *top-level* properties, and
+        # rejects (ProtocolValidationError) anything wrapped in an outer
+        # object. `encode_event` (app/realtime/events.py) already produces
+        # exactly this shape -- reuse it rather than re-encoding by hand.
+        #
+        # `text=True` is equally load-bearing, not cosmetic: `encode_event`
+        # (like `msgspec.json.encode`) returns `bytes`, and websockets' own
+        # `send()` sends a bytes-like object as a *binary* WebSocket frame
+        # by default (see its docstring). RuntimeWebSocketServer treats
+        # every binary frame as raw audio and silently drops it, unacked,
+        # before ever reaching JSON decoding -- audio must never be
+        # mistakable for an event frame there. Passing `text=True` tells
+        # websockets this bytes payload is already UTF-8 JSON and should go
+        # out as a *text* frame instead, matching the sidecar's own
+        # `encodeEvent()` (which sends a JS string, i.e. also a text frame).
+        #
+        # Both of these were verified against a REAL `node dist/index.js`
+        # subprocess while building this task's crash-recovery test --
+        # without either fix, every event sent through a real (non-fake)
+        # sidecar was silently discarded and never acked. Neither the
+        # sidecar's own in-process tests (agent-runtime/test/integration/
+        # recovery.test.ts drives it with a raw `ws` client sending a JS
+        # string, never this bridge) nor this bridge's own tests (the
+        # local, in-repo FakeSidecarServer in tests/conftest.py, which
+        # `msgspec.json.decode()`s whatever it's given regardless of the
+        # old envelope shape or binary/text framing) ever exercised this
+        # exact cross-language pairing, so this never surfaced until now.
         async with self._send_lock:
-            await connection.send(msgspec.json.encode({"kind": "event", "event": event}))
+            await connection.send(encode_event(event), text=True)
 
     async def _send_ack(self, connection: ClientConnection, sequence: int) -> None:
         async with self._send_lock:
-            await connection.send(msgspec.json.encode({"kind": "ack", "sequence": sequence}))
+            await connection.send(msgspec.json.encode({"kind": "ack", "sequence": sequence}), text=True)
 
     async def _resend_pending(self, connection: ClientConnection) -> None:
         for event in list(self._pending_acks.values()):
@@ -340,29 +387,33 @@ class SidecarEventBridge:
             backoff = min(backoff * 2, _RECONNECT_MAX_BACKOFF_SECONDS)
 
     async def _handle_wire_message(self, connection: ClientConnection, raw: str | bytes) -> None:
+        """Dispatches one inbound wire frame: either the small `{"kind":
+        "ack", "sequence": ...}` control frame (see `_send_ack`), or a bare
+        `RealtimeEvent` -- no envelope -- the sidecar pushes to us (matching
+        RuntimeWebSocketServer's own outbound shape, `encodeEvent()`; see
+        `_transmit`'s docstring for why there is no `{"kind": "event", ...}`
+        wrapper here). A `"kind"` field is exactly how the two are told
+        apart: it is never present on a RealtimeEvent (see
+        app/realtime/events.py's struct definition).
+        """
         try:
-            envelope = msgspec.json.decode(raw)
+            decoded = msgspec.json.decode(raw)
         except msgspec.DecodeError:
             logger.warning("sidecar bridge received a malformed frame; dropping")
             return
 
-        kind = envelope.get("kind") if isinstance(envelope, dict) else None
-        if kind == "ack":
-            sequence = envelope.get("sequence")
+        if isinstance(decoded, dict) and decoded.get("kind") == "ack":
+            sequence = decoded.get("sequence")
             if isinstance(sequence, int):
                 self._pending_acks.pop(sequence, None)
             return
 
-        if kind == "event":
-            try:
-                event = msgspec.convert(envelope["event"], type=RealtimeEvent)
-            except (msgspec.ValidationError, KeyError, TypeError):
-                logger.warning("sidecar bridge received a malformed event; dropping")
-                return
-            await self._handle_inbound_event(connection, event)
+        try:
+            event = msgspec.convert(decoded, type=RealtimeEvent)
+        except (msgspec.ValidationError, TypeError):
+            logger.warning("sidecar bridge received a malformed event; dropping")
             return
-
-        logger.warning(f"sidecar bridge received an unknown frame kind: {kind!r}")
+        await self._handle_inbound_event(connection, event)
 
     async def _handle_inbound_event(self, connection: ClientConnection, event: RealtimeEvent) -> None:
         if event.sequence not in self._seen_inbound_sequences:
