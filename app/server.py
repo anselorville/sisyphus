@@ -65,6 +65,7 @@ from app.model_settings import (
 )
 from app.pipeline import build_pipeline_worker, select_engine
 from app.providers import stt_provider_name, tts_provider_name
+from app.realtime.event_bridge import SidecarEventBridge
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -78,15 +79,47 @@ ICE_SERVERS = ["stun:stun.l.google.com:19302"]
 pcs_map: dict[str, SmallWebRTCConnection] = {}
 
 
+async def _start_event_bridge(settings: Settings) -> SidecarEventBridge | None:
+    """Start the sidecar event bridge without ever failing app startup.
+
+    SidecarEventBridge.start() itself never blocks on (or raises for) the
+    sidecar being unreachable -- connecting happens lazily, with retry, on
+    its own background tasks (see app/realtime/event_bridge.py). This is
+    wrapped defensively anyway so an unexpected construction error still
+    can't take the Pipecat media plane down with it: voice I/O must keep
+    working with no agent runtime attached, the same as if this bridge were
+    never wired in at all (today that means `agent_link=None` at the
+    run_bot() call site below -- no dynamic replies, but the WebRTC/STT/TTS
+    media plane stays fully up).
+    """
+    bridge = SidecarEventBridge(settings.agent_runtime_url)
+    try:
+        await bridge.start()
+    except Exception:
+        logger.exception(
+            "Failed to start sidecar event bridge (agent runtime unavailable) -- "
+            "continuing with the media pipeline only."
+        )
+        return None
+    return bridge
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    app.state.event_bridge = await _start_event_bridge(_startup_settings)
     yield
     coros = [pc.disconnect() for pc in pcs_map.values()]
     await asyncio.gather(*coros, return_exceptions=True)
     pcs_map.clear()
+    # SidecarEventBridge.close() itself does the "stop accepting new work,
+    # then flush durable events, then close the connection" sequence -- see
+    # its docstring.
+    if app.state.event_bridge is not None:
+        await app.state.event_bridge.close()
 
 
 app = FastAPI(lifespan=lifespan)
+app.state.event_bridge = None
 # The client is always a separate process/origin from this server (Tauri
 # webview or Vite dev server talking to the Python backend over HTTP), never
 # same-origin, so CORS must be open for the API to be reachable at all.

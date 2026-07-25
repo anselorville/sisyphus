@@ -134,6 +134,13 @@ class Settings:
     openrouter_tts_models: list[str]
     openrouter_asr_models: list[str]
 
+    # --- Agent-runtime sidecar (TypeScript, out-of-process) ---
+    # Local-loopback WebSocket the Python media plane bridges realtime events
+    # over (see app/realtime/event_bridge.py). No safe reason to point this
+    # anywhere but loopback -- PCM audio never crosses it, but transcripts
+    # and task state do, so it should never be reachable off-box.
+    agent_runtime_url: str
+
     # --- VoxCPM2-CUDA streaming TTS ---
     # A LAN-hosted VoxCPM2 service exposing `/v1/tts/stream` as SSE, where
     # each chunk is an independent WAV file. Only used when Model Provider
@@ -292,6 +299,9 @@ def load_settings() -> Settings:
         omlx_llm_model=os.environ.get("OMLX_LLM_MODEL", "Qwen3.5-4B-MLX-4bit"),
         omlx_stt_model=os.environ.get("OMLX_STT_MODEL", "Qwen3-ASR-1.7B-8bit"),
         omlx_tts_model=os.environ.get("OMLX_TTS_MODEL", "VoxCPM2-8bit"),
+        # Agent-runtime sidecar bridge (see app/realtime/event_bridge.py).
+        # Default matches the sidecar's own default listen address/path.
+        agent_runtime_url=os.environ.get("AGENT_RUNTIME_URL", "ws://127.0.0.1:8765/events"),
         # OpenRouter (cloud provider) -- see app/openrouter_services.py and
         # app/model_providers.py. No safe default for the API key (a
         # per-account secret, left empty if unset); the three catalogs
