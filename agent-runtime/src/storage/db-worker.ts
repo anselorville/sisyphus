@@ -37,7 +37,7 @@ if (isMainThread || !parentPort) {
 // after this point, e.g. inside setTimeout callbacks).
 const port = parentPort;
 
-const { dbPath } = workerData as DbWorkerData;
+const { dbPath, transactionDelayMs } = workerData as DbWorkerData;
 
 const db = new Database(dbPath);
 db.pragma("journal_mode = WAL");
@@ -261,6 +261,28 @@ const assimilateTask = db.transaction((input: TaskAssimilateInput): AssimilateRe
 const WRITE_BATCH_INTERVAL_MS = 20;
 const WRITE_BATCH_MAX_COMMANDS = 50;
 
+/**
+ * Test-only fault injection (see DbWorkerData.transactionDelayMs's doc
+ * comment in ./database.ts): blocks this worker thread synchronously for
+ * `transactionDelayMs` (default 0/undefined -- a no-op) once per applied
+ * write batch, simulating a slow SQLite commit/fsync so
+ * test/performance/database-contention.test.ts can verify the main thread's
+ * event loop and any DB-independent path never block on it.
+ *
+ * Uses `Atomics.wait` rather than a busy-loop so the delay is precise
+ * without spinning the CPU. Safe to block synchronously here specifically
+ * because this file only ever runs inside a worker_threads.Worker (see the
+ * isMainThread guard above), never the main thread -- blocking this thread
+ * cannot, by construction, add any lag to the main thread's event loop,
+ * which is exactly the property under test.
+ */
+function applyTestOnlyTransactionDelay(): void {
+  if (!transactionDelayMs || transactionDelayMs <= 0) {
+    return;
+  }
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, transactionDelayMs);
+}
+
 interface QueuedWrite {
   readonly run: () => unknown;
   readonly respond: (result: unknown) => void;
@@ -306,6 +328,7 @@ function flushPendingWrites(): void {
   pendingWrites = [];
 
   const applyBatch = db.transaction(() => {
+    applyTestOnlyTransactionDelay();
     for (const entry of batch) {
       try {
         const result = entry.run();

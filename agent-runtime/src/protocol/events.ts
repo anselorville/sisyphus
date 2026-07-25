@@ -12,7 +12,24 @@
 export const EVENT_SOURCES = ["pipecat", "swarm", "pi", "tool", "system"] as const;
 export type EventSource = (typeof EVENT_SOURCES)[number];
 
-/** Every RealtimeEvent type currently defined by the protocol. */
+/**
+ * Every RealtimeEvent type currently defined by the protocol.
+ *
+ * `tool.progress` was added by a later audit pass: app/realtime/queueing.py
+ * (Python) has used it since that module was first built, as a real,
+ * tested COALESCIBLE event type (a tool-execution-level progress update,
+ * distinct from task-level `task.progress`) -- but it was never added to
+ * this union, so decodeEvent()/the compiled TypeBox schema would have
+ * silently rejected every such event a real Python process ever sent.
+ * Deliberately NOT added to ./transport/outbound-queue.ts's
+ * COALESCIBLE_EVENT_TYPES: Python's own coalescing key for this type is
+ * `(task_id, payload.tool)`, finer-grained than this queue's generic
+ * `type + task_id` key, and nothing on the TypeScript side currently
+ * produces this event type in the sidecar->Python direction -- so it
+ * defaults to DURABLE (safe: never dropped, never wrongly merges two
+ * different tools' progress under one key) rather than risk a mismatched
+ * coalesce for a not-yet-exercised path.
+ */
 export const REALTIME_EVENT_TYPES = [
   "voice.user.started",
   "voice.user.stopped",
@@ -29,6 +46,7 @@ export const REALTIME_EVENT_TYPES = [
   "task.steer",
   "task.follow_up",
   "tool.started",
+  "tool.progress",
   "tool.completed",
   "tool.failed",
   "diplomacy.elevation.requested",
