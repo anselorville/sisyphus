@@ -753,6 +753,12 @@ Mail Worker 是首版稳定工种。
 - 群发由批量收件人生成、邮件列表广播或大量独立发送行为判定。
 - 永久批量删除需要提权。
 - 邮件工具调用仍写入事件日志，支持任务恢复和事故追踪。
+- `agently-cli` 的写操作仍使用 confirmation token 协议，但该协议由 Mail Worker
+  适配器执行：非群发动作在外交评估返回 `ALLOW` 后自动完成预检与确认两步；
+  群发动作必须等待语音升权后才能兑换 confirmation token。
+- 邮件主题、正文、发件人名称、附件名和附件内容一律作为不可信外部数据，
+  不能成为 Agent 指令、角色提示词或自动工具调用来源。
+- 邮件中的 URL 默认只作为文本数据处理，除非用户任务明确要求 Web Scout 访问。
 
 ## 14. 故障与恢复
 
@@ -805,9 +811,77 @@ Mail Worker 是首版稳定工种。
 - 数据库恢复失败时进入不繁殖的降级模式。
 - Transport 和本地固定语音继续工作。
 
-## 15. 从现有代码迁移
+## 15. 性能架构约束
 
-### 15.1 保留
+Python 与 TypeScript 都只承担实时编排、协议适配和轻量状态处理。音频 DSP、
+模型推理、未受限日志处理和高频持久化不能堆积在两种语言的主事件循环中。
+
+### 15.1 运行时基线
+
+- Python 最低版本保持 3.11，开发与性能基线使用 3.12。
+- Pi Runtime 使用 Node.js 22.19.0 或更高版本。
+- TypeScript 只用于开发和类型检查；生产运行编译后的 ESM JavaScript。
+- Raspberry Pi 使用 64 位 Ubuntu 和 ARM64 Node.js。
+- Python 与 Node 进程分别暴露 event-loop lag、RSS、队列深度和事件吞吐指标。
+
+### 15.2 热路径边界
+
+- PCM 音频只能停留在 Python/Pipecat 进程，不能通过 WebSocket 发送给 sidecar。
+- Python 与 sidecar 之间只传递 transcript、控制、任务和可说文本事件。
+- `message_update` 的逐 token 事件在 sidecar 内聚合，不能逐 token 跨进程。
+- `voice.speech.cancel`、用户说话状态和升权回答属于最高优先级事件，不能等待批处理。
+- partial transcript 使用覆盖语义，只保留最新值，不建立无界队列。
+- tool progress 可以合并；final transcript、任务终态和权限事件不能丢弃。
+
+### 15.3 Python 约束
+
+- Pipecat FrameProcessor 中不能执行同步文件、数据库、网络和子进程等待。
+- JSON 编解码使用带结构校验的高性能实现，避免 Pydantic 对每个热路径事件重复建模。
+- Linux 部署允许使用 `uvloop`，但必须保留标准 asyncio 兼容测试。
+- CPU 密集工作进入原生库、外部进程或受限进程池。
+- bounded queue 必须声明容量、优先级和溢出策略。
+- TTS cancel 不依赖 sidecar 往返；本地 VAD 事件先停止播放，再通知生态。
+
+### 15.4 TypeScript 约束
+
+- Resident Pi Sessions 运行在同一 Node 进程，不为每个常驻角色创建进程。
+- 隔离舱和数据库写入使用独立进程或 Worker Thread，不能阻塞主事件循环。
+- SQLite 使用 WAL、prepared statement 和批量事务。
+- schema validator 在启动时编译，不能为每条事件动态生成 schema。
+- 角色日志和 Pi streaming events 在 sidecar 内聚合后再写库或发送 Python。
+- 所有 Map、缓存、Session 和事件订阅都必须有释放路径和数量上限。
+
+### 15.5 性能预算
+
+| 指标 | 首版目标 |
+| --- | --- |
+| VAD 开始到本地 TTS cancel | p95 小于 150ms |
+| 用户开口到听感停止播放 | p95 小于 250ms |
+| 本机事件桥单向排队与处理 | p95 小于 20ms |
+| Reflex Router 规则路由 | p95 小于 10ms |
+| final transcript 后接收反馈 | p95 小于 1s |
+| Python event-loop lag | p95 小于 20ms |
+| Node event-loop lag | p95 小于 20ms |
+| Python 与 Node 空闲总 RSS | 小于 800MB，不含外部模型服务 |
+| 四个活跃 Session 总 RSS | 小于 1.2GB，不含外部模型服务 |
+| 隔离舱并发 | 首版最多一个 |
+| 无界队列 | 零 |
+
+性能目标在开发机和 Raspberry Pi 分别记录，不能用开发机结果替代 Pi 验收。
+
+### 15.6 性能验证
+
+- 单元测试验证每个队列的溢出策略。
+- 事件桥使用 1,000 events/s 的突发负载测试控制事件延迟。
+- 四个 Resident Session 并发运行时采集 Node event-loop lag 和 RSS。
+- 使用至少一小时的语音与任务混合 soak test 检查内存增长。
+- 使用至少八小时的空闲监听 soak test 检查订阅、Timer 和 Session 泄漏。
+- SQLite 慢写和锁竞争必须通过故障注入验证不会阻塞语音路径。
+- 性能回归报告保存 p50、p95、p99，不只保存平均值。
+
+## 16. 从现有代码迁移
+
+### 16.1 保留
 
 - SmallWebRTC Transport 和连接管理。
 - STT/TTS Provider 适配。
@@ -818,7 +892,7 @@ Mail Worker 是首版稳定工种。
 - latency observer。
 - 模型 Provider 配置和健康检查。
 
-### 15.2 删除
+### 16.2 删除
 
 - `build_translation_system_prompt`。
 - `_lang_code` 和翻译方向语言映射。
@@ -830,7 +904,7 @@ Mail Worker 是首版稳定工种。
 - 翻译方向和双语转录 UI。
 - Pipecat 管道内直接连接的业务 LLM 节点。
 
-### 15.3 拆分原则
+### 16.3 拆分原则
 
 现有 `app/pipeline.py` 拆成：
 
@@ -849,7 +923,7 @@ Mail Worker 是首版稳定工种。
 
 业务 LLM Provider 选择进入 TypeScript sidecar，不再由 Python media pipeline 管理。
 
-## 16. 分阶段交付
+## 17. 分阶段交付
 
 ### Phase 1：媒体器官拆分
 
@@ -898,9 +972,9 @@ Mail Worker 是首版稳定工种。
 - 邮件服务重连。
 - 长时间全双工与并发任务测试。
 
-## 17. 测试策略
+## 18. 测试策略
 
-### 17.1 Python
+### 18.1 Python
 
 - FrameProcessor 单元测试。
 - 音频门控和插话测试。
@@ -908,7 +982,7 @@ Mail Worker 是首版稳定工种。
 - WebSocket bridge 重连和去重测试。
 - Fake sidecar 集成测试。
 
-### 17.2 TypeScript
+### 18.2 TypeScript
 
 - Event Schema contract tests。
 - Task Nest 状态机测试。
@@ -920,7 +994,7 @@ Mail Worker 是首版稳定工种。
 - Mail Worker 能力测试。
 - Role Genome 和孵化状态机测试。
 
-### 17.3 端到端
+### 18.3 端到端
 
 - 用户发起代码任务并在执行中继续说话。
 - 用户只停止 TTS，后台任务继续。
@@ -935,7 +1009,7 @@ Mail Worker 是首版稳定工种。
 - 额度恢复后自动唤醒并恢复允许续跑的任务。
 - 新生角色在隔离舱试运行并完成晋升或淘汰。
 
-### 17.4 故障注入
+### 18.4 故障注入
 
 - sidecar 在 Agent 输出中途退出。
 - Pi Session 在工具执行中失败。
@@ -944,8 +1018,12 @@ Mail Worker 是首版稳定工种。
 - SQLite 暂时锁定。
 - WebSocket 重复和乱序事件。
 - TTS 正在播放时用户连续插话。
+- 事件桥突发 1,000 events/s。
+- Node 与 Python event-loop lag 超过预算。
+- 四个 Resident Session 并发时 RSS 持续增长。
+- SQLite 慢写与锁竞争。
 
-## 18. 验收标准
+## 19. 验收标准
 
 - 运行路径中不存在翻译业务和语言方向依赖。
 - 用户开始说话后，目标在 250ms 左右停止当前 TTS。
@@ -961,8 +1039,12 @@ Mail Worker 是首版稳定工种。
 - 新生角色可以完成隔离试运行并被晋升、休眠或淘汰。
 - 进程重启后可以恢复任务、角色基因和额度状态。
 - 任一 Worker 崩溃不会终止 Transport 或其他任务。
+- PCM 音频不会跨进程进入 sidecar。
+- Python 与 Node 主事件循环不存在同步数据库、文件和子进程等待。
+- 所有跨进程队列都有容量、优先级和溢出策略。
+- 性能测试达到第 15.5 节的 p95 与 RSS 预算。
 
-## 19. 设计戒律
+## 20. 设计戒律
 
 1. 不让 Queen 成为中央智慧。
 2. 不让 Pi 长任务进入实时媒体热路径。
@@ -976,8 +1058,11 @@ Mail Worker 是首版稳定工种。
 10. 不让成功经验只停留在一次性上下文。
 11. 不让失败角色拖垮 Transport 或整个生态。
 12. 不重新引入翻译业务兼容层。
+13. 不让 PCM 音频和逐 token 事件跨越 Python/TypeScript 边界。
+14. 不允许无界队列、无上限 Session 或无释放路径的订阅。
+15. 不用平均延迟掩盖 p95 和 p99 的卡顿。
 
-## 20. 参考
+## 21. 参考
 
 - Pi Agent Harness：<https://github.com/earendil-works/pi>
 - Pi SDK：<https://pi.dev/docs/latest/sdk>
