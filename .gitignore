@@ -10,6 +10,7 @@ lerna-debug.log*
 .doc_history
 .vscode/
 node_modules
+.worktrees/
 venv/
 venv-tts/
 venv-asr/
