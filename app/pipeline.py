@@ -1168,6 +1168,23 @@ class TTSOutputGateProcessor(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
+# Compatibility exports during the realtime package migration. The pipeline
+# itself uses these names below, while existing callers may still import them
+# from this module.
+from app.realtime.audio_gate import (  # noqa: E402
+    MIC_CLOSE_AUDIO_GRACE_SECONDS,
+    MicGateProcessor,
+    MicStateFrame,
+    TTSOutputGateProcessor,
+)
+from app.realtime.turn_detection import (  # noqa: E402
+    SEMANTIC_BUFFER_FLUSH_TIMEOUT_SECONDS,
+    MicButtonUserTurnStartStrategy,
+    SemanticBufferProcessor,
+    SentenceUserTurnStopStrategy,
+)
+
+
 def select_engine(settings: Settings) -> str:
     """Decide which engine ("cloud", "offline", or "omlx") to use for this
     run, at startup only.

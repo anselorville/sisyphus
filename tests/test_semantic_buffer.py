@@ -5,7 +5,7 @@ from pipecat.frames.frames import CancelFrame, TranscriptionFrame, UserStoppedSp
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.tests.utils import run_test
 
-from app.pipeline import SemanticBufferProcessor
+from app.realtime.turn_detection import SemanticBufferProcessor
 
 
 def transcription(text: str) -> TranscriptionFrame:
