@@ -81,6 +81,22 @@ async def test_critical_event_waits_for_space_instead_of_being_dropped() -> None
 
 
 @pytest.mark.asyncio
+async def test_control_event_is_not_dropped_when_marked_coalescible() -> None:
+    queue = BoundedEventQueue(capacity=1)
+    await queue.put(make_event("task.started", {}), EventPriority.DURABLE)
+
+    blocked_put = asyncio.create_task(
+        queue.put(make_event("voice.speech.cancel", {}), EventPriority.COALESCIBLE)
+    )
+    await asyncio.sleep(0)
+    assert not blocked_put.done()
+
+    assert (await queue.get()).type == "task.started"
+    await blocked_put
+    assert (await queue.get()).type == "voice.speech.cancel"
+
+
+@pytest.mark.asyncio
 async def test_transcript_final_is_not_dropped_when_marked_coalescible() -> None:
     queue = BoundedEventQueue(capacity=1)
     await queue.put(make_event("task.started", {}), EventPriority.DURABLE)

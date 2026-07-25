@@ -15,6 +15,9 @@ class QueueClosed(RuntimeError):
     pass
 
 
+_CONTROL_EVENT_TYPES = frozenset({"voice.speech.cancel"})
+
+
 class BoundedEventQueue:
     def __init__(self, capacity: int) -> None:
         if capacity < 1:
@@ -89,6 +92,8 @@ class BoundedEventQueue:
     def _protected_priority(
         event: RealtimeEvent, priority: EventPriority
     ) -> EventPriority:
+        if event.type in _CONTROL_EVENT_TYPES:
+            return max(priority, EventPriority.CRITICAL)
         if event.type == "voice.transcript.final" or event.type in {
             "task.completed",
             "task.failed",
