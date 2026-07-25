@@ -1,12 +1,19 @@
 /**
- * Concrete RoleManifests shipped by this task. Only "general" exists so
- * far; specialist roles (code, mail, web, device, ...) are built in later
- * tasks and registered the same way.
+ * Concrete RoleManifests shipped by this task: the General Worker plus the
+ * first four specialist castes (Code, Web, Device, Mail). Each specialist
+ * manifest follows GENERAL_ROLE_MANIFEST's exact pattern -- a resolved
+ * promptPath constant plus a frozen RoleManifest literal -- and declares
+ * only the tools its job requires (see the module-level tool files this
+ * package now ships: ./../tools/code-tools.ts, ./../tools/web-tools.ts,
+ * ./../tools/device-tools.ts, ./../tools/mail/agently-mail.ts). Further
+ * specialist roles (e.g. an Inspector) arrive in later tasks and register
+ * the same way.
  */
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
+import { CODE_WORKER_TOOLS } from "../tools/code-tools.js";
 import type { RoleManifest } from "./types.js";
 
 /**
@@ -27,6 +34,77 @@ export const GENERAL_ROLE_MANIFEST: RoleManifest = Object.freeze({
   capabilities: ["qa", "task-clarification", "delegation"],
   tools: ["read"],
   promptPath: GENERAL_ROLE_PROMPT_PATH,
+  modelClass: "balanced",
+  thinkingLevel: "medium",
+  lifecycle: "resident",
+});
+
+/**
+ * Code Worker: Pi's own built-in tools (see ../tools/code-tools.ts -- this
+ * manifest does not reimplement them, only names the exact set). Coding
+ * work benefits from the deepest model tier and thinking budget this
+ * package's RoleModelClass/RoleThinkingLevel scale offers.
+ */
+export const CODE_ROLE_PROMPT_PATH = resolveRolePromptPath("code.md");
+
+export const CODE_ROLE_MANIFEST: RoleManifest = Object.freeze({
+  id: "code",
+  capabilities: ["code-editing", "terminal", "file-search"],
+  tools: CODE_WORKER_TOOLS,
+  promptPath: CODE_ROLE_PROMPT_PATH,
+  modelClass: "deep",
+  thinkingLevel: "high",
+  lifecycle: "resident",
+});
+
+/** Web Scout: only its two custom tools (../tools/web-tools.ts) -- no filesystem/terminal access. */
+export const WEB_ROLE_PROMPT_PATH = resolveRolePromptPath("web.md");
+
+export const WEB_ROLE_MANIFEST: RoleManifest = Object.freeze({
+  id: "web",
+  capabilities: ["web-search", "web-fetch"],
+  tools: ["web_search", "web_fetch"],
+  promptPath: WEB_ROLE_PROMPT_PATH,
+  modelClass: "balanced",
+  thinkingLevel: "medium",
+  lifecycle: "resident",
+});
+
+/**
+ * Device Steward: only its status/service-control tools (../tools/device-
+ * tools.ts) -- deliberately no `write`/`edit` (or any filesystem/terminal
+ * tool at all). Device status/service actions are simple and deterministic
+ * enough for the cheapest model tier.
+ */
+export const DEVICE_ROLE_PROMPT_PATH = resolveRolePromptPath("device.md");
+
+export const DEVICE_ROLE_MANIFEST: RoleManifest = Object.freeze({
+  id: "device",
+  capabilities: ["device-status", "service-control"],
+  tools: ["device_status", "service_action"],
+  promptPath: DEVICE_ROLE_PROMPT_PATH,
+  modelClass: "fast",
+  thinkingLevel: "low",
+  lifecycle: "resident",
+});
+
+/** Mail Worker: only its agently-cli-backed mail operations (../tools/mail/agently-mail.ts) -- deliberately no `bash` (or any other terminal/filesystem tool). */
+export const MAIL_ROLE_PROMPT_PATH = resolveRolePromptPath("mail.md");
+
+export const MAIL_ROLE_MANIFEST: RoleManifest = Object.freeze({
+  id: "mail",
+  capabilities: ["mail-search", "mail-read", "mail-send", "mail-triage"],
+  tools: [
+    "mail_search",
+    "mail_read",
+    "mail_watch",
+    "mail_send",
+    "mail_reply",
+    "mail_forward",
+    "mail_trash",
+    "mail_download",
+  ],
+  promptPath: MAIL_ROLE_PROMPT_PATH,
   modelClass: "balanced",
   thinkingLevel: "medium",
   lifecycle: "resident",
