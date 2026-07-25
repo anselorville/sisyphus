@@ -11,6 +11,14 @@
  * - sleep()/close() dispose the underlying PiSession, unsubscribe its event
  *   listener, and clear its flush timer, leaving zero dangling
  *   subscriptions/timers/listeners behind.
+ *
+ * Also owns the swarm-wide ecology gate the Queen (../ecology/queen.ts)
+ * reacts through: setHibernationLevel()/HibernationLevel let a caller block
+ * prompt()/steer()/followUp() once food state degrades to "reserve" (soft --
+ * only non-essential roles are refused) or "hibernating" (hard -- every role
+ * is refused, no exceptions). See assertMayPrompt() and SwarmHibernatingError
+ * below. abort()/sleep()/close() are deliberately never gated, so cancelling
+ * or sleeping a role always works regardless of hibernation level.
  */
 
 import path from "node:path";
@@ -48,6 +56,34 @@ export class RoleSessionDisposedError extends Error {
   constructor(roleId: string) {
     super(`role session "${roleId}" has already been disposed`);
     this.name = "RoleSessionDisposedError";
+  }
+}
+
+/**
+ * Swarm-wide ecology gate, driven by the Queen's food-state reaction
+ * (../ecology/queen.ts), never by this manager itself:
+ * - "none": normal operation, nothing is gated.
+ * - "soft" (food state "reserve"): ordinary Pi prompts to non-essential
+ *   workers are refused; a role the injected `isVoiceEssential` predicate
+ *   accepts still runs normally.
+ * - "hard" (food state "hibernating"): the swarm stops thinking entirely --
+ *   every role is refused, `isVoiceEssential` is not even consulted, since
+ *   no Pi prompt of any kind may run, not even a queued one.
+ */
+export type HibernationLevel = "none" | "soft" | "hard";
+
+/** Decides whether `roleId` is exempt from a "soft" hibernation's non-essential-worker block. Never consulted under "hard" hibernation (see HibernationLevel's doc comment). Default (when none is injected): no role is exempt. */
+export type VoiceEssentialPredicate = (roleId: string) => boolean;
+
+/** Thrown by prompt()/steer()/followUp() when the swarm's current HibernationLevel refuses the call -- see assertMayPrompt() for exactly when. Deliberately never thrown by abort()/sleep()/close(), which stay available regardless of hibernation level (cancel-related interaction must always work). */
+export class SwarmHibernatingError extends Error {
+  constructor(roleId: string, level: HibernationLevel) {
+    super(
+      level === "hard"
+        ? `role "${roleId}" cannot run a Pi prompt: the swarm is hard-hibernating (usage exhausted) and no Pi prompt of any kind may run`
+        : `role "${roleId}" cannot run a Pi prompt: the swarm is soft-hibernating and this role is not voice-essential`,
+    );
+    this.name = "SwarmHibernatingError";
   }
 }
 
@@ -180,6 +216,8 @@ export interface RoleSessionManagerOptions {
   readonly provider: PiSessionProvider;
   /** How often each role's PiEventAdapter is flushed. Default: 50ms, per the design doc's aggregation window. */
   readonly flushIntervalMs?: number;
+  /** Consulted by prompt()/steer()/followUp() while HibernationLevel is "soft" (never "hard"). Default: no role is exempt, so every role is an ordinary/ "non-essential" worker unless a caller explicitly injects otherwise. */
+  readonly isVoiceEssential?: VoiceEssentialPredicate;
 }
 
 /**
@@ -192,6 +230,8 @@ export class PiRoleSessionManager implements RoleSessionManager {
   private readonly registry: RoleManifestRegistry;
   private readonly provider: PiSessionProvider;
   private readonly flushIntervalMs: number;
+  private readonly isVoiceEssential: VoiceEssentialPredicate;
+  private hibernationLevel: HibernationLevel = "none";
 
   /** Fully-resolved, currently-active sessions. */
   private readonly sessions = new Map<string, PiManagedRoleSession>();
@@ -202,6 +242,17 @@ export class PiRoleSessionManager implements RoleSessionManager {
     this.registry = options.registry;
     this.provider = options.provider;
     this.flushIntervalMs = options.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS;
+    this.isVoiceEssential = options.isVoiceEssential ?? ((): boolean => false);
+  }
+
+  /** Not part of the RoleSessionManager contract (mirrors debugMessages()/debugActiveSubscriptions()'s "extra, manager-only" status): sets the swarm-wide ecology gate consulted by prompt()/steer()/followUp() -- see HibernationLevel's doc comment for exactly what "soft"/"hard" each block. Never affects abort()/sleep()/close(), which stay available at any level. */
+  setHibernationLevel(level: HibernationLevel): void {
+    this.hibernationLevel = level;
+  }
+
+  /** Not part of the RoleSessionManager contract: the swarm-wide ecology gate most recently set via setHibernationLevel(). Default "none". */
+  get currentHibernationLevel(): HibernationLevel {
+    return this.hibernationLevel;
   }
 
   async ensure(manifest: RoleManifest): Promise<ManagedRoleSession> {
@@ -209,16 +260,19 @@ export class PiRoleSessionManager implements RoleSessionManager {
   }
 
   async prompt(roleId: string, taskId: string, text: string): Promise<void> {
+    this.assertMayPrompt(roleId);
     const session = await this.resolveOrProvision(roleId);
     await session.prompt(taskId, text);
   }
 
   async steer(roleId: string, taskId: string, text: string): Promise<void> {
+    this.assertMayPrompt(roleId);
     const session = await this.requireActive(roleId);
     await session.steer(taskId, text);
   }
 
   async followUp(roleId: string, taskId: string, text: string): Promise<void> {
+    this.assertMayPrompt(roleId);
     const session = await this.requireActive(roleId);
     await session.followUp(taskId, text);
   }
@@ -288,6 +342,25 @@ export class PiRoleSessionManager implements RoleSessionManager {
   private async buildSession(manifest: RoleManifest): Promise<PiManagedRoleSession> {
     const piSession = await this.provider(manifest);
     return new PiManagedRoleSession(manifest, piSession, this.flushIntervalMs);
+  }
+
+  /**
+   * Consulted by prompt()/steer()/followUp() before they touch a Pi
+   * Session -- never by abort()/sleep()/close(), which must stay available
+   * regardless of hibernation level so an in-flight task can always be
+   * cancelled and a role can always be put to sleep. Deliberately
+   * synchronous and side-effect-free (throws or returns).
+   */
+  private assertMayPrompt(roleId: string): void {
+    if (this.hibernationLevel === "none") {
+      return;
+    }
+    if (this.hibernationLevel === "hard") {
+      throw new SwarmHibernatingError(roleId, "hard");
+    }
+    if (!this.isVoiceEssential(roleId)) {
+      throw new SwarmHibernatingError(roleId, "soft");
+    }
   }
 
   /** Resolves an active/in-flight session for roleId, provisioning a fresh one from the registry if none exists yet. Used by prompt(), which is allowed to start a role on first use. */

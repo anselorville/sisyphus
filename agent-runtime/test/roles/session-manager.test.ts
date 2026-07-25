@@ -6,6 +6,7 @@ import {
   PiRoleSessionManager,
   RoleSessionDisposedError,
   RoleSessionNotFoundError,
+  SwarmHibernatingError,
 } from "../../src/roles/session-manager.js";
 import type { PiSession, PiSessionProvider, RoleManifest, RoleSessionUpdate } from "../../src/roles/types.js";
 
@@ -316,5 +317,78 @@ describe("aggregated update broadcasting", () => {
 
     sessions.get("code")!.emit({ type: "agent_start" } as unknown as AgentSessionEvent);
     expect(updates).toEqual([]);
+  });
+});
+
+describe("hibernation gating (Task 14: Queen-driven soft/hard hibernation)", () => {
+  it("does not gate anything at the default 'none' level", async () => {
+    const manager = makeManagerWithFakePi();
+    expect(manager.currentHibernationLevel).toBe("none");
+    await expect(manager.prompt("code", "t1", "go")).resolves.toBeUndefined();
+  });
+
+  it("soft hibernation refuses an ordinary (non-voice-essential) role's prompt()", async () => {
+    const manager = makeManagerWithFakePi();
+    manager.setHibernationLevel("soft");
+
+    await expect(manager.prompt("code", "t1", "go")).rejects.toThrow(SwarmHibernatingError);
+  });
+
+  it("soft hibernation still allows a role the injected isVoiceEssential predicate accepts", async () => {
+    const registry = new RoleManifestRegistry();
+    registry.register(codeManifest);
+    const manager = new PiRoleSessionManager({
+      registry,
+      provider: makeFakePiWorld().provider,
+      isVoiceEssential: (roleId) => roleId === "code",
+    });
+    managers.push(manager);
+    manager.setHibernationLevel("soft");
+
+    await expect(manager.prompt("code", "t1", "go")).resolves.toBeUndefined();
+  });
+
+  it("hard hibernation refuses every role's prompt(), even one the isVoiceEssential predicate accepts", async () => {
+    const registry = new RoleManifestRegistry();
+    registry.register(codeManifest);
+    const manager = new PiRoleSessionManager({
+      registry,
+      provider: makeFakePiWorld().provider,
+      isVoiceEssential: () => true,
+    });
+    managers.push(manager);
+    manager.setHibernationLevel("hard");
+
+    await expect(manager.prompt("code", "t1", "go")).rejects.toThrow(SwarmHibernatingError);
+  });
+
+  it("gates steer() and followUp() the same way it gates prompt()", async () => {
+    const manager = makeManagerWithFakePi();
+    await manager.prompt("code", "t1", "go");
+    manager.setHibernationLevel("hard");
+
+    await expect(manager.steer("code", "t1", "wait")).rejects.toThrow(SwarmHibernatingError);
+    await expect(manager.followUp("code", "t1", "continue")).rejects.toThrow(SwarmHibernatingError);
+  });
+
+  it("never gates abort()/sleep(), regardless of hibernation level", async () => {
+    const { manager, sessions } = makeManagerWithFakePiWorld();
+    await manager.prompt("code", "t1", "go");
+    manager.setHibernationLevel("hard");
+
+    await expect(manager.abort("code", "t1")).resolves.toBeUndefined();
+    expect(sessions.get("code")!.promptedTexts).toContain("abort");
+
+    await expect(manager.sleep("code")).resolves.toBeUndefined();
+    expect(manager.debugActiveSubscriptions("code")).toBe(0);
+  });
+
+  it("resumes normal operation once hibernation level is set back to 'none'", async () => {
+    const manager = makeManagerWithFakePi();
+    manager.setHibernationLevel("hard");
+    await expect(manager.prompt("code", "t1", "go")).rejects.toThrow(SwarmHibernatingError);
+
+    manager.setHibernationLevel("none");
+    await expect(manager.prompt("code", "t2", "go again")).resolves.toBeUndefined();
   });
 });

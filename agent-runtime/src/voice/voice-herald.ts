@@ -29,6 +29,14 @@
  *
  * Pure and synchronous: accept() never calls a model, never awaits, and
  * never accumulates state (it holds none).
+ *
+ * One deliberate exception to layer 2: `voice.speech.enqueue` events shaped
+ * like `{ payload: { kind: "local_prompt", promptKey } }` (e.g. the Queen's
+ * hard-hibernation "usage_exhausted" prompt, design doc 7.4/8.4) skip
+ * isForbiddenContent() entirely -- see acceptLocalPromptEnqueue() and
+ * LOCAL_PROMPT_TEXT. This is safe specifically because the text is a fixed,
+ * pre-approved phrase a human already wrote, never free-form agent output,
+ * so there is nothing for the content-safety gate to check.
  */
 
 import type { RealtimeEvent } from "../protocol/events.js";
@@ -106,6 +114,23 @@ const ECOLOGY_TEXT: Record<FoodState, string> = {
 };
 const DEFAULT_ECOLOGY_TEXT = "系统状态已更新。";
 
+/**
+ * Fixed, pre-approved local phrases for `voice.speech.enqueue` events shaped
+ * like `{ payload: { kind: "local_prompt", promptKey } }` -- see
+ * acceptLocalPromptEnqueue(). Each entry is canned text a human already
+ * reviewed, never free-form agent output, so these deliberately skip
+ * isForbiddenContent()'s content-safety gate entirely (there is no
+ * unverified/unbounded text here to guard against). An unrecognized
+ * promptKey is never guessed at -- see acceptLocalPromptEnqueue() returning
+ * null for anything not in this table.
+ */
+const LOCAL_PROMPT_TEXT: Record<string, string> = {
+  // Hard hibernation (food state "hibernating", design doc 7.4/7.6/8.4): the
+  // swarm stops thinking entirely -- no Pi prompt of any kind runs, so this
+  // is the one thing that can still be said, at zero provider cost.
+  usage_exhausted: "使用额度已经用完，系统进入完全休眠，请稍后再试。",
+};
+
 export class VoiceHerald {
   /**
    * Converts one backend RealtimeEvent into a SpeechDirective, or `null` if
@@ -150,10 +175,13 @@ export class VoiceHerald {
           taskId: event.task_id,
         };
 
+      case "voice.speech.enqueue":
+        return this.acceptLocalPromptEnqueue(event);
+
       default:
         // voice.user.started/stopped, voice.transcript.partial/final,
-        // voice.speech.enqueue/cancel: transport control or the user's own
-        // words, never echoed back.
+        // voice.speech.cancel: transport control or the user's own words,
+        // never echoed back.
         // tool.started/completed/failed: raw tool logs -- categorically
         // forbidden regardless of payload content (see the class doc
         // comment's layer 1).
@@ -163,6 +191,28 @@ export class VoiceHerald {
         // bookkeeping, not part of the allowed-to-speak list.
         return null;
     }
+  }
+
+  /**
+   * The one voice.speech.enqueue shape this class ever speaks: a fixed,
+   * pre-approved local phrase (see LOCAL_PROMPT_TEXT), keyed by
+   * `payload.promptKey`, when `payload.kind === "local_prompt"`. Bypasses
+   * isForbiddenContent() entirely -- unlike task.progress/completed/failed,
+   * this text is never free-form agent output, so there is nothing to
+   * content-check. Every other voice.speech.enqueue payload (unrecognized
+   * kind, unrecognized/missing promptKey) returns null, same as this event
+   * type did before this case existed.
+   */
+  private acceptLocalPromptEnqueue(event: RealtimeEvent): SpeechDirective | null {
+    if (event.payload.kind !== "local_prompt") {
+      return null;
+    }
+    const promptKey = readString(event.payload.promptKey);
+    const text = promptKey ? LOCAL_PROMPT_TEXT[promptKey] : undefined;
+    if (text === undefined) {
+      return null;
+    }
+    return { kind: "hibernation", text, taskId: event.task_id };
   }
 
   private acceptProgress(event: RealtimeEvent): SpeechDirective | null {

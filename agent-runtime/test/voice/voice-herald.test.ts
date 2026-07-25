@@ -216,3 +216,24 @@ describe("VoiceHerald.accept -- categorically never spoken, regardless of conten
     expect(herald.accept(eventOfType("role.hatched", { roleId: "mail" }))).toBeNull();
   });
 });
+
+describe("VoiceHerald.accept -- hard-hibernation local prompt (Task 14 addition)", () => {
+  const herald = new VoiceHerald();
+
+  it("speaks the fixed usage_exhausted local prompt without going through the content-safety gate", () => {
+    const event = eventOfType("voice.speech.enqueue", { kind: "local_prompt", promptKey: "usage_exhausted" });
+    const directive = herald.accept(event);
+    expect(directive).toMatchObject({ kind: "hibernation" });
+    expect(directive?.text.length).toBeGreaterThan(0);
+  });
+
+  it("never speaks an unrecognized local_prompt key", () => {
+    const event = eventOfType("voice.speech.enqueue", { kind: "local_prompt", promptKey: "totally_unknown_key" });
+    expect(herald.accept(event)).toBeNull();
+  });
+
+  it("still rejects every other voice.speech.enqueue shape", () => {
+    expect(herald.accept(eventOfType("voice.speech.enqueue", { kind: "tts_direct", text: "hello" }))).toBeNull();
+    expect(herald.accept(eventOfType("voice.speech.enqueue", {}))).toBeNull();
+  });
+});
