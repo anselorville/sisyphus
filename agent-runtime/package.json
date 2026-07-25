@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.19.0" },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
@@ -22,5 +24,10 @@
     "@types/ws": "8.18.1",
     "typescript": "7.0.2",
     "vitest": "4.1.10"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.1": true,
+    "protobufjs@7.6.5": true,
+    "@google/genai@1.52.0": true
   }
 }
