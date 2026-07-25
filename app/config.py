@@ -1,9 +1,4 @@
-"""Configuration loading for the Sisyphus translator.
-
-Reads API keys and translation direction from environment variables (via a
-.env file in development, or real environment variables in production) and
-fails fast with a clear error message if anything required is missing.
-"""
+"""Configuration loading for the Sisyphus voice-agent media plane."""
 
 from __future__ import annotations
 
@@ -25,7 +20,6 @@ load_dotenv()
 # app/pipeline.py) is responsible for validating these are present, and only
 # at the point the cloud engine is actually about to be built.
 CLOUD_REQUIRED_KEYS = (
-    "ANTHROPIC_API_KEY",
     "DEEPGRAM_API_KEY",
     "ASSEMBLYAI_API_KEY",
     "GLM_API_KEY",
@@ -39,7 +33,7 @@ VALID_ENGINES = ("auto", "cloud", "offline", "omlx")
 
 @dataclass(frozen=True)
 class Settings:
-    """Resolved runtime configuration for the translator pipeline and server."""
+    """Resolved runtime configuration for the voice-agent media plane."""
 
     # Cloud credentials: may be empty strings if unset -- only validated (in
     # app/pipeline.py) if/when the cloud engine path is actually selected.
@@ -67,12 +61,6 @@ class Settings:
     # persistent-connection streaming, measured ~0.2-0.3s per-utterance
     # time-to-first-audio from this machine).
     minimax_api_key: str
-    source_lang: str
-    target_lang: str
-    # "translator" (default): LLM is a bidirectional speech translator.
-    # "assistant": LLM is an open-ended personal voice assistant (Cartesia-
-    # style conversational agent -- no translation, no direction tags).
-    conversation_mode: str
     webrtc_host: str
     webrtc_port: int
 
@@ -268,9 +256,6 @@ def load_settings() -> Settings:
         deepseek_api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
         deepseek_text_models=_parse_csv_env("DEEPSEEK_TEXT_MODELS"),
         minimax_api_key=os.environ.get("MINIMAX_API_KEY", ""),
-        source_lang=os.environ.get("SOURCE_LANG", "Chinese"),
-        target_lang=os.environ.get("TARGET_LANG", "English"),
-        conversation_mode=os.environ.get("CONVERSATION_MODE", "translator"),
         webrtc_host=os.environ.get("WEBRTC_HOST", "0.0.0.0"),
         webrtc_port=webrtc_port,
         engine=engine,

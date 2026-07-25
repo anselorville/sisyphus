@@ -17,7 +17,6 @@ or, after `uv sync`:
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -65,6 +64,7 @@ from app.model_settings import (
     save_model_settings,
 )
 from app.pipeline import build_pipeline_worker, select_engine
+from app.providers import stt_provider_name, tts_provider_name
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -122,21 +122,11 @@ async def index():
 
 @app.get("/api/status")
 async def status() -> dict[str, str]:
-    """Report the resolved translation engine and configured language pair.
-
-    The engine is resolved once at server startup (see `_resolved_engine`
-    above) via the same `select_engine()` used by the pipeline itself, so
-    this always reflects what connections will actually get -- never
-    duplicated/re-implemented selection logic.
-    """
+    """Report the media-plane product and resolved speech providers."""
     return {
-        "engine": _resolved_engine,
-        "source_lang": _startup_settings.source_lang,
-        "target_lang": _startup_settings.target_lang,
-        # "manual": the client renders the mic-button turn UX (service
-        # switch = connection, mic button = utterance boundaries) and must
-        # send {"type": "mic", "open": bool} data-channel messages.
-        # "auto": hands-free VAD turn-taking, no mic gating UI.
+        "product": "voice-agent",
+        "stt_provider": stt_provider_name(_startup_settings),
+        "tts_provider": tts_provider_name(_startup_settings),
         "turn_mode": _startup_settings.turn_mode,
     }
 
@@ -744,36 +734,11 @@ async def put_model_providers(request: dict) -> dict:
 
 async def run_bot(
     webrtc_connection: SmallWebRTCConnection,
-    source_lang: str | None = None,
-    target_lang: str | None = None,
-    conversation_mode: str | None = None,
 ) -> None:
-    """Build and run the translation pipeline for one WebRTC connection.
-
-    `source_lang`/`target_lang` are the client's language-pair selection,
-    carried in the /api/offer body -- the UI's language picker is the
-    authority for a conversation's languages, with .env's
-    SOURCE_LANG/TARGET_LANG only the fallback when the client sends none
-    (older clients, curl tests). Free-text names ("Chinese", "French", ...),
-    the same vocabulary the env vars accept.
-
-    `conversation_mode` is "translator" (default) or "assistant", also
-    from the client's Settings screen -- "assistant" replaces the
-    translation prompt with a Cartesia-style open-ended voice-agent persona.
-    """
+    """Build and run the media plane for one WebRTC connection."""
     settings = load_settings()
-    if source_lang:
-        settings = dataclasses.replace(settings, source_lang=source_lang)
-    if target_lang:
-        settings = dataclasses.replace(settings, target_lang=target_lang)
-    if conversation_mode:
-        settings = dataclasses.replace(settings, conversation_mode=conversation_mode)
-    logger.info(
-        f"Starting translator pipeline for new connection "
-        f"({settings.source_lang} <-> {settings.target_lang}, "
-        f"mode={settings.conversation_mode})"
-    )
-    worker = build_pipeline_worker(webrtc_connection, settings)
+    logger.info("Starting voice-agent media pipeline for new connection")
+    worker = build_pipeline_worker(webrtc_connection, settings, agent_link=None)
 
     @webrtc_connection.event_handler("closed")
     async def _on_closed(connection: SmallWebRTCConnection) -> None:
@@ -813,26 +778,7 @@ async def offer(request: dict, background_tasks: BackgroundTasks):
             logger.info(f"Discarding peer connection: {conn.pc_id}")
             pcs_map.pop(conn.pc_id, None)
 
-        # Language pair from the client's picker (optional, free-text names).
-        # Length-capped defensive copy -- these end up inside the LLM system
-        # prompt, so an absurdly long value is rejected rather than injected.
-        def _lang(field: str) -> str | None:
-            value = request.get(field)
-            if isinstance(value, str):
-                value = value.strip()
-                if 0 < len(value) <= 40:
-                    return value
-            return None
-
-        def _mode() -> str | None:
-            value = request.get("mode")
-            if isinstance(value, str) and value.strip() in ("translator", "assistant"):
-                return value.strip()
-            return None
-
-        background_tasks.add_task(
-            run_bot, connection, _lang("source_lang"), _lang("target_lang"), _mode()
-        )
+        background_tasks.add_task(run_bot, connection)
 
     answer = connection.get_answer()
     pcs_map[answer["pc_id"]] = connection
@@ -841,8 +787,7 @@ async def offer(request: dict, background_tasks: BackgroundTasks):
 
 def main() -> None:
     settings = load_settings()
-    logger.info(f"Starting Sisyphus translator server on {settings.webrtc_host}:{settings.webrtc_port}")
-    logger.info(f"Translation direction: {settings.source_lang} <-> {settings.target_lang}")
+    logger.info(f"Starting Sisyphus voice-agent server on {settings.webrtc_host}:{settings.webrtc_port}")
     uvicorn.run(app, host=settings.webrtc_host, port=settings.webrtc_port)
 
 
