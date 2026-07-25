@@ -1,0 +1,11 @@
+import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+  test: {
+    root: import.meta.dirname,
+    include: ["test/**/*.test.ts"],
+    environment: "node",
+    passWithNoTests: false,
+    reporters: "default",
+  },
+});
