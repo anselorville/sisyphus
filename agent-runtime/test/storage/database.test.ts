@@ -238,3 +238,155 @@ describe("DB latency observability", () => {
     await db.close();
   });
 });
+
+describe("task.assimilate -- one transaction across tasks/roles/role_fitness/pheromones/memories", () => {
+  it("commits the task's final status, role fitness deltas, and a pheromone delta in one call", async () => {
+    const db = await DatabaseClient.open(nextDbPath());
+    await db.request({
+      type: "task.insert",
+      task: { ...baseTaskFields, id: "assim-1", goal: "send the report", status: "running" },
+    });
+
+    const result = await db.request({
+      type: "task.assimilate",
+      assimilation: {
+        taskId: "assim-1",
+        finalStatus: "completed",
+        roleId: "mail",
+        roleName: "Mail Worker",
+        roleStatus: "resident",
+        roleFitness: [
+          { metric: "task_outcome", value: 1 },
+          { metric: "verification_status", value: 1 },
+        ],
+        pheromone: { signal: "mail.sendmail*phone-1home-wifi", strength: 0.8, decaysAt: null },
+        memory: null,
+        updatedAt: "2026-01-01T00:10:00.000Z",
+      },
+    });
+
+    expect(result.task?.status).toBe("completed");
+    expect(result.roleFitnessRecorded).toBe(2);
+    expect(result.pheromoneRecorded).toBe(true);
+    expect(result.memoryRecorded).toBe(false);
+
+    const { task: reread } = await db.request({ type: "task.get", id: "assim-1" });
+    expect(reread?.status).toBe("completed");
+    expect(reread?.updated_at).toBe("2026-01-01T00:10:00.000Z");
+
+    await db.close();
+  });
+
+  it("also writes a compressed memory row when one is supplied", async () => {
+    const db = await DatabaseClient.open(nextDbPath());
+    await db.request({
+      type: "task.insert",
+      task: { ...baseTaskFields, id: "assim-2", goal: "answer a question", status: "running" },
+    });
+
+    const result = await db.request({
+      type: "task.assimilate",
+      assimilation: {
+        taskId: "assim-2",
+        finalStatus: "completed",
+        roleId: "general",
+        roleName: "General Worker",
+        roleStatus: "resident",
+        roleFitness: [{ metric: "task_outcome", value: 1 }],
+        pheromone: null,
+        memory: { id: randomUUID(), key: "task-summary:assim-2", value: "answered the user's question about billing" },
+        updatedAt: "2026-01-01T00:11:00.000Z",
+      },
+    });
+
+    expect(result.memoryRecorded).toBe(true);
+    expect(result.pheromoneRecorded).toBe(false);
+
+    await db.close();
+  });
+
+  it("upserts the same role's roles row across repeated assimilations instead of failing on the second call", async () => {
+    const db = await DatabaseClient.open(nextDbPath());
+    await db.request({
+      type: "task.insert",
+      task: { ...baseTaskFields, id: "assim-3a", goal: "task one", status: "running" },
+    });
+    await db.request({
+      type: "task.insert",
+      task: { ...baseTaskFields, id: "assim-3b", goal: "task two", status: "running" },
+    });
+
+    await db.request({
+      type: "task.assimilate",
+      assimilation: {
+        taskId: "assim-3a",
+        finalStatus: "completed",
+        roleId: "mail-trial",
+        roleName: "Mail Worker (trial)",
+        roleStatus: "trial",
+        roleFitness: [{ metric: "task_outcome", value: 1 }],
+        pheromone: null,
+        memory: null,
+        updatedAt: "2026-01-01T00:12:00.000Z",
+      },
+    });
+
+    // Same roleId, second task, promoted status -- must not throw a
+    // roles.id primary-key violation (proves the upsert, not a plain
+    // insert, is what's actually wired up).
+    await expect(
+      db.request({
+        type: "task.assimilate",
+        assimilation: {
+          taskId: "assim-3b",
+          finalStatus: "completed",
+          roleId: "mail-trial",
+          roleName: "Mail Worker (trial)",
+          roleStatus: "resident",
+          roleFitness: [{ metric: "task_outcome", value: 1 }],
+          pheromone: null,
+          memory: null,
+          updatedAt: "2026-01-01T00:13:00.000Z",
+        },
+      }),
+    ).resolves.toMatchObject({ roleFitnessRecorded: 1 });
+
+    await db.close();
+  });
+
+  it("rolls back the entire transaction -- including the task status update -- when one statement fails", async () => {
+    const db = await DatabaseClient.open(nextDbPath());
+    await db.request({
+      type: "task.insert",
+      task: { ...baseTaskFields, id: "assim-atomic", goal: "an atomic task", status: "running" },
+    });
+
+    // A malformed role_fitness metric (NOT NULL violation) sneaked past the
+    // TS types, exactly as a corrupt/adversarial postMessage payload would
+    // arrive at the worker boundary -- the point is to force a failure
+    // partway through the transaction (after the task-status statement has
+    // already run) and confirm nothing from this call is left durable.
+    await expect(
+      db.request({
+        type: "task.assimilate",
+        assimilation: {
+          taskId: "assim-atomic",
+          finalStatus: "completed",
+          roleId: "mail",
+          roleName: "Mail Worker",
+          roleStatus: "resident",
+          roleFitness: [{ metric: null as unknown as string, value: 1 }],
+          pheromone: null,
+          memory: null,
+          updatedAt: "2026-01-01T00:14:00.000Z",
+        },
+      }),
+    ).rejects.toThrow();
+
+    const { task: reread } = await db.request({ type: "task.get", id: "assim-atomic" });
+    expect(reread?.status).toBe("running");
+    expect(reread?.updated_at).toBe(baseTaskFields.updatedAt);
+
+    await db.close();
+  });
+});

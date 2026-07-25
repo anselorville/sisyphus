@@ -1,13 +1,18 @@
 /**
- * Concrete RoleManifests shipped by this task: the General Worker plus the
- * first four specialist castes (Code, Web, Device, Mail). Each specialist
- * manifest follows GENERAL_ROLE_MANIFEST's exact pattern -- a resolved
- * promptPath constant plus a frozen RoleManifest literal -- and declares
- * only the tools its job requires (see the module-level tool files this
- * package now ships: ./../tools/code-tools.ts, ./../tools/web-tools.ts,
- * ./../tools/device-tools.ts, ./../tools/mail/agently-mail.ts). Further
- * specialist roles (e.g. an Inspector) arrive in later tasks and register
- * the same way.
+ * Concrete RoleManifests shipped by this task: the General Worker, the
+ * first four specialist castes (Code, Web, Device, Mail), and the two
+ * read-only/no-tool governance castes (Inspector, Memory Curator). Each
+ * specialist manifest follows GENERAL_ROLE_MANIFEST's exact pattern -- a
+ * resolved promptPath constant plus a frozen RoleManifest literal -- and
+ * declares only the tools its job requires (see the module-level tool
+ * files this package now ships: ./../tools/code-tools.ts,
+ * ./../tools/web-tools.ts, ./../tools/device-tools.ts,
+ * ./../tools/mail/agently-mail.ts). Inspector and Memory Curator have no
+ * bespoke tool file of their own -- their actual judgment logic lives in
+ * ../inspection/inspector.ts and ../memory/memory-curator.ts respectively;
+ * this module only ever names the (deliberately minimal) tool set their Pi
+ * Sessions may use. Further specialist roles arrive in later tasks and
+ * register the same way.
  */
 
 import { readFileSync } from "node:fs";
@@ -107,6 +112,45 @@ export const MAIL_ROLE_MANIFEST: RoleManifest = Object.freeze({
   promptPath: MAIL_ROLE_PROMPT_PATH,
   modelClass: "balanced",
   thinkingLevel: "medium",
+  lifecycle: "resident",
+});
+
+/**
+ * Inspector: read-only verification of another role's claimed task outcome.
+ * The actual judgment logic (never LLM, never persisted chain-of-thought)
+ * lives in ../inspection/inspector.ts; this manifest only gives the
+ * Inspector role's Pi Session the tools it needs to gather evidence.
+ * Deliberately no write/edit/bash -- an Inspector that could change state
+ * could also contaminate the evidence it is supposed to be judging.
+ */
+export const INSPECTOR_ROLE_PROMPT_PATH = resolveRolePromptPath("inspector.md");
+
+export const INSPECTOR_ROLE_MANIFEST: RoleManifest = Object.freeze({
+  id: "inspector",
+  capabilities: ["result-verification", "evidence-review"],
+  tools: ["read", "grep", "find", "ls"],
+  promptPath: INSPECTOR_ROLE_PROMPT_PATH,
+  modelClass: "balanced",
+  thinkingLevel: "medium",
+  lifecycle: "resident",
+});
+
+/**
+ * Memory Curator: decides what becomes permanent Personal Memory. The
+ * actual filtering logic lives in ../memory/memory-curator.ts; this
+ * manifest just registers the role. It needs no tool at all -- it only
+ * ever judges structured events it is handed, never goes looking for more
+ * content itself.
+ */
+export const MEMORY_ROLE_PROMPT_PATH = resolveRolePromptPath("memory.md");
+
+export const MEMORY_ROLE_MANIFEST: RoleManifest = Object.freeze({
+  id: "memory",
+  capabilities: ["memory-curation", "preference-tracking"],
+  tools: [],
+  promptPath: MEMORY_ROLE_PROMPT_PATH,
+  modelClass: "fast",
+  thinkingLevel: "low",
   lifecycle: "resident",
 });
 

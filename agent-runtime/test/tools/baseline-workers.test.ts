@@ -3,15 +3,17 @@ import { describe, expect, it } from "vitest";
 import {
   CODE_ROLE_MANIFEST,
   DEVICE_ROLE_MANIFEST,
+  INSPECTOR_ROLE_MANIFEST,
   MAIL_ROLE_MANIFEST,
+  MEMORY_ROLE_MANIFEST,
   WEB_ROLE_MANIFEST,
 } from "../../src/roles/manifests.js";
 import type { RoleManifest } from "../../src/roles/types.js";
 
 /**
- * Asserts each of the four first-release worker castes gets exactly the
- * tools its job requires -- no incidental over-provisioning. Does not test
- * an "Inspector" role: that caste is built in a later task, not this one.
+ * Asserts each of the four first-release worker castes, plus the Inspector
+ * and Memory Curator governance castes, gets exactly the tools its job
+ * requires -- no incidental over-provisioning.
  */
 describe("baseline worker role manifests: least-privilege tool sets", () => {
   it("Code Worker gets exactly Pi's built-in coding tools", () => {
@@ -40,8 +42,26 @@ describe("baseline worker role manifests: least-privilege tool sets", () => {
     expect(MAIL_ROLE_MANIFEST.tools).not.toContain("edit");
   });
 
+  it("Inspector gets exactly its read-only evidence-gathering tools -- never write, edit, or bash", () => {
+    expect([...INSPECTOR_ROLE_MANIFEST.tools].sort()).toEqual(["find", "grep", "ls", "read"].sort());
+    expect(INSPECTOR_ROLE_MANIFEST.tools).not.toContain("write");
+    expect(INSPECTOR_ROLE_MANIFEST.tools).not.toContain("edit");
+    expect(INSPECTOR_ROLE_MANIFEST.tools).not.toContain("bash");
+  });
+
+  it("Memory Curator gets no tools at all -- it only judges events it is handed", () => {
+    expect(MEMORY_ROLE_MANIFEST.tools).toEqual([]);
+  });
+
   it("every new manifest has a distinct id, a matching prompt file, and declared capabilities", () => {
-    const manifests: readonly RoleManifest[] = [CODE_ROLE_MANIFEST, WEB_ROLE_MANIFEST, DEVICE_ROLE_MANIFEST, MAIL_ROLE_MANIFEST];
+    const manifests: readonly RoleManifest[] = [
+      CODE_ROLE_MANIFEST,
+      WEB_ROLE_MANIFEST,
+      DEVICE_ROLE_MANIFEST,
+      MAIL_ROLE_MANIFEST,
+      INSPECTOR_ROLE_MANIFEST,
+      MEMORY_ROLE_MANIFEST,
+    ];
 
     const ids = manifests.map((manifest) => manifest.id);
     expect(new Set(ids).size).toBe(ids.length);

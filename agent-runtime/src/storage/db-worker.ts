@@ -22,6 +22,7 @@ import { runMigrations } from "./migrations.js";
 import type {
   DbCommand,
   DbWorkerData,
+  TaskAssimilateInput,
   TaskRow,
   WorkerInboundMessage,
   WorkerOutboundMessage,
@@ -81,6 +82,40 @@ interface MetricsInsertBindParams {
   readonly dbLatencySampleCount: number;
 }
 
+// Bind params for the four tables "task.assimilate" is the first command to
+// touch -- see the assimilateTask transaction below.
+interface RoleUpsertBindParams {
+  readonly id: string;
+  readonly name: string;
+  readonly status: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+interface RoleFitnessInsertBindParams {
+  readonly roleId: string;
+  readonly metric: string;
+  readonly value: number;
+  readonly recordedAt: string;
+}
+
+interface PheromoneInsertBindParams {
+  readonly signal: string;
+  readonly strength: number;
+  readonly taskId: string;
+  readonly createdAt: string;
+  readonly decaysAt: string | null;
+}
+
+interface MemoryInsertBindParams {
+  readonly id: string;
+  readonly roleId: string;
+  readonly key: string;
+  readonly value: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
 const MAX_RUNTIME_METRICS_ROWS = 10_000;
 
 const statements = {
@@ -107,7 +142,113 @@ const statements = {
   pruneMetrics: db.prepare<[number]>(
     `DELETE FROM runtime_metrics WHERE id NOT IN (SELECT id FROM runtime_metrics ORDER BY id DESC LIMIT ?)`,
   ),
+  // Upsert rather than plain insert: a role's `roles` row may already exist
+  // from an earlier assimilated task, in which case this call only needs to
+  // bump its status/updated_at, never clobber created_at or definition.
+  upsertRole: db.prepare<RoleUpsertBindParams>(`
+    INSERT INTO roles (id, name, status, definition, created_at, updated_at)
+    VALUES (@id, @name, @status, '{}', @createdAt, @updatedAt)
+    ON CONFLICT(id) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at
+  `),
+  insertRoleFitness: db.prepare<RoleFitnessInsertBindParams>(`
+    INSERT INTO role_fitness (role_id, metric, value, recorded_at) VALUES (@roleId, @metric, @value, @recordedAt)
+  `),
+  insertPheromone: db.prepare<PheromoneInsertBindParams>(`
+    INSERT INTO pheromones (signal, strength, task_id, created_at, decays_at)
+    VALUES (@signal, @strength, @taskId, @createdAt, @decaysAt)
+  `),
+  insertMemory: db.prepare<MemoryInsertBindParams>(`
+    INSERT INTO memories (id, role_id, key, value, created_at, updated_at)
+    VALUES (@id, @roleId, @key, @value, @createdAt, @updatedAt)
+  `),
 };
+
+interface AssimilateResult {
+  readonly task: TaskRow | undefined;
+  readonly roleFitnessRecorded: number;
+  readonly pheromoneRecorded: boolean;
+  readonly memoryRecorded: boolean;
+}
+
+/**
+ * The assimilation transaction: a task's terminal state (status, Inspector
+ * result already folded into role_fitness/pheromone deltas by the caller,
+ * role fitness, pheromone, a compressed lesson, and any promotion/sleep
+ * decision) all committed or rolled back together.
+ *
+ * Built with `db.transaction()` (like migrations.ts's own `apply` wrapper)
+ * rather than issued as loose statements from inside the switch below: this
+ * function is itself invoked from *inside* db-worker.ts's own outer batch
+ * transaction (see applyBatch() in flushPendingWrites()), and better-
+ * sqlite3's transaction wrapper automatically detects `db.inTransaction` and
+ * uses SAVEPOINT/RELEASE/ROLLBACK TO instead of BEGIN/COMMIT/ROLLBACK when
+ * nested (see node_modules/better-sqlite3/lib/methods/transaction.js). That
+ * gives this specific multi-statement write real all-or-nothing atomicity
+ * -- if any statement below throws (e.g. a bad FK), every statement already
+ * run by *this* call is rolled back to its savepoint, while sibling writes
+ * already applied earlier in the same outer batch are left untouched. Without
+ * this nested transaction, a partial failure here (e.g. the roles upsert
+ * succeeding but a role_fitness insert then throwing) would NOT roll back on
+ * its own: flushPendingWrites()'s per-entry try/catch swallows the error
+ * before it can make the outer `db.transaction()` wrapper itself roll back.
+ *
+ * Statement order matters: `roles` is upserted before `role_fitness`/
+ * `memories`, since both carry a real foreign key to `roles.id` (see
+ * migrations.ts) and `pragma foreign_keys = ON` is set above.
+ */
+const assimilateTask = db.transaction((input: TaskAssimilateInput): AssimilateResult => {
+  statements.updateTaskStatus.run({
+    id: input.taskId,
+    status: input.finalStatus,
+    roleId: input.roleId,
+    updatedAt: input.updatedAt,
+  });
+
+  statements.upsertRole.run({
+    id: input.roleId,
+    name: input.roleName,
+    status: input.roleStatus,
+    createdAt: input.updatedAt,
+    updatedAt: input.updatedAt,
+  });
+
+  for (const fitness of input.roleFitness) {
+    statements.insertRoleFitness.run({
+      roleId: input.roleId,
+      metric: fitness.metric,
+      value: fitness.value,
+      recordedAt: input.updatedAt,
+    });
+  }
+
+  if (input.pheromone) {
+    statements.insertPheromone.run({
+      signal: input.pheromone.signal,
+      strength: input.pheromone.strength,
+      taskId: input.taskId,
+      createdAt: input.updatedAt,
+      decaysAt: input.pheromone.decaysAt,
+    });
+  }
+
+  if (input.memory) {
+    statements.insertMemory.run({
+      id: input.memory.id,
+      roleId: input.roleId,
+      key: input.memory.key,
+      value: input.memory.value,
+      createdAt: input.updatedAt,
+      updatedAt: input.updatedAt,
+    });
+  }
+
+  return {
+    task: statements.getTask.get(input.taskId),
+    roleFitnessRecorded: input.roleFitness.length,
+    pheromoneRecorded: input.pheromone !== null,
+    memoryRecorded: input.memory !== null,
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Write batching: every 20ms OR every 50 queued write commands, whichever
@@ -266,6 +407,11 @@ function handleRequest(id: number, command: DbCommand): void {
             return { recorded: true };
           }),
         );
+        return;
+      }
+      case "task.assimilate": {
+        const { assimilation } = command;
+        enqueueWrite(makeWriteEntry(id, () => assimilateTask(assimilation)));
         return;
       }
       default: {

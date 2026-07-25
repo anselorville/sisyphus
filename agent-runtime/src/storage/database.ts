@@ -68,17 +68,66 @@ export interface MetricsSampleInput {
   readonly dbLatencySampleCount: number;
 }
 
+/** One role_fitness delta row to append -- an event/metric pair, never a cumulative value (see db-worker.ts's assimilateTask transaction: role_fitness is an append-only time series, aggregation is a later reader's job). */
+export interface TaskAssimilateRoleFitnessInput {
+  readonly metric: string;
+  readonly value: number;
+}
+
+/** One pheromones delta row to append, e.g. the PheromoneMap.reinforce()/penalize() result for the path this task exercised. `decaysAt` is null when the caller has no decay policy to record for this signal. */
+export interface TaskAssimilatePheromoneInput {
+  readonly signal: string;
+  readonly strength: number;
+  readonly decaysAt: string | null;
+}
+
+/** A compressed reusable lesson to write into `memories` -- must already be MemoryCurator-approved, already-compressed content (see ../memory/memory-curator.ts). Never full raw content; this layer does not re-check that, it only persists what it is given. */
+export interface TaskAssimilateMemoryInput {
+  readonly id: string;
+  readonly key: string;
+  readonly value: string;
+}
+
+/**
+ * Everything one task's terminal-state assimilation writes in a single
+ * transaction: the task's final status, an upsert of its `roles` row
+ * (created if this role has never run a task before, otherwise just its
+ * `status` bumped to reflect any promotion/sleep decision), zero or more
+ * role_fitness deltas, at most one pheromone delta, and at most one
+ * compressed memory. See db-worker.ts's assimilateTask for the exact
+ * statement order (roles is upserted before role_fitness/memories insert,
+ * since both carry a real FK to roles.id).
+ */
+export interface TaskAssimilateInput {
+  readonly taskId: string;
+  /** The task's terminal status, e.g. "completed" | "failed". */
+  readonly finalStatus: string;
+  readonly roleId: string;
+  /** Used only if `roleId` has no existing `roles` row yet (first time this role has ever been assimilated). */
+  readonly roleName: string;
+  /** Lifecycle-ish status to upsert onto roles.status -- typically derived from evaluateRoleLifecycle()'s decision (../ecology/pheromone-map.ts), or the role's unchanged current status when no lifecycle threshold was crossed. */
+  readonly roleStatus: string;
+  readonly roleFitness: readonly TaskAssimilateRoleFitnessInput[];
+  readonly pheromone: TaskAssimilatePheromoneInput | null;
+  readonly memory: TaskAssimilateMemoryInput | null;
+  readonly updatedAt: string;
+}
+
 // ---------------------------------------------------------------------------
 // Command / result protocol
 // ---------------------------------------------------------------------------
 //
 // This is deliberately narrower than the full table set migrations.ts
-// creates: `events`, `roles`, `role_fitness`, `budgets`, `pheromones`, and
-// `memories` exist per the schema spec so later work can build on them, but
-// no command here reads or writes them yet -- only `tasks` (TaskNest) and
-// `runtime_metrics` (RuntimeMetrics) have an actual caller and a test behind
-// them, per this task's own "write a failing test first, then minimal
-// implementation" rule.
+// creates: `events` and `budgets` exist per the schema spec so later work
+// can build on them, but no command here reads or writes them yet. `tasks`
+// (TaskNest) and `runtime_metrics` (RuntimeMetrics) were the first two
+// tables with an actual caller and a test behind them, per this task's own
+// "write a failing test first, then minimal implementation" rule.
+// `task.assimilate` (see ../inspection/inspector.ts, ../memory/memory-
+// curator.ts, ../ecology/pheromone-map.ts) is the first command to also
+// touch `roles`, `role_fitness`, `pheromones`, and `memories` -- all four,
+// plus the `tasks` status update, inside one nested transaction (see
+// db-worker.ts's assimilateTask).
 
 export interface DbCommandResultMap {
   ping: { readonly ok: true };
@@ -87,6 +136,12 @@ export interface DbCommandResultMap {
   "task.get": { readonly task: TaskRow | undefined };
   "task.list-active": { readonly tasks: readonly TaskRow[] };
   "metrics.record": { readonly recorded: true };
+  "task.assimilate": {
+    readonly task: TaskRow | undefined;
+    readonly roleFitnessRecorded: number;
+    readonly pheromoneRecorded: boolean;
+    readonly memoryRecorded: boolean;
+  };
 }
 
 export type DbCommand =
@@ -95,7 +150,8 @@ export type DbCommand =
   | { readonly type: "task.update-status"; readonly update: TaskUpdateStatusInput }
   | { readonly type: "task.get"; readonly id: string }
   | { readonly type: "task.list-active" }
-  | { readonly type: "metrics.record"; readonly sample: MetricsSampleInput };
+  | { readonly type: "metrics.record"; readonly sample: MetricsSampleInput }
+  | { readonly type: "task.assimilate"; readonly assimilation: TaskAssimilateInput };
 
 /** `workerData` handed to db-worker.ts at spawn time. */
 export interface DbWorkerData {
