@@ -6,21 +6,23 @@
 
 ## 1. 架构结论
 
-当前项目不能只把原来的 `LLM -> TTS` 节点替换成一个更强 LLM。真正的 realtime voice agent 需要三层解耦：
+当前项目不能只把原来的 `LLM -> TTS` 节点替换成一个更强 LLM。真正的 realtime voice agent 需要四层解耦：
 
 1. Transport / Media Plane：负责全双工音频、唤醒、声纹、VAD、STT、TTS、播放、打断、超时反馈。
-2. Voice Orchestration Plane：负责语音实时策略，判断 fast path、agent path、timeout、barge-in、安慰反馈、澄清、取消。
-3. Swarm Agent Plane：以 Pi Agent Harness 为核心，运行规划、执行、检测、记忆、工具、长期任务和自我进化。
+2. Reflex Routing Plane：负责毫秒级语音反射，判断 fast path、timeout、barge-in、安慰反馈、澄清、取消。
+3. Stress Judge Plane：负责判定高熵、高风险、未知任务是否越界，只裁判，不规划，不执行。
+4. Swarm Agent Plane：以 Pi Agent Harness 为核心，运行低能耗常驻工种网络；只有越界时才孵化临时高阶智力品级。
 
 这三层的 SLA 完全不同：
 
 | 层 | 目标 | 响应时间预算 | 失败时 |
 | --- | --- | --- | --- |
 | Transport / Media | 听、说、停、唤醒、识别人 | 10ms-300ms | 降级为按钮/文字 |
-| Voice Orchestrator | 给用户即时反馈，路由任务 | 100ms-1000ms | 给短答或道歉 |
+| Reflex Router | 给用户即时反馈，路由任务 | 100ms-800ms | 给短答或道歉 |
+| Stress Judge | 判定是否超出稳态基线 | 50ms-300ms | 保守降级、请求确认 |
 | Swarm Agent | 计划、执行、验证、记忆 | 1s-分钟级 | 后台失败、可恢复 |
 
-关键原则：用户面对的是 voice agent，不是后台任务管理器。任何 agent 生态中的复杂活动都不能让语音通道沉默太久。
+关键原则：用户面对的是 voice agent，不是后台任务管理器。任何 agent 生态中的复杂活动都不能让语音通道沉默太久；任何高阶智力都不能常驻成中央主脑，只能作为应激工具被短暂唤醒。
 
 ## 2. 总体拓扑
 
@@ -39,8 +41,8 @@
 │  └─────────────┘   └──────────────┘   └────────────┘   └──────────────┬───────────┘  │
 │                                                                       │              │
 │  ┌─────────────┐   ┌──────────────┐   ┌────────────┐   ┌──────────────▼───────────┐  │
-│  │ Audio Input │◀▶│ Transport     │◀▶│ Playback   │◀──│ Voice Orchestrator        │  │
-│  │ WebRTC/USB  │  │ Spine         │  │ Gate/TTS   │   │ Fast path + timeout logic │  │
+│  │ Audio Input │◀▶│ Transport     │◀▶│ Playback   │◀──│ Reflex Router + Stress    │  │
+│  │ WebRTC/USB  │  │ Spine         │  │ Gate/TTS   │   │ Judge: fast path + stress │  │
 │  └─────────────┘   └──────────────┘   └────────────┘   └──────────────┬───────────┘  │
 │                                                                       │              │
 └───────────────────────────────────────────────────────────────────────┼──────────────┘
@@ -51,7 +53,7 @@
 │                                                                                       │
 │  ┌─────────────────────┐      ┌───────────────────────────────────────────────────┐  │
 │  │ Voice Event Adapter │─────▶│ Pi AgentSession / Swarm Runtime                   │  │
-│  └─────────────────────┘      │  Planner / Executors / Inspectors / Memory / UI   │  │
+│  └─────────────────────┘      │  Baseline workers + temporary intelligence caste   │  │
 │                               └───────────────────────────────────────────────────┘  │
 │                                                                                       │
 └───────────────────────────────────────────────────────────────────────────────────────┘
@@ -80,6 +82,7 @@ Pipecat 继续存在，但它被定义为实时媒体骨架。Pi 通过 sidecar 
 - Pi sidecar agent bridge。
 - agent event -> voice event adapter。
 - Swarm runtime substrate。
+- Stress Judge：高熵、高风险、未知任务的应激裁判。
 - 后台任务面板。
 
 ## 4. Transport / Media Plane
@@ -137,7 +140,7 @@ Agent Stream:  idle -> ack -> working -> progress -> final
 - 用户说话时，输入流永远不断。
 - 助手说话时，输入流仍然监听 wake/barge-in。
 - 用户插话只立即停止输出，不立即取消后台 agent。
-- STT final 到达后，Voice Orchestrator 决定是否取消/修改/追加。
+- STT final 到达后，Reflex Router 只做快速路由；是否应激越界由 Stress Judge 判定。
 - 如果后台 agent 仍在工作，用户可以问“进度怎样”“停一下”“换成另一个目标”。
 
 ### 4.3 唤醒词设计
@@ -236,6 +239,83 @@ VAD 只能判断“有没有人声”，不是完整的 turn-taking。
 - `barge_in_min_ms`: 300-500ms，防止呼吸/笑声误打断。
 - `false_interruption_timeout_ms`: 1500-2500ms，误打断后可恢复。
 
+### 4.6 Stress Judge：高熵、高风险、未知任务裁判
+
+Stress Judge 是系统里的“应激裁判”。它是低成本、常驻、快速、可解释的裁判工种，不是中央智慧个体。它不写计划、不调用工具、不生成最终答案，只根据实时事件和生态状态判断：当前请求是否仍可由稳态低阶工种处理，还是必须孵化临时高阶智力品级。
+
+判定分三轴：
+
+```text
+entropy_score = 链路混乱度 / 失败密度 / 信号冲突度
+risk_score = 行为不可逆性 / 隐私敏感度 / 权限危险度
+novelty_score = 任务未知度 / 路由缺失度 / 工具与领域新颖度
+stress_score = max(entropy_score, risk_score, novelty_score)
+```
+
+分数区间：
+
+| `stress_score` | 状态 | 动作 |
+| --- | --- | --- |
+| `0.00-0.39` | Homeostasis / 稳态 | Reflex Router 或固定 worker 直接响应 |
+| `0.40-0.64` | Local Perturbation / 局部扰动 | 激活专业 worker，必要时问澄清 |
+| `0.65-0.79` | Stress Warning / 应激预警 | 启动 Planner、Inspector、Traffic Commander 协同，但仍不唤醒高阶智力 |
+| `0.80-1.00` | Stress Overflow / 应激越界 | 孵化 Temporary Intelligence Caste，完成后必须退化 |
+
+高熵范围：
+
+- 同一路由连续失败 2 次。
+- 同一工具或外部 API 连续失败 3 次。
+- STT final、用户意图、声纹、VAD、工具状态互相冲突。
+- 用户连续纠正目标，说明系统已经误解。
+- agent 反复规划、反复调用同一工具、重复输出但没有实质进展。
+- 后台任务超过 5-10 秒没有任何可解释状态变化。
+- 多个 worker 置信度分裂严重，无法形成稳定局部选择。
+
+高风险范围：
+
+- 文件写入、删除、覆盖、移动。
+- shell、系统设置、网络设置、关机、重启。
+- 发送邮件/消息、发布内容、提交表单、付款、下单。
+- 读取或暴露隐私：凭据、日历、联系人、位置、聊天记录。
+- 医疗、法律、金融、安全相关建议。
+- 非主人声纹、低声纹置信度或多人环境下的私人/高权限请求。
+- 高成本模型调用、长时间后台执行、可能耗尽 Pi 电池/网络流量的动作。
+
+未知任务范围：
+
+- 无匹配 route、skill、prompt、tool bundle。
+- route pheromone 低于阈值，历史成功样本不足。
+- 首次出现的新外部系统、新设备、新 API、新文件类型或新业务域。
+- 需要动态发现 MCP/工具协议。
+- 所有现有 worker 都低置信。
+- 用户要求系统探索，而不是执行已知流程。
+
+裁判输出：
+
+```json
+{
+  "type": "stress_decision",
+  "interaction_id": "i_20260725_001",
+  "entropy_score": 0.72,
+  "risk_score": 0.34,
+  "novelty_score": 0.81,
+  "stress_score": 0.81,
+  "decision": "spawn_intelligence_caste",
+  "reason": "unknown_task_no_route_and_low_worker_confidence",
+  "allowed_actions": ["spawn_temporary_agent", "ask_user_confirmation"],
+  "must_regress_after": true
+}
+```
+
+Stress Judge 的戒律：
+
+- 不直接回答用户。
+- 不直接规划。
+- 不直接调用工具。
+- 不让“高风险”自动等于“高阶智力”，高风险优先是确认、隔离、审计。
+- 不让“复杂”自动等于“未知”，复杂但熟悉的任务应交给专业 worker。
+- 不让“等待超时”自动唤醒高阶智力；短等待先由 Traffic Commander 安慰，持续无进展才提高 entropy。
+
 ## 5. Timeout / 安慰反馈机制
 
 这是用户提出的关键设计：transport 层一旦等待超过阈值，就向 agent 生态层的“交通指挥”索取一个安慰信息，再流入 TTS 输出给用户。
@@ -314,16 +394,16 @@ Traffic Commander 输出必须非常短，不能像普通 LLM 长篇解释。
 - “我已经找到方向了，还在验证。”
 - “可以，你先继续说，我在后台做。”
 
-## 6. Voice Orchestrator
+## 6. Reflex Router
 
-Voice Orchestrator 是语音层中枢，不是最高智能中枢。它负责实时交互策略。
+Reflex Router 是语音层的低阶反射路由器，不是中枢，也不是最高智能。它负责在很短时间内把事件送到正确工种：短答给 Reflex Agent，等待给 Traffic Commander，常规长任务给 baseline workers，越界判定交给 Stress Judge。
 
 职责：
 
 - 建立 `interaction_id`。
 - 聚合 wake、speaker、VAD、STT、barge-in、timeout。
-- 决定 fast path / agent path。
-- 触发 Reflex Agent、Traffic Commander、Pi Agent Bridge。
+- 决定 fast path / baseline worker path / stress judge path。
+- 触发 Reflex Agent、Traffic Commander、Stress Judge、Pi Agent Bridge。
 - 管理 TTS queue。
 - 处理 cancellation 和 steering。
 - 把 agent 事件转成可播报事件。
@@ -423,7 +503,9 @@ Swarm Agent Plane 中建议定义这些“品种”：
 
 | 角色 | 中文名 | 职责 | 是否可发声 | 是否可调用工具 |
 | --- | --- | --- | --- | --- |
-| Hive Core | 母巢中枢 | 最终仲裁、长期策略、人格一致性 | 是 | 受控 |
+| Reflex Router | 反射路由器 | 毫秒级事件路由，维持 hot path | 否 | 否 |
+| Stress Judge | 应激裁判 | 判定高熵、高风险、未知度是否越界 | 否 | 否 |
+| Temporary Intelligence Caste | 临时智力品级 | 只在越界时孵化，生成新策略/新品级，完成后退化 | 受控 | 受控 |
 | Traffic Commander | 交通指挥 | 观察等待与拥堵，生成短反馈 | 是 | 否 |
 | Reflex Agent | 反射体 | 快速短答、澄清、确认、拒绝 | 是 | 极少 |
 | Planner Brood | 规划孵化群 | 任务拆解、依赖图、风险标注 | UI 摘要 | 否 |
@@ -442,9 +524,21 @@ Traffic Commander:
   if agent_progress_gap_ms > 2500
   if user_asks_progress
 
+Stress Judge:
+  if entropy_score >= 0.40 or risk_score >= 0.40 or novelty_score >= 0.40
+  if stress_score < 0.65 -> activate specialists or ask clarification
+  if 0.65 <= stress_score < 0.80 -> planner/inspector collaboration
+  if stress_score >= 0.80 -> spawn temporary intelligence caste
+
 Reflex Agent:
   if intent in [smalltalk, confirm, reject, clarify, quick answer]
   if response_budget_ms < 1000
+
+Temporary Intelligence Caste:
+  if stress_score >= 0.80
+  if no existing worker route can solve the task
+  if successful -> distill trajectory into skills/prompts/pheromone
+  if finished -> de-instantiate and release model/context resources
 
 Planner Brood:
   if task_complexity >= medium
@@ -558,7 +652,7 @@ Task Nest 存储后台任务：
 
 ```text
 Wake -> Speaker verified -> VAD -> STT final
-  -> Voice Orchestrator classifies quick answer
+  -> Reflex Router classifies quick answer
   -> Reflex Agent generates concise answer
   -> TTS
   -> done
@@ -574,7 +668,8 @@ Wake -> Speaker verified -> VAD -> STT final
 
 ```text
 Wake -> STT final
-  -> Orchestrator sees complex task
+  -> Reflex Router sees complex task
+  -> Stress Judge confirms it is not stress overflow
   -> Traffic Commander says short ack within 800ms
   -> Pi Bridge starts AgentSession turn
   -> Planner creates task graph
@@ -597,7 +692,7 @@ Agent speaking
   -> VAD detects user speech
   -> Playback gate immediately stops TTS
   -> STT collects interruption
-  -> Orchestrator classifies:
+  -> Reflex Router classifies:
       "停" -> cancel agent task
       "等一下" -> pause TTS, keep task
       "改成..." -> steer Pi task
@@ -636,7 +731,8 @@ Agent result arrives later
 ```text
 app/
   realtime_events.py
-  voice_orchestrator.py
+  reflex_router.py
+  stress_judge.py
   traffic_commander.py
   wake_guard.py
   speaker_gate.py
@@ -690,13 +786,17 @@ client/src/device/
 - `AgentResult`
 - `AgentFailed`
 
-### 10.2 `app/voice_orchestrator.py`
+### 10.2 `app/reflex_router.py` 与 `app/stress_judge.py`
 
 核心接口：
 
 ```python
-class VoiceOrchestrator:
+class ReflexRouter:
     async def handle_event(self, event: RealtimeEvent) -> list[RealtimeCommand]:
+        ...
+
+class StressJudge:
+    async def judge(self, snapshot: StressSnapshot) -> StressDecision:
         ...
 ```
 
@@ -811,7 +911,7 @@ Pi Agent Harness 承担：
 - extension/skills。
 - planning/execution/checking ecosystem。
 
-Voice Orchestrator 站在二者之间。
+Reflex Router 与 Stress Judge 站在二者之间：前者只做快速路由，后者只做应激判定。它们都不能演化成常驻中央智慧。
 
 ## 15. 资料来源
 

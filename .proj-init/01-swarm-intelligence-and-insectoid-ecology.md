@@ -16,6 +16,8 @@
 - 不是一次性设计完美，而是持续变异、选择、强化和淘汰。
 - 不是追求个体自由，而是让每个角色承担清晰功能，使整体持续存活和扩张。
 
+与《虫群》的进化哲学对齐后，还要再加一条最高原则：智慧不是常驻王座，而是昂贵的应激器官。稳态下，生态应由低能耗、去中心化、快速响应的专业工种维持；只有当环境熵增、风险越界或任务未知度超出基线生态时，系统才临时孵化高阶智力品级。危机解除后，高阶智力必须蒸馏经验、释放资源、退回基质，不能永久变成新的中央主脑。
+
 ## 2. 资料基线
 
 本设计主要借鉴以下研究方向：
@@ -42,7 +44,7 @@
 - 觅食路径像血管。
 - 免疫行为像白细胞系统。
 - 繁殖/孵化机制像干细胞分化系统。
-- 中枢并不决定所有动作，而是调节全局激素、优先级和资源分配。
+- 高阶智力像应激器官，只在生态越界时短暂出现。
 
 这对 agent 生态非常重要。一个 agent 生态如果把“主控 LLM”设计成每件事都亲自思考、亲自调度、亲自验证、亲自回应用户，就会变慢、脆弱、昂贵，并且难以同时处理实时语音与长任务。虫群式系统的核心是：让不同品种在不同刺激下自动响应，而不是让一个中枢大脑轮询所有问题。
 
@@ -61,7 +63,7 @@ Superorganism 的意思是群体整体表现出类似单个生命体的功能。
 设计原则：
 
 1. 不把所有能力塞进一个 system prompt。
-2. 不把每次语音都交给最高中枢。
+2. 不让高阶智力常驻，也不把每次语音都交给高阶模型。
 3. 每个 agent 角色必须有明确器官功能。
 4. 允许角色死亡、重启、替换和降级。
 5. 让群体状态比个体状态更重要。
@@ -75,7 +77,7 @@ Deborah Gordon 关于蚁群的研究强调，蚁群行为不是由中央命令�
 - 每个 agent 不需要知道全局所有状态。
 - agent 通过事件、任务队列、共享记忆、状态黑板和“信息素”工作。
 - 调度不是单点命令，而是角色对刺激的响应。
-- 中枢的职责是塑造环境和约束，而不是直接执行所有动作。
+- 生态调节器只塑造环境、阈值和约束，不直接替所有角色执行动作。
 
 对应到 voice agent：
 
@@ -115,6 +117,61 @@ activation = f(stimulus_intensity, role_affinity, current_load, confidence, urge
 - 当环境嘈杂，Speaker Sentinel 阈值降低，更多资源用于声纹和语音分离。
 - 当用户等待变久，Traffic Commander 阈值降低，自动生成安慰反馈。
 - 当任务风险升高，Inspector 阈值降低，更多检查介入。
+
+### 6.1 应激裁判：高熵、高风险、未知任务的范围
+
+虫群式 agent 生态必须有一个“应激裁判”（Stress Judge）。它不是中央智慧个体，不负责规划或执行；它是低成本、常驻、可解释的判定器，只回答一个问题：当前刺激是否超出稳态基线层，是否需要孵化临时高阶智力品级。
+
+应激裁判读取三类分数：
+
+```text
+stress_score = max(entropy_score, risk_score, novelty_score)
+```
+
+| 分数区间 | 状态 | 响应 |
+| --- | --- | --- |
+| `0.00-0.39` | 稳态 | 低阶工种独立处理，不唤醒高阶智力 |
+| `0.40-0.64` | 轻度扰动 | 交给专业 worker 或要求澄清 |
+| `0.65-0.79` | 应激预警 | 启动 Planner/Inspector/Traffic Commander 等专门品级协同 |
+| `0.80-1.00` | 越界危机 | 临时孵化 Intelligence Caste，高阶推理只作为应激工具出现 |
+
+高熵任务的范围：
+
+- 同一路由连续失败 2 次以上。
+- 同一工具/API 连续报错 3 次以上。
+- STT、意图分类、声纹、VAD 给出互相冲突的信号。
+- 用户连续纠正系统，说明上下文或目标漂移。
+- agent 进入循环、反复计划、反复调用同一工具但无产出。
+- 超过预期等待窗口仍无可解释进展，例如后台任务超过 5-10 秒没有状态变化。
+- 多个 worker 对同一任务的判断差异很大，置信度分裂超过预设阈值。
+
+高风险任务的范围：
+
+- 写入、删除、覆盖文件。
+- 执行 shell、系统命令、网络配置、关机、重启。
+- 发送邮件、消息、提交表单、付款、下单、公开发布。
+- 访问隐私数据、凭据、日历、联系人、聊天记录、位置。
+- 医疗、法律、金融、安全相关建议。
+- 非主人声纹、低声纹置信度或多人环境下的私人/高权限请求。
+- 高成本模型调用、长时间后台任务、可能耗尽移动设备电量或网络流量的操作。
+
+未知任务的范围：
+
+- 没有匹配到已有 route、skill、prompt 或工具组合。
+- route pheromone 很低，历史成功样本不足。
+- 用户提出从未出现过的新领域、新工具、新设备或新外部系统。
+- 任务需要动态发现协议、接口或 MCP 工具。
+- 现有 worker 都给出低置信度，或任务需要跨多个未知域组合。
+- 任务目标含糊，但用户期望系统主动探索。
+
+裁判输出不是“答案”，而是生态动作：
+
+- `stay_baseline`：低阶工种直接处理。
+- `ask_clarification`：先问一句澄清，避免高阶智力浪费。
+- `activate_specialists`：唤醒已有专业 worker。
+- `spawn_intelligence_caste`：临时孵化高阶智力品级。
+- `quarantine_or_confirm`：高风险动作先隔离或请求确认。
+- `assimilate_after_success`：任务完成后蒸馏轨迹、固化技能、销毁临时品级。
 
 ## 7. 机制四：Temporal Polyethism 年龄分工
 
@@ -392,7 +449,7 @@ agent 生态也必须有免疫系统：
 5. Agent runtime 是巢穴深处。
    - 长任务可以后台运行。
    - 用户继续说话不应打断整个生态。
-   - 中枢只在有足够结果或需要仲裁时进入主流程。
+   - 高阶智力只有在应激裁判判定越界时临时出现，不能常驻主流程。
 
 ## 20. 推荐生态原型
 
@@ -402,15 +459,17 @@ agent 生态也必须有免疫系统：
   -> Speaker Sentinel
   -> VAD Scouts
   -> Transport Spine
-  -> Voice Orchestrator
+  -> Reflex Router
+      -> Stress Judge
       -> Reflex Agent
       -> Traffic Commander
-      -> Hive Agent Runtime
+      -> Baseline Worker Network
           -> Planner Brood
           -> Executor Workers
           -> Memory Workers
           -> Inspector Soldiers
           -> Scout Mutators
+      -> Temporary Intelligence Caste (only on stress overflow)
   -> TTS Speaker
   -> User
 ```
@@ -421,15 +480,17 @@ agent 生态也必须有免疫系统：
 - Speaker Sentinel：只负责“是不是目标人声”。
 - VAD Scouts：持续报告说话状态、噪声、停顿。
 - Transport Spine：全双工输入输出骨架。
-- Voice Orchestrator：语音主调度，控制 hot path/cold path。
+- Reflex Router：低阶常驻反射路由，只做毫秒级路由，不做复杂思考。
+- Stress Judge：应激裁判，判定高熵、高风险、未知度是否越界。
 - Traffic Commander：观察等待时间和链路堵塞，给用户即时反馈。
 - Reflex Agent：短答、澄清、拒绝、确认。
-- Hive Agent Runtime：Pi 生态，负责长任务。
+- Baseline Worker Network：Pi 生态中的低能耗常驻工种网络，负责常规长任务。
 - Planner Brood：分解任务。
 - Executor Workers：调用工具。
 - Inspector Soldiers：检测风险和验证结果。
 - Memory Workers：写入与检索长期记忆。
 - Scout Mutators：探索新策略和孵化新角色。
+- Temporary Intelligence Caste：应激孵化的临时高阶智力品级，解决越界问题后蒸馏经验并退化。
 
 ## 21. 设计戒律
 
@@ -440,7 +501,7 @@ agent 生态也必须有免疫系统：
 5. 不把 VAD 当成完整 turn-taking。
 6. 不把唤醒词、声纹、降噪、打断放到后面再说。
 7. 不把 agentOS 当成聊天机器人。
-8. 不让中枢成为瓶颈。
+8. 不让高阶智力常驻，也不让应激裁判变成主脑。
 9. 不让成功路径永久固化。
 10. 不让失败扩散到整个生态。
 

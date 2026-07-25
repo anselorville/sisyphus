@@ -8,6 +8,8 @@
 
 Sisyphus Hive 不是一个“会说话的聊天机器人”，也不是一个“树莓派外壳里的 LLM”。它应该是一个随身携带的智能生态：能听、能说、能等待、能插话、能安抚、能规划、能执行、能检测、能记忆、能变异、能淘汰旧策略，并在长期使用中形成越来越适合主人的专门化品种。
 
+更准确地说，Sisyphus Hive 不追求创造一个复杂的中央智慧个体。它追求的是：平时由低能耗、去中心化、专业化的工种快速独立响应；当环境熵增、风险越界或任务未知度超过稳态能力时，才临时孵化高阶智力品级。高阶智力不是统治者，而是应激器官；问题解决后必须蒸馏经验、释放资源、回归稳态。
+
 这个系统的最终形态接近一个虫群式 superorganism：
 
 - Raspberry Pi 是移动巢穴。
@@ -16,8 +18,10 @@ Sisyphus Hive 不是一个“会说话的聊天机器人”，也不是一个“
 - Speaker verification 是身份气味识别。
 - VAD/turn detection 是听觉反射。
 - Traffic Commander 是语音交互中的交通指挥。
+- Stress Judge 是应激裁判，只判定是否越界，不做复杂思考。
 - Pi Agent Harness 是 agent 生态的孵化与运行时。
 - Planner、Executor、Inspector、Memory、Scout 是不同品种。
+- Temporary Intelligence Caste 是临时高阶智力品级，只在越界时出现。
 - Event log、state board、task nest、pheromone map 是生态基质。
 - 用户不是在调用一个模型，而是在和一个活着的系统协作。
 
@@ -33,6 +37,8 @@ Sisyphus Hive 不是一个“会说话的聊天机器人”，也不是一个“
 8. 退化优先：断网、低电、过热、sidecar 挂掉时，系统要保留最小生命。
 9. 进化优先：失败、延迟、重复需求都要变成下一代角色或策略的养料。
 10. 主人体验优先：内部复杂性不能泄漏成冗长语音。
+11. 应激优先：高阶智力只在高熵、高风险、未知任务越界时短暂出现。
+12. 退场优先：临时智力品级完成任务后必须同化经验并销毁上下文。
 
 ## 3. 北极星指标
 
@@ -59,6 +65,8 @@ Sisyphus Hive 不是一个“会说话的聊天机器人”，也不是一个“
 | 记忆能力 | 用户显式保存 | 自动提炼、冲突检测、遗忘 |
 | 策略优化 | 手工调参 | pheromone 自动路由 |
 | 自我修复 | fallback | 诊断、修复建议、自动回滚 |
+| 高阶智力常驻率 | 不追求常驻 | 只有应激越界时短暂出现 |
+| 应激裁判准确性 | 手工规则 | 熵/风险/未知度可解释评分 |
 
 ## 4. 发展路线总览
 
@@ -66,12 +74,13 @@ Sisyphus Hive 不是一个“会说话的聊天机器人”，也不是一个“
 Stage 0  现状整理
 Stage 1  移动硬件生命体
 Stage 2  Realtime Voice Runtime
-Stage 3  Pi Agent Bridge
-Stage 4  Swarm Runtime Substrate
-Stage 5  Voice-Native AgentOS
-Stage 6  Adaptive Evolution
-Stage 7  Multimodal Hive
-Stage 8  Personal Superorganism
+Stage 3  Stress Judge 与应激边界
+Stage 4  Pi Agent Bridge
+Stage 5  Swarm Runtime Substrate
+Stage 6  Voice-Native AgentOS
+Stage 7  Adaptive Evolution
+Stage 8  Multimodal Hive
+Stage 9  Personal Superorganism
 ```
 
 ## 5. Stage 0：现状整理
@@ -150,7 +159,8 @@ Stage 8  Personal Superorganism
 核心模块：
 
 - `app/realtime_events.py`
-- `app/voice_orchestrator.py`
+- `app/reflex_router.py`
+- `app/stress_judge.py`
 - `app/wake_guard.py`
 - `app/speaker_gate.py`
 - `app/barge_in_policy.py`
@@ -171,9 +181,42 @@ Stage 8  Personal Superorganism
 - timeout 触发 Traffic Commander 安慰话术。
 - 误打断能恢复或要求澄清。
 
-## 8. Stage 3：Pi Agent Bridge
+## 8. Stage 3：Stress Judge 与应激边界
 
-目标：把 Pi Agent Harness 接入为 agent 生态运行时。
+目标：让系统知道什么时候应该保持低能耗稳态，什么时候应该升级到专业工种协同，什么时候才值得孵化临时高阶智力品级。
+
+Stress Judge 三轴评分：
+
+- `entropy_score`：链路混乱度，包括连续失败、信号冲突、循环、等待无进展、用户反复纠正。
+- `risk_score`：行为危险度，包括文件写入/删除、系统命令、外部发送、隐私读取、医疗法律金融安全建议、非主人高权限请求。
+- `novelty_score`：任务未知度，包括无匹配 route/skill/tool、低 pheromone、新领域、新设备、新 API、所有 worker 低置信。
+
+裁判范围：
+
+| 分数 | 状态 | 响应 |
+| --- | --- | --- |
+| `0.00-0.39` | 稳态 | 固定低阶工种直接处理 |
+| `0.40-0.64` | 局部扰动 | 专业 worker 或澄清问题 |
+| `0.65-0.79` | 应激预警 | Planner/Inspector/Traffic Commander 协同 |
+| `0.80-1.00` | 应激越界 | Temporary Intelligence Caste 临时孵化 |
+
+注意：
+
+- 高风险不等于高阶智力；高风险首先触发确认、隔离、审计。
+- 复杂不等于未知；熟悉的复杂任务应交给专业 worker。
+- 等待超时不等于应激越界；短超时先由 Traffic Commander 安慰，持续无进展才提高 entropy。
+- Stress Judge 不能输出最终答案，不能规划，不能调用工具。
+
+验收：
+
+- 每个进入 Pi sidecar 的请求都有 stress decision。
+- 每个高风险动作都能说明触发原因和确认策略。
+- 每次孵化 Temporary Intelligence Caste 都有 `must_regress_after=true`。
+- 完成后能把成功轨迹蒸馏为 prompt/skill/pheromone，并销毁临时上下文。
+
+## 9. Stage 4：Pi Agent Bridge
+
+目标：先建立应激裁判，再把 Pi Agent Harness 接入为 agent 生态运行时。Pi 不作为中央主脑常驻，而作为工种网络、任务巢穴和临时智力品级的孵化环境。
 
 架构：
 
@@ -198,7 +241,9 @@ agent-bridge/
 
 角色：
 
-- Hive Core。
+- Reflex Router。
+- Stress Judge。
+- Temporary Intelligence Caste。
 - Traffic Commander。
 - Reflex Agent。
 - Planner Brood。
@@ -212,12 +257,13 @@ agent-bridge/
 验收：
 
 - 简单请求走 Reflex，不进入长任务。
-- 复杂请求进入 Pi session。
+- 熟悉的复杂请求进入 baseline worker，不唤醒高阶智力。
+- 高熵、高风险、未知任务由 Stress Judge 判定是否孵化 Temporary Intelligence Caste。
 - Pi sidecar 事件能进入 UI 和 TTS。
 - sidecar 崩溃时语音会话不中断。
 - 用户能通过语音取消、暂停、改写后台任务。
 
-## 9. Stage 4：Swarm Runtime Substrate
+## 10. Stage 5：Swarm Runtime Substrate
 
 目标：建立虫群生态的底层基质，让角色通过环境协同。
 
@@ -245,7 +291,7 @@ agent-bridge/
 - route pheromone 能影响模型/工具选择。
 - 失败路径会降权。
 
-## 10. Stage 5：Voice-Native AgentOS
+## 11. Stage 6：Voice-Native AgentOS
 
 目标：让 agentOS 真正适配语音，而不是把文字 agent 搬进声音里。
 
@@ -274,7 +320,7 @@ agent-bridge/
 - 长任务不会占满语音通道。
 - agent 可以同时后台处理任务和继续对话。
 
-## 11. Stage 6：Adaptive Evolution
+## 12. Stage 7：Adaptive Evolution
 
 目标：系统开始根据真实使用演化。
 
@@ -304,7 +350,7 @@ agent-bridge/
 - 新角色必须经历 shadow -> canary -> stable。
 - 用户可以查看/禁用/删除角色。
 
-## 12. Stage 7：Multimodal Hive
+## 13. Stage 8：Multimodal Hive
 
 目标：引入视觉、位置、设备状态和外部工具。
 
@@ -331,7 +377,7 @@ agent-bridge/
 - UI 显示图片和 agent 进度。
 - 摄像头能力不影响语音热路径。
 
-## 13. Stage 8：Personal Superorganism
+## 14. Stage 9：Personal Superorganism
 
 目标：系统成为长期伴随的个人智能生态。
 
@@ -353,13 +399,14 @@ agent-bridge/
 - 它能成为工具，也能成为组织者。
 - 它不是“一个模型”，而是一整个活系统。
 
-## 14. 角色路线图
+## 15. 角色路线图
 
 ### 第一代：固定角色
 
 - Wake Guard。
 - Speaker Gate。
-- Voice Orchestrator。
+- Reflex Router。
+- Stress Judge。
 - Traffic Commander。
 - Reflex Agent。
 - Pi Bridge。
@@ -382,6 +429,7 @@ agent-bridge/
 
 ### 第三代：自我进化角色
 
+- Temporary Intelligence Caste。
 - Role Incubator。
 - Prompt Mutator。
 - Tool Scout。
@@ -391,7 +439,7 @@ agent-bridge/
 - Cost Governor。
 - Latency Governor。
 
-## 15. 技术路线细化
+## 16. 技术路线细化
 
 ### 15.1 Python 层
 
@@ -462,7 +510,7 @@ agent-bridge/
 - pheromone map visualization。
 - evolution history。
 
-## 16. 研究路线
+## 17. 研究路线
 
 持续研究主题：
 
@@ -483,7 +531,7 @@ agent-bridge/
 - 每个角色一份 role spec。
 - 每个失败簇一份 postmortem。
 
-## 17. 产品路线
+## 18. 产品路线
 
 ### Alpha：可移动语音助手
 
@@ -535,7 +583,7 @@ agent-bridge/
 - 自我扩展。
 - 长期共生。
 
-## 18. 风险
+## 19. 风险
 
 | 风险 | 描述 | 对策 |
 | --- | --- | --- |
@@ -549,7 +597,7 @@ agent-bridge/
 | 记忆污染 | 错误记忆长期影响 | memory inspector、冲突检测、遗忘 |
 | 用户体验过度机器化 | 进度话术烦人 | Traffic Commander 控制频率和风格 |
 
-## 19. 首个 90 天计划
+## 20. 首个 90 天计划
 
 ### 第 1-2 周：设备基线
 
@@ -611,7 +659,7 @@ agent-bridge/
 9. 最终语音给出短摘要。
 10. 关键结果写入记忆。
 
-## 20. 一年计划
+## 21. 一年计划
 
 第一季度：
 
@@ -643,7 +691,7 @@ agent-bridge/
 - Pi + laptop/cloud 混合巢穴。
 - 长期个人助手 beta。
 
-## 21. 最终架构原则图
+## 22. 最终架构原则图
 
 ```text
             User
@@ -659,8 +707,14 @@ agent-bridge/
             │ events
             ▼
  ┌──────────────────────┐
- │ Voice Orchestrator   │
+ │ Reflex Router        │
  │ hot path / timeout   │
+ └──────────┬───────────┘
+            │ stress decision
+            ▼
+ ┌──────────────────────┐
+ │ Stress Judge         │
+ │ entropy/risk/novelty │
  └──────────┬───────────┘
             │ agent bridge
             ▼
@@ -676,7 +730,7 @@ agent-bridge/
  └──────────────────────┘
 ```
 
-## 22. 项目成功的标志
+## 23. 项目成功的标志
 
 这个项目成功时，不是因为它回答得最长，也不是因为它接入了最多模型，而是因为：
 
@@ -688,7 +742,7 @@ agent-bridge/
 - 它能在移动硬件、电源、网络、噪声这些现实限制中活下来。
 - 它能随着你长期使用，长出越来越适合你的“器官”。
 
-## 23. 资料来源
+## 24. 资料来源
 
 - Pi Agent Harness：<https://github.com/earendil-works/pi>
 - Pi SDK：<https://pi.dev/docs/latest/sdk>
