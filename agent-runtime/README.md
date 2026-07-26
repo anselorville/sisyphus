@@ -407,8 +407,18 @@ agent-runtime/
   `test/ecology/role-experience.test.ts`（新增，7 用例）、
   `test/tasks/task-assimilation.test.ts`（新增，8 用例）、
   `test/tasks/task-nest.test.ts`（+4 用例覆盖 `onTerminalTransition`）。
-- **`AgentlyMailClient.watch()` 只是单次轮询**，不是 `agently-cli
-  +watch` 提供的真实持续流式推送；`stop()` 目前是空操作。
+- ~~`AgentlyMailClient.watch()` 只是单次轮询~~ **已换成真实持续流
+  （2026-07-27）**：新增 `AgentlyCliWatchSpawner` 独立于 `AgentlyCliTransport`
+  的一次性请求/响应模型，`watch()` 现在 spawn 一个长驻的
+  `agently-cli message +watch` 子进程，用 `../../isolation/jsonl-decoder.js`
+  同一套 `JsonlDecoder` 逐行解析 NDJSON（经真实安装的 `agently-cli message
+  +watch --print-output-schema` 核对过：默认 `--msg-format=full` 下每行是
+  `{"message": {...}}`，`message.message_id` 必填；取不到详情时是
+  `{"fetch_error": {...}}`；CLI 自己会静默重试空轮询超时和瞬时错误，所以
+  长时间没有新行不代表流已经结束）。`fetch_error`/畸形行/stderr 输出/进程
+  意外退出都经新增的 `onWatchError` 报告，不会当成"流结束"去关流；
+  `stop()` 现在真正 `kill()` 掉子进程。测试：
+  `test/tools/mail/agently-mail.test.ts`（+9 用例）。
 - **`Queen` 的 `"merge"`/`"wake"` 决策类型、`PopulationRegistry.retire()`**
   已经存在于类型系统里，但尚无任何触发源会产生它们——留给后续任务接入
   具体触发条件。
@@ -433,9 +443,9 @@ agent-runtime/
 
 ### P2 — 功能完整性，非阻塞
 5. [ ] Queen 的 merge/wake 决策 + PopulationRegistry.retire() 触发条件：类型已存在，缺具体触发规则（比如两个角色能力高度重叠时 merge、休眠角色被高频路由命中时 wake）。依赖 #3 的持久化数据（适应度、信息素）才能做出有意义的判断，建议排在 #3 之后。
-6. [ ] AgentlyMailClient.watch() 真实流式化：从单次轮询换成 agently-cli +watch 的 NDJSON 持续流，stop() 也要从空操作变成真正取消底层进程/连接。
+6. [x] AgentlyMailClient.watch() 真实流式化（**2026-07-27 完成**）：从单次轮询换成 agently-cli +watch 的 NDJSON 持续流（独立的 AgentlyCliWatchSpawner 长驻子进程 + JsonlDecoder 逐行解析，经真实安装的 CLI 的 `--print-output-schema` 核对过输出结构），stop() 从空操作变成真正 kill() 底层进程；fetch_error/畸形行/stderr/意外退出经新增的 onWatchError 报告。
 
 ### P3 — 范围明确排除在外，视产品目标决定是否要做
 7. [ ] 设备控制器真实实现（DeviceStatusProvider/ServiceController）：接口占位已经很完整，缺的是"具体接哪些系统"这个产品决策，工作量取决于目标平台（systemd？launchd？特定 IoT 网关?），建议先明确范围再排期。
 
-进度：1、2、3、4 已完成（#3 为部分完成，见其条目里的诚实缺口说明）。建议顺序：5 → 6 → 7——三条都需要新的产品/行为决策，适合单独开任务讨论范围；其中 #5 依赖 #3 这次新增的持久化数据（适应度、信息素）才能做出有意义的判断。
+进度：1、2、3、4、6 已完成（#3 为部分完成，见其条目里的诚实缺口说明）。剩余 5、7 都需要新的产品/行为决策（具体的 merge/wake/retire 触发规则；设备控制器要接哪个平台），不适合在没有明确决策的情况下自行拍板实现，留给单独开任务讨论范围。

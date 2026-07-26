@@ -21,12 +21,30 @@
  * field this module reads (subject, body, sender, attachment names) is
  * opaque data via ./mail-policy.js's normalizeMailData(), never an
  * instruction.
+ *
+ * watch() is a genuinely different shape from every other method: agently-cli
+ * `message +watch` is a long-running long-poll process emitting one bare
+ * NDJSON object per new-mail event indefinitely (verified against the real
+ * installed `agently-cli`'s own `message +watch --print-output-schema`:
+ * `{"message": {...}}` -- `message.message_id` required -- when
+ * --msg-format=full, the default; `{"fetch_error": {...}}` when that
+ * particular event's message details couldn't be fetched; "Empty long-poll
+ * timeouts and transient network/server errors are retried silently" inside
+ * the CLI itself, so a long gap with no stdout line is normal, not a stall).
+ * That is fundamentally incompatible with AgentlyCliTransport's one-shot
+ * request/response contract (spawn, collect all stdout, resolve once on
+ * `close`) every other method uses -- so watch() gets its own spawner seam
+ * (AgentlyCliWatchSpawner) and its own long-lived child process, framed with
+ * the same JsonlDecoder (../../isolation/jsonl-decoder.js) RpcChamber uses
+ * for `pi --mode rpc`'s NDJSON stdout.
  */
 
 import { spawn } from "node:child_process";
 
 import { ElevationRequiredError } from "../capability-gateway.js";
 import type { ActionEnvelope } from "../diplomacy-officer.js";
+import type { JsonlRecord } from "../../isolation/jsonl-decoder.js";
+import { JsonlDecoder } from "../../isolation/jsonl-decoder.js";
 import type { NormalizedMailData, RawMailMessage } from "./mail-policy.js";
 import { normalizeMailData } from "./mail-policy.js";
 
@@ -127,6 +145,31 @@ export class SpawnAgentlyCliTransport implements AgentlyCliTransport {
   }
 }
 
+/** Minimal structural slice of node:child_process's real ChildProcess this module's watch() depends on -- mirrors ../../isolation/rpc-chamber.ts's RpcChildProcess seam for the same reason: a real ChildProcess satisfies this as-is, tests inject a fake instead of spawning a real long-running `agently-cli` process. */
+export interface AgentlyCliWatchProcess {
+  readonly stdout: { on(event: "data", listener: (chunk: Buffer) => void): void };
+  readonly stderr: { on(event: "data", listener: (chunk: Buffer) => void): void };
+  on(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
+  on(event: "error", listener: (error: Error) => void): void;
+  kill(signal?: NodeJS.Signals): boolean;
+}
+
+/** Builds the long-running `agently-cli message +watch` child process. Production uses createSpawnAgentlyCliWatchProcess(); tests inject a fake -- mirrors ../../isolation/rpc-chamber.ts's RpcProcessSpawner pattern. */
+export type AgentlyCliWatchSpawner = () => AgentlyCliWatchProcess;
+
+/** Production AgentlyCliWatchSpawner: spawns `agently-cli message +watch` via an argument array (never a shell string), streaming indefinitely until killed. Not exercised by this task's tests (they inject a fake spawner); it's the real implementation production code constructs AgentlyMailClient with. */
+export function createSpawnAgentlyCliWatchProcess(command = "agently-cli"): AgentlyCliWatchSpawner {
+  return (): AgentlyCliWatchProcess => spawn(command, ["message", "+watch"], { stdio: ["ignore", "pipe", "pipe"] });
+}
+
+/** Reported via AgentlyMailClientOptions.onWatchError -- diagnostics only, never thrown back at a caller (there is no pending promise left to reject once watch() has already returned its handle). */
+export class AgentlyCliWatchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AgentlyCliWatchError";
+  }
+}
+
 function parseEnvelope(stdout: string): { data?: Record<string, unknown>; error?: AgentlyCliErrorPayload } {
   const trimmed = stdout.trim();
   if (trimmed === "") {
@@ -218,6 +261,10 @@ export interface AgentlyMailClientOptions {
   readonly sleep?: (ms: number) => Promise<void>;
   /** Max retries for exit 1/4 ("service error"/"local network error"). Default 2, per the agently-cli exit-code contract. */
   readonly maxRetries?: number;
+  /** Builds watch()'s long-running child process. Default: createSpawnAgentlyCliWatchProcess(). Inject a fake in tests -- separate from `transport` since watch()'s streaming contract is fundamentally different from every other method's one-shot request/response (see the module doc comment). */
+  readonly watchSpawner?: AgentlyCliWatchSpawner;
+  /** Diagnostics for watch(): called for a malformed NDJSON line, a `fetch_error` event, stderr output, or the watch process exiting/erroring unexpectedly. Never thrown -- there is no pending promise left to reject once watch() has already returned its handle. Default: no-op. */
+  readonly onWatchError?: (error: AgentlyCliWatchError) => void;
 }
 
 function defaultSleep(ms: number): Promise<void> {
@@ -319,12 +366,16 @@ export class AgentlyMailClient {
   private readonly transport: AgentlyCliTransport;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly maxRetries: number;
+  private readonly watchSpawner: AgentlyCliWatchSpawner;
+  private readonly onWatchError: (error: AgentlyCliWatchError) => void;
 
   constructor(options: AgentlyMailClientOptions) {
     this.gateway = options.gateway;
     this.transport = options.transport ?? new SpawnAgentlyCliTransport();
     this.sleep = options.sleep ?? defaultSleep;
     this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
+    this.watchSpawner = options.watchSpawner ?? createSpawnAgentlyCliWatchProcess();
+    this.onWatchError = options.onWatchError ?? ((): void => {});
   }
 
   async search(request: MailSearchRequest, context?: MailActionContext): Promise<readonly NormalizedMailData[]> {
@@ -351,14 +402,79 @@ export class AgentlyMailClient {
     return { savedTo: typeof savedTo === "string" ? savedTo : "" };
   }
 
-  /** Simplified single-poll model: agently-cli's real `+watch` streams NDJSON indefinitely, but this adapter's transport seam is one-shot request/response. One invocation is made, any messages it returns go to `onMessage`, and stop() is a no-op; true continuous streaming is a later task's concern. */
+  /**
+   * Real continuous streaming: spawns `agently-cli message +watch` once
+   * (via watchSpawner, not `transport` -- see the module doc comment) and
+   * keeps it running until stop() is called. `onMessage` fires once per
+   * `{"message": {...}}` NDJSON line as it arrives; a `{"fetch_error": ...}`
+   * line, a malformed line, or the process exiting/erroring unexpectedly
+   * are all reported via `onWatchError`, never thrown (there is no pending
+   * promise left to reject once this method has already returned its
+   * handle) and never treated as a reason to stop -- the CLI documents
+   * silently retrying transient errors on its own, so this adapter keeps
+   * the child process running rather than assuming one bad line ends the
+   * stream.
+   */
   async watch(onMessage: (message: NormalizedMailData) => void, context?: MailActionContext): Promise<MailWatchHandle> {
     const envelope = this.envelope("mail_watch", "watch inbox", context);
-    const call = await this.runThroughGateway(envelope, () => this.invoke(["message", "+watch"]));
-    for (const message of extractMessages(call)) {
-      onMessage(message);
+    return this.runThroughGateway(envelope, async () => this.startWatchStream(onMessage));
+  }
+
+  private startWatchStream(onMessage: (message: NormalizedMailData) => void): MailWatchHandle {
+    const child = this.watchSpawner();
+    const decoder = new JsonlDecoder({
+      onInvalidLine: (raw, error) => {
+        this.onWatchError(new AgentlyCliWatchError(`malformed +watch line: ${String(error)}: ${raw}`));
+      },
+    });
+    let stopped = false;
+
+    child.stdout.on("data", (chunk) => {
+      for (const record of decoder.push(chunk)) {
+        this.handleWatchLine(record, onMessage);
+      }
+    });
+    child.stderr.on("data", (chunk) => {
+      const text = chunk.toString("utf8").trim();
+      if (text !== "") {
+        this.onWatchError(new AgentlyCliWatchError(`+watch stderr: ${text}`));
+      }
+    });
+    child.on("exit", (code, signal) => {
+      if (!stopped) {
+        this.onWatchError(new AgentlyCliWatchError(`+watch process exited unexpectedly (code=${code}, signal=${signal})`));
+      }
+    });
+    child.on("error", (error) => {
+      this.onWatchError(new AgentlyCliWatchError(`+watch process error: ${error.message}`));
+    });
+
+    return {
+      stop: (): void => {
+        if (!stopped) {
+          stopped = true;
+          child.kill();
+        }
+      },
+    };
+  }
+
+  /** One `+watch` NDJSON line: `{"message": {...}}` (the common case) feeds onMessage; `{"fetch_error": ...}` or anything else missing `message` is reported via onWatchError and otherwise ignored -- see the module doc comment's real --print-output-schema quote. */
+  private handleWatchLine(record: JsonlRecord, onMessage: (message: NormalizedMailData) => void): void {
+    if ("message" in record) {
+      onMessage(normalizeMailData(asRawMailMessage(record["message"])));
+      return;
     }
-    return { stop: (): void => {} };
+    if ("fetch_error" in record) {
+      const fetchError = record["fetch_error"];
+      const message =
+        fetchError !== null && typeof fetchError === "object" && "message" in fetchError
+          ? String((fetchError as Record<string, unknown>)["message"])
+          : "unknown fetch_error";
+      this.onWatchError(new AgentlyCliWatchError(`+watch event fetch failed: ${message}`));
+      return;
+    }
+    this.onWatchError(new AgentlyCliWatchError(`+watch line had neither "message" nor "fetch_error": ${JSON.stringify(record)}`));
   }
 
   async send(request: MailSendRequest, context?: MailActionContext): Promise<MailSendResult> {

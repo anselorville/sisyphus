@@ -1,9 +1,41 @@
+import { EventEmitter } from "node:events";
+
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { CapabilityGateway } from "../../../src/tools/capability-gateway.js";
 import { DiplomacyOfficer } from "../../../src/tools/diplomacy-officer.js";
-import { AgentlyCliError, AgentlyMailClient, MailElevationRequiredError } from "../../../src/tools/mail/agently-mail.js";
-import type { AgentlyCliCall, AgentlyCliTransport, MailSendRequest } from "../../../src/tools/mail/agently-mail.js";
+import {
+  AgentlyCliError,
+  AgentlyCliWatchError,
+  AgentlyMailClient,
+  MailElevationRequiredError,
+} from "../../../src/tools/mail/agently-mail.js";
+import type {
+  AgentlyCliCall,
+  AgentlyCliTransport,
+  AgentlyCliWatchProcess,
+  MailSendRequest,
+} from "../../../src/tools/mail/agently-mail.js";
+
+/** Fake stream -- just enough of a Readable's event surface for watch(). Mirrors test/isolation/rpc-chamber.test.ts's FakeStream. */
+class FakeStream extends EventEmitter {}
+
+/** Fake long-running `agently-cli message +watch` process -- lets tests push stdout/stderr data or simulate exit, without ever spawning a real subprocess. Mirrors test/isolation/rpc-chamber.test.ts's FakeRpcChildProcess. */
+class FakeAgentlyCliWatchProcess extends EventEmitter implements AgentlyCliWatchProcess {
+  readonly stdout = new FakeStream();
+  readonly stderr = new FakeStream();
+  killed = false;
+
+  kill(): boolean {
+    this.killed = true;
+    return true;
+  }
+
+  /** Test helper: simulate the process writing one JSON line to stdout. */
+  emitLine(payload: Record<string, unknown>): void {
+    this.stdout.emit("data", Buffer.from(`${JSON.stringify(payload)}\n`, "utf8"));
+  }
+}
 
 /**
  * Fake CLI harness, scoped to this test file. Records every argv array
@@ -189,5 +221,132 @@ describe("AgentlyMailClient", () => {
       expect(result.savedTo).toBe("./downloads/report.pdf");
       expect(cli.calls).toHaveLength(1);
     });
+  });
+});
+
+describe("AgentlyMailClient.watch() -- real NDJSON streaming (Roadmap #6)", () => {
+  function makeMail(
+    onWatchError?: (error: AgentlyCliWatchError) => void,
+  ): { mail: AgentlyMailClient; proc: FakeAgentlyCliWatchProcess } {
+    const proc = new FakeAgentlyCliWatchProcess();
+    const gateway = new CapabilityGateway({ officer: new DiplomacyOfficer() });
+    const mail = new AgentlyMailClient({
+      gateway,
+      transport: new (class implements AgentlyCliTransport {
+        async run(): Promise<AgentlyCliCall> {
+          throw new Error("watch() must never use the one-shot transport");
+        }
+      })(),
+      watchSpawner: () => proc,
+      onWatchError,
+    });
+    return { mail, proc };
+  }
+
+  it("resolves immediately with a handle -- it does not wait for the stream to end (it never does on its own)", async () => {
+    const { mail } = makeMail();
+    const handle = await mail.watch(() => {});
+    expect(handle.stop).toBeInstanceOf(Function);
+  });
+
+  it("delivers a message for each {\"message\": ...} NDJSON line as it arrives, normalized", async () => {
+    const { mail, proc } = makeMail();
+    const received: string[] = [];
+    await mail.watch((message) => received.push(message.messageId ?? ""));
+
+    proc.emitLine({ message: { message_id: "msg_1", subject: "Hello" } });
+    proc.emitLine({ message: { message_id: "msg_2", subject: "World" } });
+
+    expect(received).toEqual(["msg_1", "msg_2"]);
+  });
+
+  it("keeps delivering messages across a long gap with no stdout -- a quiet period is not treated as the stream ending", async () => {
+    const { mail, proc } = makeMail();
+    const received: string[] = [];
+    await mail.watch((message) => received.push(message.messageId ?? ""));
+
+    proc.emitLine({ message: { message_id: "msg_1" } });
+    // No data for a while -- the real CLI retries empty long-poll timeouts
+    // silently, so nothing should be expected to happen here.
+    proc.emitLine({ message: { message_id: "msg_2" } });
+
+    expect(received).toEqual(["msg_1", "msg_2"]);
+  });
+
+  it("reports a fetch_error event via onWatchError instead of calling onMessage with a bogus message", async () => {
+    const errors: AgentlyCliWatchError[] = [];
+    const { mail, proc } = makeMail((error) => errors.push(error));
+    const received: string[] = [];
+    await mail.watch((message) => received.push(message.messageId ?? ""));
+
+    proc.emitLine({ fetch_error: { type: "not_found", message: "message no longer exists" } });
+
+    expect(received).toEqual([]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBeInstanceOf(AgentlyCliWatchError);
+    expect(errors[0]?.message).toMatch(/message no longer exists/);
+  });
+
+  it("reports stderr output via onWatchError without killing the stream", async () => {
+    const errors: AgentlyCliWatchError[] = [];
+    const { mail, proc } = makeMail((error) => errors.push(error));
+    const received: string[] = [];
+    await mail.watch((message) => received.push(message.messageId ?? ""));
+
+    proc.stderr.emit("data", Buffer.from("transient network blip\n", "utf8"));
+    proc.emitLine({ message: { message_id: "msg_after_stderr" } });
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.message).toMatch(/transient network blip/);
+    expect(received).toEqual(["msg_after_stderr"]);
+  });
+
+  it("reports an unexpected process exit via onWatchError", async () => {
+    const errors: AgentlyCliWatchError[] = [];
+    const { mail, proc } = makeMail((error) => errors.push(error));
+    await mail.watch(() => {});
+
+    proc.emit("exit", 1, null);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.message).toMatch(/exited unexpectedly/);
+  });
+
+  it("stop() kills the process and suppresses the unexpected-exit report once the process actually exits afterward", async () => {
+    const errors: AgentlyCliWatchError[] = [];
+    const { mail, proc } = makeMail((error) => errors.push(error));
+    const handle = await mail.watch(() => {});
+
+    handle.stop();
+    // Simulate the real, asynchronous OS-level termination that follows a
+    // real child.kill() call -- the resulting "exit" must not be reported
+    // as unexpected, since this stop() is the reason it happened.
+    proc.emit("exit", null, "SIGTERM");
+
+    expect(proc.killed).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it("stop() is idempotent -- calling it twice never kills twice or double-reports", async () => {
+    const { mail, proc } = makeMail();
+    const handle = await mail.watch(() => {});
+
+    handle.stop();
+    handle.stop();
+
+    expect(proc.killed).toBe(true);
+  });
+
+  it("reports a malformed (non-JSON) line via onWatchError, without losing subsequent valid lines", async () => {
+    const errors: AgentlyCliWatchError[] = [];
+    const { mail, proc } = makeMail((error) => errors.push(error));
+    const received: string[] = [];
+    await mail.watch((message) => received.push(message.messageId ?? ""));
+
+    proc.stdout.emit("data", Buffer.from("not json at all\n", "utf8"));
+    proc.emitLine({ message: { message_id: "msg_after_garbage" } });
+
+    expect(errors).toHaveLength(1);
+    expect(received).toEqual(["msg_after_garbage"]);
   });
 });
