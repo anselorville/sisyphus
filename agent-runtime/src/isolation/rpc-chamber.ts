@@ -78,11 +78,12 @@ export interface PiRpcProcessSpawnerOptions {
   /**
    * Provider/model this chamber's spawned processes run against. Mapping a
    * genome's modelPolicy (preferredClass/thinkingLevel) to a concrete
-   * provider/model pair is explicitly out of scope here, mirroring
-   * ../roles/session-manager.ts's createDefaultPiSessionProvider() doc
-   * comment ("model selection ... is left to SDK defaults here since
-   * RoleManifest.modelClass -> concrete Model routing is a later task's
-   * concern").
+   * provider/model pair is explicitly out of scope here: unlike resident
+   * roles (../roles/session-manager.ts's createDefaultPiSessionProvider(),
+   * which now does this mapping via ../roles/model-routing.ts), isolated
+   * genomes run as separate `pi` CLI subprocesses, not in-process SDK Pi
+   * Sessions, so resolving preferredClass here would need its own
+   * subprocess-facing wiring -- still a later task's concern.
    */
   readonly provider?: string;
   readonly model?: string;

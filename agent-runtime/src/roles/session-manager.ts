@@ -26,12 +26,15 @@ import path from "node:path";
 import {
   createAgentSession,
   DefaultResourceLoader,
+  ModelRuntime,
   SessionManager as PiPersistenceSessionManager,
   SettingsManager,
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 
+import { config as defaultConfig } from "../config.js";
 import { loadRolePrompt } from "./manifests.js";
+import { resolveRoleModel } from "./model-routing.js";
 import { PiEventAdapter } from "./pi-event-adapter.js";
 import type { RoleManifestRegistry } from "./registry.js";
 import type {
@@ -40,6 +43,7 @@ import type {
   PiSession,
   PiSessionProvider,
   RoleManifest,
+  RoleModelClassRouting,
   RoleSessionManager,
   RoleSessionUpdate,
 } from "./types.js";
@@ -401,19 +405,27 @@ export interface DefaultPiSessionProviderOptions {
   readonly agentDir?: string;
   /** Base directory under which each role gets its own persisted session subdirectory. Default: <agentDir>/roles */
   readonly sessionRootDir?: string;
+  /** Which concrete provider/model each RoleManifest.modelClass tier resolves to. Default: config.modelClassRouting (../config.ts), overridable via env vars. */
+  readonly modelRouting?: RoleModelClassRouting;
+  /** Shared ModelRuntime every role's session (and modelClass resolution) is built against. Inject a fake (satisfying ../roles/model-routing.ts's ModelCatalog) in tests; default: one real `ModelRuntime.create({ agentDir })`, built lazily on first use and reused for every subsequent role so the auth/model catalog is only ever loaded once per process. */
+  readonly modelRuntime?: ModelRuntime;
 }
 
 /**
  * Production PiSessionProvider: builds a real Pi Session via the verified
  * `createAgentSession()` SDK entry point. Each role gets its own system
  * prompt (its manifest's promptPath, read from disk), its own tool
- * allowlist, and its own persisted session directory, so two roles never
- * share Pi-side state even though they share this Node process.
+ * allowlist, its own persisted session directory, and -- per its manifest's
+ * modelClass -- its own concrete model (see ./model-routing.ts), so two
+ * roles never share Pi-side state even though they share this Node
+ * process, and a "fast"-tier role no longer silently rides whatever model
+ * a "deep"-tier role happens to also be using.
  *
- * Not exercised by this task's unit tests (which inject a fake provider
- * instead) -- model selection in particular is left to SDK defaults here
- * since RoleManifest.modelClass -> concrete Model routing is a later
- * task's concern.
+ * PiRoleSessionManager's own unit tests inject a fake PiSessionProvider and
+ * never exercise this function directly; see session-provider.test.ts for
+ * this function's wiring coverage (mocking @earendil-works/pi-coding-agent
+ * entirely) and model-routing.test.ts for resolveRoleModel()'s own coverage
+ * against a fake ModelCatalog.
  */
 export function createDefaultPiSessionProvider(
   options: DefaultPiSessionProviderOptions = {},
@@ -421,6 +433,15 @@ export function createDefaultPiSessionProvider(
   const cwd = options.cwd ?? process.cwd();
   const agentDir = options.agentDir ?? getAgentDir();
   const sessionRootDir = options.sessionRootDir ?? path.join(agentDir, "roles");
+  const modelRouting = options.modelRouting ?? defaultConfig.modelClassRouting;
+
+  let modelRuntimePromise: Promise<ModelRuntime> | undefined;
+  const getModelRuntime = (): Promise<ModelRuntime> => {
+    modelRuntimePromise ??= options.modelRuntime
+      ? Promise.resolve(options.modelRuntime)
+      : ModelRuntime.create({ authPath: path.join(agentDir, "auth.json"), modelsPath: path.join(agentDir, "models.json") });
+    return modelRuntimePromise;
+  };
 
   return async (manifest: RoleManifest): Promise<PiSession> => {
     const systemPrompt = loadRolePrompt(manifest.promptPath);
@@ -435,9 +456,14 @@ export function createDefaultPiSessionProvider(
 
     const sessionManager = PiPersistenceSessionManager.create(cwd, path.join(sessionRootDir, manifest.id));
 
+    const modelRuntime = await getModelRuntime();
+    const model = await resolveRoleModel(modelRuntime, manifest.id, manifest.modelClass, modelRouting);
+
     const { session } = await createAgentSession({
       cwd,
       agentDir,
+      modelRuntime,
+      model,
       resourceLoader,
       sessionManager,
       tools: [...manifest.tools],

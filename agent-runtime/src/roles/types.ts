@@ -14,8 +14,17 @@ import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 import type { RealtimeEventType } from "../protocol/events.js";
 
-/** Coarse capability/cost tier a role's manifest requests. Routing an actual provider/model to each tier is a later task's concern -- this layer only carries the declared intent. */
+/** Coarse capability/cost tier a role's manifest requests. See ./model-routing.ts for how a tier resolves to a concrete provider/model. */
 export type RoleModelClass = "fast" | "balanced" | "deep";
+
+/** A concrete provider id + model id pair one RoleModelClass tier currently routes to. */
+export interface RoleModelRef {
+  readonly provider: string;
+  readonly modelId: string;
+}
+
+/** Maps every RoleModelClass tier to the concrete model it currently resolves to. Configurable via env vars -- see ../config.ts's AgentRuntimeConfig.modelClassRouting. */
+export type RoleModelClassRouting = Readonly<Record<RoleModelClass, RoleModelRef>>;
 
 /**
  * Subset of the real SDK's `ThinkingLevel` (`off | minimal | low | medium |
