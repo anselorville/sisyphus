@@ -116,6 +116,20 @@ export interface TaskNestOptions {
   /** Bounded cap on in-memory active tasks; the overflow policy is to evict the oldest terminal-state task to make room, or throw if none exists. */
   readonly maxActiveTasks?: number;
   readonly now?: () => Date;
+  /**
+   * Called once a transition lands on a terminal status (completed/failed/
+   * cancelled), after the transition's own durable `task.update-status`
+   * write has already succeeded -- the natural "task ends" hook point named
+   * in ../README.md's roadmap item 3 (see ../tasks/task-assimilation.ts's
+   * createTaskAssimilationHook() for the real production implementation).
+   * Awaited by transition()/assign() before they resolve; never called for
+   * a non-terminal transition. Errors are this hook's own responsibility to
+   * swallow (task-assimilation.ts's onError does exactly that) -- a hook
+   * that throws will reject the transition() call even though the
+   * transition itself already durably committed, so a caller supplying one
+   * should never let it throw.
+   */
+  readonly onTerminalTransition?: (task: TaskRecord) => void | Promise<void>;
 }
 
 const DEFAULT_MAX_ACTIVE_TASKS = 2000;
@@ -124,6 +138,7 @@ export class TaskNest {
   private readonly db: DatabaseClient;
   private readonly maxActiveTasks: number;
   private readonly now: () => Date;
+  private readonly onTerminalTransition: (task: TaskRecord) => void | Promise<void>;
   private readonly tasks = new Map<string, TaskRecord>();
   /** sourceEventId (see IDEMPOTENCY_METADATA_KEY) -> taskId, for every task currently held in memory. Kept in lockstep with `tasks`: populated by create()/recoverPending(), pruned by evictOldestTerminal() -- never grows past `tasks`' own size. */
   private readonly byIdempotencyKey = new Map<string, string>();
@@ -132,6 +147,7 @@ export class TaskNest {
     this.db = options.db;
     this.maxActiveTasks = options.maxActiveTasks ?? DEFAULT_MAX_ACTIVE_TASKS;
     this.now = options.now ?? ((): Date => new Date());
+    this.onTerminalTransition = options.onTerminalTransition ?? ((): void => {});
   }
 
   /** Number of tasks currently held in memory. */
@@ -267,6 +283,10 @@ export class TaskNest {
       type: "task.update-status",
       update: { id: taskId, status: updated.status, roleId: updated.roleId, updatedAt: updated.updatedAt },
     });
+
+    if (TERMINAL_STATUSES.has(updated.status)) {
+      await this.onTerminalTransition(updated);
+    }
 
     return updated;
   }

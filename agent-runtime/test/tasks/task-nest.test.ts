@@ -271,3 +271,65 @@ describe("capacity cap", () => {
     await expect(nest.create({ goal: "second", interactionId: "i1" })).rejects.toThrow(TaskNestCapacityError);
   });
 });
+
+describe("onTerminalTransition hook (Roadmap #3: task ends -> assimilate)", () => {
+  it("is called once a transition lands on a terminal status, with the already-updated record", async () => {
+    const db = await openDb();
+    const calls: Array<{ id: string; status: string }> = [];
+    const nest = new TaskNest({
+      db,
+      onTerminalTransition: (task) => {
+        calls.push({ id: task.id, status: task.status });
+      },
+    });
+
+    const task = await nest.create({ goal: "run tests", interactionId: "i1" });
+    await nest.transition(task.id, "completed");
+
+    expect(calls).toEqual([{ id: task.id, status: "completed" }]);
+  });
+
+  it("is never called for a non-terminal transition", async () => {
+    const db = await openDb();
+    let calls = 0;
+    const nest = new TaskNest({ db, onTerminalTransition: () => { calls++; } });
+
+    const task = await nest.create({ goal: "run tests", interactionId: "i1" });
+    await nest.assign(task.id, "role-1");
+    await nest.transition(task.id, "running");
+
+    expect(calls).toBe(0);
+  });
+
+  it("is awaited before transition() resolves", async () => {
+    const db = await openDb();
+    let hookResolved = false;
+    const nest = new TaskNest({
+      db,
+      onTerminalTransition: async () => {
+        await Promise.resolve();
+        hookResolved = true;
+      },
+    });
+
+    const task = await nest.create({ goal: "run tests", interactionId: "i1" });
+    await nest.transition(task.id, "completed");
+
+    expect(hookResolved).toBe(true);
+  });
+
+  it("fires for each of completed/failed/cancelled", async () => {
+    const db = await openDb();
+    const statuses: string[] = [];
+    const nest = new TaskNest({ db, onTerminalTransition: (task) => { statuses.push(task.status); } });
+
+    const a = await nest.create({ goal: "a", interactionId: "i1" });
+    const b = await nest.create({ goal: "b", interactionId: "i1" });
+    const c = await nest.create({ goal: "c", interactionId: "i1" });
+    await nest.transition(a.id, "completed");
+    await nest.transition(b.id, "failed");
+    await nest.transition(c.id, "cancelled");
+
+    expect(statuses.sort()).toEqual(["cancelled", "completed", "failed"]);
+  });
+});

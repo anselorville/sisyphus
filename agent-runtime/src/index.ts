@@ -52,6 +52,7 @@ import { RuntimeMetrics } from "./telemetry/runtime-metrics.js";
 import { DatabaseClient } from "./storage/database.js";
 import { TaskNest, type TaskRecord } from "./tasks/task-nest.js";
 import { createInboundEventRouter } from "./tasks/inbound-event-router.js";
+import { createTaskAssimilationHook } from "./tasks/task-assimilation.js";
 import { RoleManifestRegistry } from "./roles/registry.js";
 import { PiRoleSessionManager, createDefaultPiSessionProvider } from "./roles/session-manager.js";
 import type { PiSessionProvider } from "./roles/types.js";
@@ -77,6 +78,7 @@ import { Queen } from "./ecology/queen.js";
 import { GeneBank } from "./ecology/gene-bank.js";
 import { RoleIncubator } from "./ecology/role-incubator.js";
 import { PheromoneMap } from "./ecology/pheromone-map.js";
+import { RoleExperienceTracker } from "./ecology/role-experience.js";
 import { RpcChamber } from "./isolation/rpc-chamber.js";
 import { Inspector } from "./inspection/inspector.js";
 import { MemoryCurator } from "./memory/memory-curator.js";
@@ -223,7 +225,18 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     rollbacks.push(() => sessionManager.close());
 
     // 6. TaskNest -- now routeInboundEvent can be given its real target.
-    const taskNest = new TaskNest({ db, now: options.now });
+    // GeneBank and RoleExperienceTracker are hoisted ahead of their step-10
+    // Ecology siblings (both are dependency-free to construct, like GeneBank
+    // already was) specifically so TaskNest's onTerminalTransition hook can
+    // close the "task ends -> assimilate" gap named in README.md's roadmap
+    // item 3 -- see ./tasks/task-assimilation.ts.
+    const geneBank = new GeneBank();
+    const roleExperienceTracker = new RoleExperienceTracker();
+    const taskNest = new TaskNest({
+      db,
+      now: options.now,
+      onTerminalTransition: createTaskAssimilationHook({ db, geneBank, experienceTracker: roleExperienceTracker }),
+    });
     routeInboundEvent = createInboundEventRouter(taskNest);
 
     // 7. CapabilityGateway + DiplomacyOfficer. Default classifier
@@ -249,10 +262,10 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     });
     const providerRouter = new ProviderRouter();
 
-    // 10. Ecology.
+    // 10. Ecology. geneBank was already constructed at step 6 (see its own
+    // comment there).
     const population = new PopulationRegistry();
     const queen = new Queen();
-    const geneBank = new GeneBank();
     const roleIncubator = new RoleIncubator();
     const pheromoneMap = new PheromoneMap();
 

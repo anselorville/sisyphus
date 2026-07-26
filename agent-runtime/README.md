@@ -382,10 +382,31 @@ agent-runtime/
   `RpcChamber` 时直接传入 `population.isolationCap`，`PopulationRegistry`
   是唯一真源；裸构造的 `new RpcChamber()`（如测试）仍回退到与
   `population.ts` 相同的默认值 1。
-- **`GeneBank`/`PopulationRegistry`/`PheromoneMap` 均为纯内存结构**：
-  对应的 SQLite 表（`roles`/`pheromones`/`memories`）已经建好，
-  `db-worker.ts` 的 `task.assimilate` 命令也已经能原子写入，但目前没有
-  编排层在任务终态时主动调用它——这一装配步骤留给后续任务。
+- ~~`GeneBank`/`PopulationRegistry`/`PheromoneMap` 均为纯内存结构，
+  task.assimilate 没有编排层调用~~ **部分接线（2026-07-27）**：
+  `TaskNest` 新增 `onTerminalTransition` 钩子，任务落到
+  completed/failed/cancelled 时调用；`src/index.ts` 用新增的
+  `src/tasks/task-assimilation.ts`（`createTaskAssimilationHook()`）实现
+  它——`cancelled` 直接跳过（用户取消不代表角色能力好坏，不当成一次
+  fitness 信号），`completed`/`failed` 各写一条 `task_outcome`
+  role_fitness delta，并用新增的 `src/ecology/role-experience.ts`
+  （`RoleExperienceTracker`，evaluateRoleLifecycle() 一直缺的「调用方自
+  行组装的历史」入参来源）驱动 `evaluateRoleLifecycle()` 决定
+  `roleStatus`（trial 角色不会因为一次成功就被误判为 resident——沿用
+  `GeneBank.get(roleId)?.lifecycle.state` 作为当前状态的真源）。**仍然
+  留白，诚实标注、没有假装做了**：`pheromone`/`memory` 两个字段固定传
+  `null`——一个真实的信息素 delta 需要 task-feature/device/network 上下
+  文，一个真实的 memory 需要 MemoryCurator 审核过的压缩内容，`TaskRecord`
+  本身都不携带这些，这里不编造。`roleName` 直接写 `roleId` 本身——
+  `RoleManifest`/`RoleGenome` 都没有独立于 `roleId` 的展示名字段。另外，
+  这条钩子目前只有 `TaskNest.transition()` 这一条腿——**本仓库当前没有任
+  何生产代码真正驱动一个任务从 `pending`/`assigned` 走到终态**（没有
+  "把任务派给角色、拿到执行结果、调 transition()" 的编排循环），所以这
+  个钩子虽然接线完整、测试也覆盖了，但在真实运行中要等那个更大的、本次
+  路线图未列出的任务执行循环补上才会被真正触发。测试：
+  `test/ecology/role-experience.test.ts`（新增，7 用例）、
+  `test/tasks/task-assimilation.test.ts`（新增，8 用例）、
+  `test/tasks/task-nest.test.ts`（+4 用例覆盖 `onTerminalTransition`）。
 - **`AgentlyMailClient.watch()` 只是单次轮询**，不是 `agently-cli
   +watch` 提供的真实持续流式推送；`stop()` 目前是空操作。
 - **`Queen` 的 `"merge"`/`"wake"` 决策类型、`PopulationRegistry.retire()`**
@@ -407,7 +428,7 @@ agent-runtime/
 2. [x] CapabilityGateway 提权持久化接线（**2026-07-27 完成**）：新增 `src/tools/diplomacy-persistence.ts` 的 `createDiplomacyPersistenceHooks()`，把 onLog/onElevationRequested/onElevationResolved 接到新迁移的 `diplomacy_log`/`diplomacy_pending_elevations`/`diplomacy_elevation_approvals` 三张表（migrations.ts version 3，`src/storage/database.ts`/`db-worker.ts` 新增 `diplomacy.log`/`diplomacy.elevation-requested`/`diplomacy.elevation-resolved` 三个写命令 + 三个 `*.list` 读命令），并把 `diplomacy.elevation.requested`/`resolved` 这两个协议里已定义好的 RealtimeEvent 经 `server.broadcast()` 真正 emit 出去。测试：`test/storage/database.test.ts`（+6 用例）、`test/tools/diplomacy-persistence.test.ts`（新增，8 用例）。已知留白：出站事件 `sequence` 只是进程内计数器，非跨重启持久化序号（见该模块 doc comment）。
 
 ### P1 — 生态治理的数据闭环，装配层缺失
-3. [ ] Ecology 状态持久化装配：GeneBank/PopulationRegistry/PheromoneMap 目前是纯内存，task.assimilate 这条原子写入命令已经能用，但没有任何编排层在任务终态时调用它——需要在 TaskNest 或类似位置接一个「任务结束 → assimilate」的钩子。这条不做，进程重启后基因型/信息素/角色适应度全部归零，蜂群治理形同虚设。
+3. [x] Ecology 状态持久化装配（**2026-07-27 部分完成**）：新增 `TaskNest.onTerminalTransition` 钩子 + `src/tasks/task-assimilation.ts`/`src/ecology/role-experience.ts`，任务终态时调用 `task.assimilate` 写 `task_outcome` fitness delta 并驱动 `evaluateRoleLifecycle()`。诚实标注的剩余缺口：`pheromone`/`memory` 两个字段目前固定 `null`（真实信号源不存在，未编造）；且本仓库仍没有任何代码真正把一个任务从 pending 推进到终态——这条钩子已经就位、测试覆盖完整，但要等一个更大的、路线图之外的"任务执行循环"任务补上才会在真实运行中被触发。见 README 上方"已知缺口"一节的完整说明。
 4. [x] PopulationRegistry.isolationCap 与 RpcChamber.capacity 统一（**2026-07-26 完成，随 #1 一起改**）：`src/index.ts` 构造 `RpcChamber` 时改为 `new RpcChamber({ capacity: population.isolationCap })`，`PopulationRegistry` 成为唯一真源，消除了漂移风险。
 
 ### P2 — 功能完整性，非阻塞
@@ -417,4 +438,4 @@ agent-runtime/
 ### P3 — 范围明确排除在外，视产品目标决定是否要做
 7. [ ] 设备控制器真实实现（DeviceStatusProvider/ServiceController）：接口占位已经很完整，缺的是"具体接哪些系统"这个产品决策，工作量取决于目标平台（systemd？launchd？特定 IoT 网关?），建议先明确范围再排期。
 
-进度：1、2、4 已完成。建议顺序：3 → 5 → 6 → 7。#3 是"接线已就位、缺最后一步"，性价比最高；5/6/7 需要新的产品/行为决策，适合放后面单独开任务讨论范围。
+进度：1、2、3、4 已完成（#3 为部分完成，见其条目里的诚实缺口说明）。建议顺序：5 → 6 → 7——三条都需要新的产品/行为决策，适合单独开任务讨论范围；其中 #5 依赖 #3 这次新增的持久化数据（适应度、信息素）才能做出有意义的判断。
