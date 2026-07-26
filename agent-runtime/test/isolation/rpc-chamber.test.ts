@@ -1,10 +1,11 @@
 import { EventEmitter } from "node:events";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { RoleGenome } from "../../src/ecology/gene-bank.js";
 import {
   buildRestrictedEnv,
+  createPiRpcProcessSpawner,
   IsolatedRoleNotFoundError,
   IsolationCapacityError,
   RpcChamber,
@@ -12,6 +13,12 @@ import {
   RpcTimeoutError,
 } from "../../src/isolation/rpc-chamber.js";
 import type { RpcChildProcess, TimeoutHandle, TimeoutScheduler } from "../../src/isolation/rpc-chamber.js";
+import type { ModelCatalog } from "../../src/roles/model-routing.js";
+import { UnresolvedRoleModelError } from "../../src/roles/model-routing.js";
+import type { RoleModelClassRouting } from "../../src/roles/types.js";
+
+const spawnMock = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", () => ({ spawn: spawnMock }));
 
 function genome(roleId: string, overrides: Partial<RoleGenome> = {}): RoleGenome {
   return {
@@ -393,5 +400,133 @@ describe("buildRestrictedEnv", () => {
   it("omits an allowlisted variable that is simply absent from the base environment", () => {
     const restricted = buildRestrictedEnv({ PATH: "/usr/bin" }, ["ANTHROPIC_API_KEY"]);
     expect(restricted).toEqual({ PATH: "/usr/bin" });
+  });
+});
+
+describe("RpcChamber -- async spawner support (Roadmap #1: model-routing resolution needs an await point)", () => {
+  it("awaits an async spawner before the session is added and returned", async () => {
+    const chamber = new RpcChamber({
+      capacity: 1,
+      spawner: async (): Promise<RpcChildProcess> => {
+        await Promise.resolve();
+        return new FakeRpcChildProcess();
+      },
+    });
+
+    const session = await chamber.spawn(genome("genome-a"));
+
+    expect(chamber.activeCount).toBe(1);
+    await session.close();
+  });
+
+  it("releases the reserved capacity slot when an async spawner rejects (e.g. UnresolvedRoleModelError), without leaving a phantom slot occupied", async () => {
+    const chamber = new RpcChamber({
+      capacity: 1,
+      spawner: async (): Promise<RpcChildProcess> => {
+        throw new UnresolvedRoleModelError("bad-role", "deep", { provider: "anthropic", modelId: "missing" });
+      },
+    });
+
+    await expect(chamber.spawn(genome("bad-role"))).rejects.toBeInstanceOf(UnresolvedRoleModelError);
+    expect(chamber.activeCount).toBe(0);
+
+    // Capacity must not have been consumed by the failed spawn -- a
+    // subsequent spawn() with a working spawner succeeds.
+    const processes: FakeRpcChildProcess[] = [];
+    const working = new RpcChamber({
+      capacity: 1,
+      spawner: async (): Promise<RpcChildProcess> => {
+        const proc = new FakeRpcChildProcess();
+        processes.push(proc);
+        return proc;
+      },
+    });
+    await expect(working.spawn(genome("genome-b"))).resolves.toBeDefined();
+  });
+
+  it("two concurrent spawn() calls against capacity 1 never both succeed, even though the spawner has an await point in between", async () => {
+    let releaseFirst: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let callCount = 0;
+    const chamber = new RpcChamber({
+      capacity: 1,
+      spawner: async (): Promise<RpcChildProcess> => {
+        callCount++;
+        if (callCount === 1) {
+          await gate; // first call parks here, deliberately not yet resolved
+        }
+        return new FakeRpcChildProcess();
+      },
+    });
+
+    const first = chamber.spawn(genome("genome-a"));
+    const second = chamber.spawn(genome("genome-b"));
+
+    // The second call must be rejected for capacity *before* the first
+    // call's spawner ever resolves -- proving the reservation, not just the
+    // final sessions.size, is what capacity is checked against.
+    await expect(second).rejects.toBeInstanceOf(IsolationCapacityError);
+
+    releaseFirst?.();
+    await expect(first).resolves.toBeDefined();
+    expect(chamber.activeCount).toBe(1);
+  });
+});
+
+describe("createPiRpcProcessSpawner -- model routing (Roadmap #1)", () => {
+  function fakeCatalog(available: Record<string, string[]>): ModelCatalog {
+    return {
+      async getAvailable(providerId) {
+        const ids = (providerId ? available[providerId] : undefined) ?? [];
+        return ids.map((id) => ({ id, provider: providerId, name: id }) as never);
+      },
+    };
+  }
+
+  const ROUTING: RoleModelClassRouting = {
+    fast: { provider: "deepseek", modelId: "deepseek-v4-flash" },
+    balanced: { provider: "deepseek", modelId: "deepseek-v4-pro" },
+    deep: { provider: "anthropic", modelId: "claude-opus-4-5" },
+  };
+
+  it("resolves the genome's own modelPolicy.preferredClass, not a fixed anthropic/default, and passes it to the spawned process", async () => {
+    spawnMock.mockReset();
+    spawnMock.mockReturnValue(new FakeRpcChildProcess());
+    const catalog = fakeCatalog({ deepseek: ["deepseek-v4-flash"] });
+
+    const spawner = createPiRpcProcessSpawner({ modelRouting: ROUTING, modelCatalog: catalog, command: "pi" });
+    await spawner(genome("web-scout", { modelPolicy: { preferredClass: "fast", thinkingLevel: "low" } }));
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      "pi",
+      ["--mode", "rpc", "--no-session", "--provider", "deepseek", "--model", "deepseek-v4-flash"],
+      expect.objectContaining({ stdio: ["pipe", "pipe", "pipe"] }),
+    );
+  });
+
+  it("resolves two genomes on different tiers to different models, so they never collapse onto the same fixed default", async () => {
+    spawnMock.mockReset();
+    spawnMock.mockReturnValue(new FakeRpcChildProcess());
+    const catalog = fakeCatalog({ deepseek: ["deepseek-v4-flash"], anthropic: ["claude-opus-4-5"] });
+    const spawner = createPiRpcProcessSpawner({ modelRouting: ROUTING, modelCatalog: catalog });
+
+    await spawner(genome("fast-role", { modelPolicy: { preferredClass: "fast", thinkingLevel: "low" } }));
+    await spawner(genome("deep-role", { modelPolicy: { preferredClass: "deep", thinkingLevel: "high" } }));
+
+    const models = spawnMock.mock.calls.map((call) => (call[1] as string[])[6]);
+    expect(models).toEqual(["deepseek-v4-flash", "claude-opus-4-5"]);
+  });
+
+  it("throws UnresolvedRoleModelError instead of spawning when the genome's tier routes to an unavailable model -- never silently falls back to a different model", async () => {
+    spawnMock.mockReset();
+    const catalog = fakeCatalog({}); // nothing available
+    const spawner = createPiRpcProcessSpawner({ modelRouting: ROUTING, modelCatalog: catalog });
+
+    await expect(
+      spawner(genome("mail-worker", { modelPolicy: { preferredClass: "balanced", thinkingLevel: "low" } })),
+    ).rejects.toBeInstanceOf(UnresolvedRoleModelError);
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 });

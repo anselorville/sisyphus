@@ -11,11 +11,12 @@
  * isolation-chamber task is allowed at a time by default; this is a
  * population constraint, not an LLM resource-economy one"): at most
  * `capacity` (default 1) isolated roles may be running at once. This is
- * this chamber's OWN concurrency ceiling, enforced directly here,
- * independent of (but numerically consistent with)
- * ../ecology/population.ts's PopulationRegistry.isolationCap -- keeping the
- * two in sync is a later orchestration task's job, exactly mirroring
- * population.ts's own stated boundary for its two population views.
+ * this chamber's OWN concurrency ceiling, enforced directly here as a
+ * constructor option rather than a hardcoded constant -- production
+ * (../index.ts) passes `PopulationRegistry.isolationCap` so that value is
+ * the single source of truth and the two can never drift apart; a caller
+ * that constructs a bare `new RpcChamber()` (e.g. tests) still gets
+ * DEFAULT_CAPACITY (1), matching population.ts's own default.
  *
  * Wire protocol: this module's outbound {id, type: "prompt"|"abort", ...}
  * and inbound {id, type: "response", command, success, error?} shapes are
@@ -49,8 +50,14 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
+import { ModelRuntime, getAgentDir } from "@earendil-works/pi-coding-agent";
+
+import { config as defaultConfig } from "../config.js";
 import type { RoleGenome } from "../ecology/gene-bank.js";
 import { validateGenome } from "../ecology/gene-bank.js";
+import { resolveRoleModel } from "../roles/model-routing.js";
+import type { ModelCatalog } from "../roles/model-routing.js";
+import type { RoleModelClassRouting } from "../roles/types.js";
 import type { JsonlRecord } from "./jsonl-decoder.js";
 import { JsonlDecoder } from "./jsonl-decoder.js";
 
@@ -71,22 +78,31 @@ export interface RpcChildProcess {
   kill(signal?: NodeJS.Signals): boolean;
 }
 
-/** Builds (synchronously, mirroring node:child_process's own spawn()) the child process for one isolated genome. Production uses createPiRpcProcessSpawner(); tests inject a fake. Mirrors PiSessionProvider's injectable-seam role (../roles/types.ts) for the isolated-process world. */
-export type RpcProcessSpawner = (genome: RoleGenome) => RpcChildProcess;
+/** Builds the child process for one isolated genome -- may resolve asynchronously (see createPiRpcProcessSpawner(), which resolves the genome's modelPolicy before spawning). Production uses createPiRpcProcessSpawner(); tests inject a fake (sync or async). Mirrors PiSessionProvider's injectable-seam role (../roles/types.ts) for the isolated-process world. */
+export type RpcProcessSpawner = (genome: RoleGenome) => RpcChildProcess | Promise<RpcChildProcess>;
 
 export interface PiRpcProcessSpawnerOptions {
   /**
-   * Provider/model this chamber's spawned processes run against. Mapping a
-   * genome's modelPolicy (preferredClass/thinkingLevel) to a concrete
-   * provider/model pair is explicitly out of scope here: unlike resident
-   * roles (../roles/session-manager.ts's createDefaultPiSessionProvider(),
-   * which now does this mapping via ../roles/model-routing.ts), isolated
-   * genomes run as separate `pi` CLI subprocesses, not in-process SDK Pi
-   * Sessions, so resolving preferredClass here would need its own
-   * subprocess-facing wiring -- still a later task's concern.
+   * Which concrete provider/model each RoleModelClass tier resolves to --
+   * same routing table resident roles use
+   * (../roles/session-manager.ts's createDefaultPiSessionProvider()).
+   * Default: config.modelClassRouting (../config.ts), overridable via env
+   * vars.
    */
-  readonly provider?: string;
-  readonly model?: string;
+  readonly modelRouting?: RoleModelClassRouting;
+  /**
+   * Model catalog resolveRoleModel() checks each genome's modelPolicy.
+   * preferredClass against (credential-checked, not just a static-catalog
+   * id lookup) -- mirrors ../roles/session-manager.ts's ModelRuntime
+   * handle. Inject a fake (satisfying ../roles/model-routing.ts's
+   * ModelCatalog) in tests; default: one real `ModelRuntime.create({
+   * authPath, modelsPath })`, built lazily on first use and reused for
+   * every subsequent spawn so the auth/model catalog is only ever loaded
+   * once per process.
+   */
+  readonly modelCatalog?: ModelCatalog;
+  /** Global pi config directory, used only to locate auth.json/models.json for the default modelCatalog. Default: getAgentDir() (~/.pi/agent). */
+  readonly agentDir?: string;
   /** Real command to spawn. Default "pi". */
   readonly command?: string;
   /** Base environment to restrict from. Default process.env. */
@@ -124,18 +140,44 @@ export function buildRestrictedEnv(
  * ../tools/mail/agently-mail.ts's SpawnAgentlyCliTransport. Not exercised
  * by this task's tests (they inject a fake spawner); it's the real
  * implementation production code constructs RpcChamber with.
+ *
+ * Resolves each genome's own `modelPolicy.preferredClass` through the same
+ * resolveRoleModel()/modelRouting path resident roles use
+ * (../roles/session-manager.ts's createDefaultPiSessionProvider()), instead
+ * of spawning every isolated genome against a fixed anthropic/default --
+ * closes the "RpcChamber routing" gap named in ../README.md's roadmap. A
+ * misconfigured tier throws UnresolvedRoleModelError (propagated out of
+ * spawn(), never silently falling back to a different model).
  */
 export function createPiRpcProcessSpawner(options: PiRpcProcessSpawnerOptions = {}): RpcProcessSpawner {
   const command = options.command ?? "pi";
-  const provider = options.provider ?? "anthropic";
-  const model = options.model ?? "default";
+  const modelRouting = options.modelRouting ?? defaultConfig.modelClassRouting;
+  const agentDir = options.agentDir ?? getAgentDir();
   const env = buildRestrictedEnv(options.baseEnv ?? process.env, options.allowedEnvVars);
 
-  return (_genome: RoleGenome): RpcChildProcess => {
-    const child = nodeSpawn(command, ["--mode", "rpc", "--no-session", "--provider", provider, "--model", model], {
-      stdio: ["pipe", "pipe", "pipe"],
-      env,
-    });
+  let modelCatalogPromise: Promise<ModelCatalog> | undefined;
+  const getModelCatalog = (): Promise<ModelCatalog> => {
+    modelCatalogPromise ??= options.modelCatalog
+      ? Promise.resolve(options.modelCatalog)
+      : ModelRuntime.create({
+          authPath: `${agentDir}/auth.json`,
+          modelsPath: `${agentDir}/models.json`,
+        });
+    return modelCatalogPromise;
+  };
+
+  return async (genome: RoleGenome): Promise<RpcChildProcess> => {
+    const catalog = await getModelCatalog();
+    const resolved = await resolveRoleModel(catalog, genome.roleId, genome.modelPolicy.preferredClass, modelRouting);
+
+    const child = nodeSpawn(
+      command,
+      ["--mode", "rpc", "--no-session", "--provider", resolved.provider, "--model", resolved.id],
+      {
+        stdio: ["pipe", "pipe", "pipe"],
+        env,
+      },
+    );
     return child;
   };
 }
@@ -418,6 +460,16 @@ export class RpcChamber {
   private readonly nextRequestId: () => string;
   private readonly sessions = new Set<RpcChamberSession>();
   private readonly byRoleId = new Map<string, RpcChamberSession>();
+  /**
+   * Count of spawn() calls that have reserved a capacity slot but haven't
+   * finished awaiting their (now-async, since the model-routing lookup
+   * added a real await point) spawner yet. Without this, two concurrent
+   * spawn() calls could both pass the `sessions.size >= capacity` check
+   * before either has added its session, exceeding `capacity`. Included in
+   * every capacity check alongside `sessions.size`, released in spawn()'s
+   * `finally` regardless of success or failure.
+   */
+  private pendingSpawns = 0;
 
   constructor(options: RpcChamberOptions = {}) {
     this.capacity = options.capacity ?? DEFAULT_CAPACITY;
@@ -435,27 +487,32 @@ export class RpcChamber {
   /** Spawns `genome` in its own child process. Throws InvalidGenomeError for a structurally-invalid genome, or IsolationCapacityError once `capacity` concurrently-running sessions already exist -- neither case spawns anything or consumes a capacity slot. */
   async spawn(genome: RoleGenome): Promise<IsolatedRoleSession> {
     validateGenome(genome);
-    if (this.sessions.size >= this.capacity) {
+    if (this.sessions.size + this.pendingSpawns >= this.capacity) {
       throw new IsolationCapacityError(genome.roleId, this.capacity);
     }
 
-    const child = this.spawner(genome);
-    const session: RpcChamberSession = new RpcChamberSession(
-      genome,
-      child,
-      this.requestTimeoutMs,
-      this.scheduleTimeout,
-      this.nextRequestId,
-      () => {
-        this.sessions.delete(session);
-        if (this.byRoleId.get(genome.roleId) === session) {
-          this.byRoleId.delete(genome.roleId);
-        }
-      },
-    );
-    this.sessions.add(session);
-    this.byRoleId.set(genome.roleId, session);
-    return session;
+    this.pendingSpawns++;
+    try {
+      const child = await this.spawner(genome);
+      const session: RpcChamberSession = new RpcChamberSession(
+        genome,
+        child,
+        this.requestTimeoutMs,
+        this.scheduleTimeout,
+        this.nextRequestId,
+        () => {
+          this.sessions.delete(session);
+          if (this.byRoleId.get(genome.roleId) === session) {
+            this.byRoleId.delete(genome.roleId);
+          }
+        },
+      );
+      this.sessions.add(session);
+      this.byRoleId.set(genome.roleId, session);
+      return session;
+    } finally {
+      this.pendingSpawns--;
+    }
   }
 
   /** Convenience roleId-keyed prompt(), mirroring ../roles/session-manager.ts's RoleSessionManager surface. Throws IsolatedRoleNotFoundError if no isolated session is currently active for roleId. */

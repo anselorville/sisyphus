@@ -252,8 +252,12 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     const pheromoneMap = new PheromoneMap();
 
     // 11. RpcChamber -- constructing it never spawns a process; only
-    // spawn() does, and nothing at startup calls it.
-    const rpcChamber = new RpcChamber();
+    // spawn() does, and nothing at startup calls it. capacity is driven by
+    // PopulationRegistry.isolationCap (the single source of truth for the
+    // isolation ceiling) rather than RpcChamber's own default, so the two
+    // can never drift apart -- see README.md's roadmap item on unifying
+    // them.
+    const rpcChamber = new RpcChamber({ capacity: population.isolationCap });
     rollbacks.push(() => rpcChamber.close());
 
     // 12. Inspector + MemoryCurator (Task 16) -- see the module doc comment
