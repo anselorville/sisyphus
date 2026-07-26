@@ -33,7 +33,7 @@
       "label": "Enable thinking mode",
       "kind": "boolean",
       "default": false,
-      "help": "Qwen3.5's chain-of-thought 'thinking' mode. Off by default for latency: verified live, a single translation took ~51s (1598 reasoning tokens) with thinking enabled vs. well under a second with it disabled. Turn this on only if you want higher-quality, much slower responses -- not recommended for real-time translation."
+      "help": "Qwen3.5's chain-of-thought 'thinking' mode. Off by default for latency: verified live, a single response took ~51s (1598 reasoning tokens) with thinking enabled vs. well under a second with it disabled. Turn this on only if you want higher-quality, much slower responses -- not recommended for real-time voice conversation."
     }
   ]
 }

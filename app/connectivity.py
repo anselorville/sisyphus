@@ -3,11 +3,12 @@ services at pipeline startup.
 
 This is intentionally simple: a single fast, low-timeout attempt to reach a
 well-known, highly-available host. It is not meant to be a robust network
-quality probe, and it is only consulted once at startup (see app/pipeline.py)
--- there is no continuous/mid-conversation re-checking or fallback in this
-phase. Any failure (DNS, TCP, TLS, timeout, etc.) is treated as "offline"
-rather than raising, since the whole point of this check is to decide
-gracefully rather than crash the server when there's no network.
+quality probe, and it is only consulted once at startup (see
+app/providers/transcription.py's `select_engine()`) -- there is no
+continuous/mid-conversation re-checking or fallback in this phase. Any
+failure (DNS, TCP, TLS, timeout, etc.) is treated as "offline" rather than
+raising, since the whole point of this check is to decide gracefully rather
+than crash the server when there's no network.
 """
 
 from __future__ import annotations
@@ -39,8 +40,9 @@ def has_internet_connection(
     as "no connection" and returns False rather than propagating.
 
     This is a point-in-time check made once at pipeline startup, not a
-    continuous monitor -- see app/pipeline.py for how the result is used to
-    choose between cloud and local services.
+    continuous monitor -- see app/providers/transcription.py's
+    `select_engine()` for how the result is used to choose between cloud
+    and local services.
     """
     try:
         with socket.create_connection((host, port), timeout=timeout):

@@ -38,7 +38,7 @@ import asyncio
 import json
 from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import websockets
 from loguru import logger
@@ -47,9 +47,6 @@ from pipecat.services.tts_service import TTSService
 from pipecat.utils.tracing.service_decorators import traced_tts
 
 from app.config import Settings
-
-if TYPE_CHECKING:
-    from app.pipeline import TranslationDirectionStripper
 
 MINIMAX_WS_URL = "wss://api.minimaxi.com/ws/v1/t2a_v2"
 MINIMAX_DEFAULT_TTS_MODEL = "speech-2.8-hd"
@@ -95,7 +92,6 @@ class MiniMaxWSTTSService(TTSService):
         speed: float | None = None,
         pitch: int | None = None,
         volume: float | None = None,
-        tone_source: "TranslationDirectionStripper | None" = None,
         **kwargs: Any,
     ) -> None:
         # push_start_frame/push_stop_frames: the base class brackets the
@@ -113,9 +109,6 @@ class MiniMaxWSTTSService(TTSService):
         self._speed = speed
         self._pitch = pitch
         self._volume = volume
-        # Reserved for tone->emotion mapping later; MiniMax's voice_setting
-        # emotion enum is model-dependent and unverified, so unused today.
-        self._tone_source = tone_source
         self._ws: Any = None
         # run_tts is invoked per sentence and could in principle overlap
         # (speculative pipelining upstream); a single connection cannot
@@ -237,7 +230,6 @@ class MiniMaxWSTTSService(TTSService):
 
 def build_minimax_tts(
     settings: Settings,
-    direction_stripper: "TranslationDirectionStripper | None",
     *,
     model: str | None = None,
     voice: str | None = None,
@@ -254,5 +246,4 @@ def build_minimax_tts(
         model=model or MINIMAX_DEFAULT_TTS_MODEL,
         voice_id=voice or MINIMAX_DEFAULT_VOICE_ID,
         speed=speed,
-        tone_source=direction_stripper,
     )

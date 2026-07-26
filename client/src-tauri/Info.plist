@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Sisyphus Translator needs microphone access to capture your speech for translation.</string>
+  <string>Sisyphus Voice Agent needs microphone access to capture your speech.</string>
 </dict>
 </plist>

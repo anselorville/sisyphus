@@ -40,12 +40,13 @@ kept on purpose):
   decides which fields are meaningful to apply/render, this module just
   stores whatever it's given.
 
-Nothing in this module changes pipeline behavior by itself: app/pipeline.py
-reads from `load_model_settings()`/`values_for()` to pull adapter-specific
-overrides into the actual service-construction calls (temperature/top_p/
-voice/speed/instructions/system_prompt_override/enable_thinking/etc.,
-depending on which adapter applies) -- see that module's `_build_cloud_*`/
-`_build_mlx_service_trio` functions for the wiring.
+Nothing in this module changes pipeline behavior by itself: app/providers/
+(transcription.py, speech.py) and app/mlx_services.py read from
+`load_model_settings()`/`values_for()` to pull adapter-specific overrides
+into the actual service-construction calls (temperature/top_p/voice/speed/
+instructions/system_prompt_override/enable_thinking/etc., depending on
+which adapter applies) -- see those modules' `_build_cloud_*`/`build_mlx_*`
+functions for the wiring.
 """
 
 from __future__ import annotations

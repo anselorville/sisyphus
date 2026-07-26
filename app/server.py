@@ -17,7 +17,7 @@ or, after `uv sync`:
 from __future__ import annotations
 
 import asyncio
-import dataclasses
+import contextlib
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -64,7 +64,9 @@ from app.model_settings import (
     load_model_settings,
     save_model_settings,
 )
-from app.pipeline import build_pipeline_worker, select_engine
+from app.providers import select_engine, stt_provider_name, tts_provider_name
+from app.realtime.event_bridge import SidecarEventBridge
+from app.realtime.media_pipeline import build_pipeline_worker
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -78,15 +80,104 @@ ICE_SERVERS = ["stun:stun.l.google.com:19302"]
 pcs_map: dict[str, SmallWebRTCConnection] = {}
 
 
+async def _start_event_bridge(settings: Settings) -> SidecarEventBridge | None:
+    """Start the sidecar event bridge without ever failing app startup.
+
+    SidecarEventBridge.start() itself never blocks on (or raises for) the
+    sidecar being unreachable -- connecting happens lazily, with retry, on
+    its own background tasks (see app/realtime/event_bridge.py). This is
+    wrapped defensively anyway so an unexpected construction error still
+    can't take the Pipecat media plane down with it: voice I/O must keep
+    working with no agent runtime attached, the same as if this bridge were
+    never wired in at all (today that means `agent_link=None` at the
+    run_bot() call site below -- no dynamic replies, but the WebRTC/STT/TTS
+    media plane stays fully up).
+    """
+    bridge = SidecarEventBridge(settings.agent_runtime_url)
+    try:
+        await bridge.start()
+    except Exception:
+        logger.exception(
+            "Failed to start sidecar event bridge (agent runtime unavailable) -- "
+            "continuing with the media pipeline only."
+        )
+        return None
+    return bridge
+
+
+async def _cache_ecology_and_food_state(app: FastAPI, bridge: SidecarEventBridge) -> None:
+    """Background task: mirrors the sidecar's last-known ecology/food state
+    onto `app.state` so `GET /api/agent-runtime/status` never has to reach
+    across the bridge (or block) to answer.
+
+    `ecology.state.changed` and `budget.updated` are the only two
+    RealtimeEvent types that ever carry a food-state payload -- see
+    agent-runtime/src/economy/types.ts's `FoodState` ("prosperous" |
+    "conserving" | "reserve" | "hibernating") and
+    agent-runtime/src/voice/voice-herald.ts's own handling of those same two
+    event types (`event.payload.state`). Every other inbound event type is
+    ignored here -- this is a small last-known-value cache for the status
+    endpoint, never a general event log or a history (deliberately not
+    persisted; "unknown" again after a restart is correct, since that's
+    genuinely the true state of our knowledge until the sidecar says
+    otherwise again).
+
+    Runs for as long as `bridge.events()` keeps yielding. That async
+    generator returns (does not raise) once `bridge.close()` releases every
+    subscription -- see event_bridge.py's `events()`/`close()` -- so this
+    task ends on its own during a normal shutdown; `lifespan()` cancels it
+    defensively anyway in case that generator is ever left running for some
+    other reason.
+    """
+    async for event in bridge.events():
+        if event.type == "ecology.state.changed":
+            state = event.payload.get("state")
+            if isinstance(state, str):
+                app.state.ecology_status = state
+        elif event.type == "budget.updated":
+            state = event.payload.get("state")
+            if isinstance(state, str):
+                app.state.food_status = state
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    app.state.event_bridge = await _start_event_bridge(_startup_settings)
+    app.state.ecology_status = "unknown"
+    app.state.food_status = "unknown"
+
+    ecology_food_task: asyncio.Task[None] | None = None
+    if app.state.event_bridge is not None:
+        ecology_food_task = asyncio.create_task(
+            _cache_ecology_and_food_state(app, app.state.event_bridge),
+            name="ecology-food-cache",
+        )
+
     yield
+
     coros = [pc.disconnect() for pc in pcs_map.values()]
     await asyncio.gather(*coros, return_exceptions=True)
     pcs_map.clear()
+    # SidecarEventBridge.close() itself does the "stop accepting new work,
+    # then flush durable events, then close the connection" sequence -- see
+    # its docstring. Closing it releases the `events()` subscription the
+    # ecology/food cache task above is iterating, which makes that task's
+    # `async for` loop return on its own (see its own docstring) -- the
+    # explicit cancel below is a defensive backstop, not the primary way
+    # this task is expected to end.
+    if app.state.event_bridge is not None:
+        await app.state.event_bridge.close()
+    if ecology_food_task is not None:
+        if not ecology_food_task.done():
+            ecology_food_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await ecology_food_task
 
 
 app = FastAPI(lifespan=lifespan)
+app.state.event_bridge = None
+app.state.ecology_status = "unknown"
+app.state.food_status = "unknown"
 # The client is always a separate process/origin from this server (Tauri
 # webview or Vite dev server talking to the Python backend over HTTP), never
 # same-origin, so CORS must be open for the API to be reachable at all.
@@ -122,22 +213,61 @@ async def index():
 
 @app.get("/api/status")
 async def status() -> dict[str, str]:
-    """Report the resolved translation engine and configured language pair.
-
-    The engine is resolved once at server startup (see `_resolved_engine`
-    above) via the same `select_engine()` used by the pipeline itself, so
-    this always reflects what connections will actually get -- never
-    duplicated/re-implemented selection logic.
-    """
+    """Report the media-plane product and resolved speech providers."""
     return {
-        "engine": _resolved_engine,
-        "source_lang": _startup_settings.source_lang,
-        "target_lang": _startup_settings.target_lang,
-        # "manual": the client renders the mic-button turn UX (service
-        # switch = connection, mic button = utterance boundaries) and must
-        # send {"type": "mic", "open": bool} data-channel messages.
-        # "auto": hands-free VAD turn-taking, no mic gating UI.
+        "product": "voice-agent",
+        "stt_provider": stt_provider_name(_startup_settings),
+        "tts_provider": tts_provider_name(_startup_settings),
         "turn_mode": _startup_settings.turn_mode,
+    }
+
+
+@app.get("/api/agent-runtime/status")
+async def agent_runtime_status() -> dict:
+    """Combined health snapshot: the Pipecat/WebRTC media plane (this
+    process, always answerable about itself) plus whatever this process
+    currently knows about the TypeScript agent-runtime sidecar.
+
+    Four top-level keys (a superset-safe shape -- callers should only rely
+    on keys they know about; more may be added later without breaking
+    anyone):
+
+    - "media": this process's own media-plane health. Reuses the same
+      provider/engine resolution as GET /api/status. "status" is always
+      "ok" here -- if this handler is running at all, the media plane's
+      host process is up; WebRTC/STT/TTS liveness genuinely just *is*
+      "this process is alive and serving", nothing more, per this
+      project's standing constraint that the media plane must keep
+      working regardless of the sidecar's state.
+    - "sidecar": whether `app.state.event_bridge` was ever constructed at
+      startup ("configured" -- False only if construction itself raised,
+      see `_start_event_bridge`) and whether it currently holds a live
+      connection ("connected", `SidecarEventBridge.is_connected`). Both
+      can be False (sidecar never reachable) with the media plane still
+      fully working.
+    - "ecology"/"food": the last FoodState band ("prosperous" |
+      "conserving" | "reserve" | "hibernating") the sidecar has ever
+      reported over `ecology.state.changed`/`budget.updated` events,
+      cached by the background task `lifespan()` starts alongside the
+      bridge (see `_cache_ecology_and_food_state`). "unknown" until the
+      first such event ever arrives -- there is no way for this process
+      to know either value before the sidecar has said so at least once.
+    """
+    bridge = app.state.event_bridge
+    return {
+        "media": {
+            "status": "ok",
+            "engine": _resolved_engine,
+            "stt_provider": stt_provider_name(_startup_settings),
+            "tts_provider": tts_provider_name(_startup_settings),
+            "active_connections": len(pcs_map),
+        },
+        "sidecar": {
+            "configured": bridge is not None,
+            "connected": bool(bridge is not None and bridge.is_connected),
+        },
+        "ecology": getattr(app.state, "ecology_status", "unknown"),
+        "food": getattr(app.state, "food_status", "unknown"),
     }
 
 
@@ -359,7 +489,7 @@ async def post_model_lab_preview_text(request: dict) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         # Missing API key / unconfigured provider, etc. -- same class of
-        # error app/pipeline.py's own builders raise at pipeline-build time.
+        # error app/providers's own builders raise at pipeline-build time.
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"output_text": output_text, "timing": timing}
 
@@ -744,36 +874,11 @@ async def put_model_providers(request: dict) -> dict:
 
 async def run_bot(
     webrtc_connection: SmallWebRTCConnection,
-    source_lang: str | None = None,
-    target_lang: str | None = None,
-    conversation_mode: str | None = None,
 ) -> None:
-    """Build and run the translation pipeline for one WebRTC connection.
-
-    `source_lang`/`target_lang` are the client's language-pair selection,
-    carried in the /api/offer body -- the UI's language picker is the
-    authority for a conversation's languages, with .env's
-    SOURCE_LANG/TARGET_LANG only the fallback when the client sends none
-    (older clients, curl tests). Free-text names ("Chinese", "French", ...),
-    the same vocabulary the env vars accept.
-
-    `conversation_mode` is "translator" (default) or "assistant", also
-    from the client's Settings screen -- "assistant" replaces the
-    translation prompt with a Cartesia-style open-ended voice-agent persona.
-    """
+    """Build and run the media plane for one WebRTC connection."""
     settings = load_settings()
-    if source_lang:
-        settings = dataclasses.replace(settings, source_lang=source_lang)
-    if target_lang:
-        settings = dataclasses.replace(settings, target_lang=target_lang)
-    if conversation_mode:
-        settings = dataclasses.replace(settings, conversation_mode=conversation_mode)
-    logger.info(
-        f"Starting translator pipeline for new connection "
-        f"({settings.source_lang} <-> {settings.target_lang}, "
-        f"mode={settings.conversation_mode})"
-    )
-    worker = build_pipeline_worker(webrtc_connection, settings)
+    logger.info("Starting voice-agent media pipeline for new connection")
+    worker = build_pipeline_worker(webrtc_connection, settings, agent_link=None)
 
     @webrtc_connection.event_handler("closed")
     async def _on_closed(connection: SmallWebRTCConnection) -> None:
@@ -813,26 +918,7 @@ async def offer(request: dict, background_tasks: BackgroundTasks):
             logger.info(f"Discarding peer connection: {conn.pc_id}")
             pcs_map.pop(conn.pc_id, None)
 
-        # Language pair from the client's picker (optional, free-text names).
-        # Length-capped defensive copy -- these end up inside the LLM system
-        # prompt, so an absurdly long value is rejected rather than injected.
-        def _lang(field: str) -> str | None:
-            value = request.get(field)
-            if isinstance(value, str):
-                value = value.strip()
-                if 0 < len(value) <= 40:
-                    return value
-            return None
-
-        def _mode() -> str | None:
-            value = request.get("mode")
-            if isinstance(value, str) and value.strip() in ("translator", "assistant"):
-                return value.strip()
-            return None
-
-        background_tasks.add_task(
-            run_bot, connection, _lang("source_lang"), _lang("target_lang"), _mode()
-        )
+        background_tasks.add_task(run_bot, connection)
 
     answer = connection.get_answer()
     pcs_map[answer["pc_id"]] = connection
@@ -841,8 +927,7 @@ async def offer(request: dict, background_tasks: BackgroundTasks):
 
 def main() -> None:
     settings = load_settings()
-    logger.info(f"Starting Sisyphus translator server on {settings.webrtc_host}:{settings.webrtc_port}")
-    logger.info(f"Translation direction: {settings.source_lang} <-> {settings.target_lang}")
+    logger.info(f"Starting Sisyphus voice-agent server on {settings.webrtc_host}:{settings.webrtc_port}")
     uvicorn.run(app, host=settings.webrtc_host, port=settings.webrtc_port)
 
 

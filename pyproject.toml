@@ -1,7 +1,7 @@
 [project]
-name = "sisyphus-translator"
+name = "sisyphus-voice-agent"
 version = "0.1.0"
-description = "Real-time Chinese<->European-language speech translator built on Pipecat."
+description = "Realtime autonomous swarm voice agent built on Pipecat and Pi."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -40,10 +40,15 @@ dependencies = [
     "httpx>=0.27.0",
     "python-multipart>=0.0.32",
     "edge-tts>=7.2.8",
+    "msgspec>=0.21.1",
+    "websockets>=16.0",
 ]
 
 [project.scripts]
-sisyphus-translator = "app.server:main"
+sisyphus-voice-agent = "app.server:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
 [build-system]
 requires = ["hatchling"]
@@ -51,3 +56,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
+
+[dependency-groups]
+dev = [
+    "psutil>=7.2.2",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]

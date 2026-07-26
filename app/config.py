@@ -1,9 +1,4 @@
-"""Configuration loading for the Sisyphus translator.
-
-Reads API keys and translation direction from environment variables (via a
-.env file in development, or real environment variables in production) and
-fails fast with a clear error message if anything required is missing.
-"""
+"""Configuration loading for the Sisyphus voice-agent media plane."""
 
 from __future__ import annotations
 
@@ -19,13 +14,13 @@ load_dotenv()
 
 # Cloud API keys are intentionally NOT validated here at module/settings-load
 # time. Whether they're required depends entirely on which engine ends up
-# selected (see `ENGINE` below and `app/pipeline.py`'s `select_engine()`) --
-# a local-only or oMLX-only user should be able to run this server with zero
-# cloud keys set. The cloud-service builder (`_build_cloud_services` in
-# app/pipeline.py) is responsible for validating these are present, and only
-# at the point the cloud engine is actually about to be built.
+# selected (see `ENGINE` below and `app/providers/transcription.py`'s
+# `select_engine()`) -- a local-only or oMLX-only user should be able to run
+# this server with zero cloud keys set. Each provider's own cloud-service
+# builder (`app/providers/transcription.py`'s/`app/providers/speech.py`'s
+# `_build_cloud_*`) is responsible for validating these are present, and
+# only at the point the cloud engine is actually about to be built.
 CLOUD_REQUIRED_KEYS = (
-    "ANTHROPIC_API_KEY",
     "DEEPGRAM_API_KEY",
     "ASSEMBLYAI_API_KEY",
     "GLM_API_KEY",
@@ -39,10 +34,10 @@ VALID_ENGINES = ("auto", "cloud", "offline", "omlx")
 
 @dataclass(frozen=True)
 class Settings:
-    """Resolved runtime configuration for the translator pipeline and server."""
+    """Resolved runtime configuration for the voice-agent media plane."""
 
     # Cloud credentials: may be empty strings if unset -- only validated (in
-    # app/pipeline.py) if/when the cloud engine path is actually selected.
+    # app/providers/) if/when the cloud engine path is actually selected.
     anthropic_api_key: str
     deepgram_api_key: str
     assemblyai_api_key: str
@@ -67,12 +62,6 @@ class Settings:
     # persistent-connection streaming, measured ~0.2-0.3s per-utterance
     # time-to-first-audio from this machine).
     minimax_api_key: str
-    source_lang: str
-    target_lang: str
-    # "translator" (default): LLM is a bidirectional speech translator.
-    # "assistant": LLM is an open-ended personal voice assistant (Cartesia-
-    # style conversational agent -- no translation, no direction tags).
-    conversation_mode: str
     webrtc_host: str
     webrtc_port: int
 
@@ -146,6 +135,13 @@ class Settings:
     openrouter_tts_models: list[str]
     openrouter_asr_models: list[str]
 
+    # --- Agent-runtime sidecar (TypeScript, out-of-process) ---
+    # Local-loopback WebSocket the Python media plane bridges realtime events
+    # over (see app/realtime/event_bridge.py). No safe reason to point this
+    # anywhere but loopback -- PCM audio never crosses it, but transcripts
+    # and task state do, so it should never be reachable off-box.
+    agent_runtime_url: str
+
     # --- VoxCPM2-CUDA streaming TTS ---
     # A LAN-hosted VoxCPM2 service exposing `/v1/tts/stream` as SSE, where
     # each chunk is an independent WAV file. Only used when Model Provider
@@ -216,10 +212,10 @@ def load_settings() -> Settings:
 
     Note: cloud API keys (ANTHROPIC_API_KEY/DEEPGRAM_API_KEY/CARTESIA_API_KEY)
     are deliberately NOT validated here -- they're read as-is (possibly
-    empty strings) and only checked for presence in app/pipeline.py's
-    cloud-service builder, at the point the cloud engine is actually
-    selected and about to be built. This lets local-only/oMLX-only users run
-    the server with zero cloud keys configured.
+    empty strings) and only checked for presence in each provider's own
+    cloud-service builder (app/providers/), at the point the cloud engine is
+    actually selected and about to be built. This lets local-only/oMLX-only
+    users run the server with zero cloud keys configured.
 
     Raises:
         RuntimeError: if `WEBRTC_PORT` isn't a valid integer, or if `ENGINE`
@@ -268,9 +264,6 @@ def load_settings() -> Settings:
         deepseek_api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
         deepseek_text_models=_parse_csv_env("DEEPSEEK_TEXT_MODELS"),
         minimax_api_key=os.environ.get("MINIMAX_API_KEY", ""),
-        source_lang=os.environ.get("SOURCE_LANG", "Chinese"),
-        target_lang=os.environ.get("TARGET_LANG", "English"),
-        conversation_mode=os.environ.get("CONVERSATION_MODE", "translator"),
         webrtc_host=os.environ.get("WEBRTC_HOST", "0.0.0.0"),
         webrtc_port=webrtc_port,
         engine=engine,
@@ -307,6 +300,9 @@ def load_settings() -> Settings:
         omlx_llm_model=os.environ.get("OMLX_LLM_MODEL", "Qwen3.5-4B-MLX-4bit"),
         omlx_stt_model=os.environ.get("OMLX_STT_MODEL", "Qwen3-ASR-1.7B-8bit"),
         omlx_tts_model=os.environ.get("OMLX_TTS_MODEL", "VoxCPM2-8bit"),
+        # Agent-runtime sidecar bridge (see app/realtime/event_bridge.py).
+        # Default matches the sidecar's own default listen address/path.
+        agent_runtime_url=os.environ.get("AGENT_RUNTIME_URL", "ws://127.0.0.1:8765/events"),
         # OpenRouter (cloud provider) -- see app/openrouter_services.py and
         # app/model_providers.py. No safe default for the API key (a
         # per-account secret, left empty if unset); the three catalogs

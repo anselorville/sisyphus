@@ -1,5 +1,6 @@
-"""OpenRouter-backed equivalents of the cloud STT, translation (LLM), and TTS
-services used by app/pipeline.py.
+"""OpenRouter-backed equivalents of the cloud STT, LLM, and TTS services
+used by app/providers/ (see app/providers/transcription.py and
+app/providers/speech.py).
 
 OpenRouter is a single account/API key that fronts many third-party models
 across all three capabilities this pipeline needs -- unlike
@@ -361,8 +362,7 @@ def build_deepseek_llm(
 
 class OpenRouterTTSService(OpenAITTSService):
     """`OpenAITTSService` subclass that accepts OpenRouter/Azure-style voice
-    identifiers instead of validating against OpenAI's own fixed voice enum,
-    and optionally forwards a live per-utterance tone hint as `instructions`.
+    identifiers instead of validating against OpenAI's own fixed voice enum.
 
     Why a subclass is needed at all, despite the response framing being
     identical to OpenAI's real TTS API (see this module's docstring --
@@ -384,27 +384,9 @@ class OpenRouterTTSService(OpenAITTSService):
     This is therefore a much smaller override than `MlxTTSService`
     (app/mlx_services.py), which had to replace the entire `run_tts` body to
     handle WAV-wrapped, non-24kHz audio -- OpenRouter's TTS response needed
-    no such rework, only the voice gate (plus this tone-forwarding wrapper).
-
-    `tone_source` (optional, mirrors `MlxTTSService`'s identical parameter in
-    app/mlx_services.py): a reference to `app.pipeline.
-    TranslationDirectionStripper`, read synchronously in `run_tts()` for its
-    `last_tone` attribute and forwarded as `self._settings.instructions`
-    before delegating to `OpenAITTSService.run_tts` (which reads
-    `self._settings.instructions` fresh on every call -- confirmed by reading
-    its source -- so mutating it just before calling super() is sufficient,
-    no deeper override needed). Falls back to whatever static
-    `instructions=`/`default_instructions` was set at construction time when
-    no tone has been inferred yet (e.g. the session's first utterance) or no
-    `tone_source` was given at all. UNVERIFIED: whether OpenRouter's
-    mai-voice-2 backend actually changes its output in response to
-    `instructions` was not exercised live in this session (see
-    `build_openrouter_tts`'s docstring) -- this wrapper provides the same
-    wiring `MlxTTSService` uses (verified live for oMLX), but the
-    OpenRouter-side effect itself is unconfirmed.
     """
 
-    def __init__(self, *, tone_source: "Any | None" = None, **kwargs: Any) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         # `OpenAITTSService.__init__` builds `self._client = AsyncOpenAI(
         # api_key=..., base_url=...)` with no `http_client=`/`timeout=`
@@ -430,11 +412,6 @@ class OpenRouterTTSService(OpenAITTSService):
                 timeout=httpx.Timeout(600.0, connect=OPENROUTER_CONNECT_TIMEOUT_SECS),
             ),
         )
-        self._tone_source = tone_source
-        # Static fallback instructions, captured once at construction time
-        # (from `default_instructions`/`settings.instructions`) so it can be
-        # restored on every call when there's no live tone yet.
-        self._fallback_instructions = self._settings.instructions
         # `OpenAITTSService.run_tts` checks `voice not in VALID_VOICES` (a
         # *module-level* dict shared by every instance of the class) before
         # making any request, then looks up `VALID_VOICES[voice]` to get the
@@ -455,18 +432,6 @@ class OpenRouterTTSService(OpenAITTSService):
 
             VALID_VOICES[voice] = voice  # type: ignore[assignment]
 
-    async def run_tts(self, text: str, context_id: str):
-        """Set `self._settings.instructions` from the live tone hint (if
-        any) before delegating to `OpenAITTSService.run_tts`, then restore
-        the static fallback afterward -- see this class's docstring.
-        """
-        if self._tone_source is not None:
-            tone = getattr(self._tone_source, "last_tone", None)
-            self._settings.instructions = tone or self._fallback_instructions
-        async for frame in super().run_tts(text, context_id):
-            yield frame
-
-
 def build_openrouter_tts(
     settings: Settings,
     *,
@@ -476,7 +441,6 @@ def build_openrouter_tts(
     speed: float | None = None,
     temperature: float | None = None,
     top_p: float | None = None,
-    tone_source: "Any | None" = None,
 ) -> OpenRouterTTSService:
     """Construct the OpenRouter TTS service (`OpenRouterTTSService`, pointed
     at OpenRouter's `/v1/audio/speech` endpoint).
@@ -515,16 +479,6 @@ def build_openrouter_tts(
     change output, see `MlxTTSService.run_tts`) is UNVERIFIED -- the live
     test in this session sent no `instructions`.
 
-    `tone_source` (optional -- mirrors `build_mlx_tts`'s identical
-    parameter): a reference to `app.pipeline.TranslationDirectionStripper`,
-    forwarded to `OpenRouterTTSService` so it can read the translation LLM's
-    per-utterance tone hint and send it as `instructions` on each request,
-    falling back to `default_instructions` when no live tone is available
-    yet. `None` (the default) disables this -- callers that don't pass it
-    get static-`instructions`-only behavior, same as before this parameter
-    existed. See `OpenRouterTTSService`'s docstring for why this wiring's
-    real-world effect on OpenRouter's TTS output is UNVERIFIED, unlike the
-    equivalent oMLX wiring.
     """
     extra_body: dict[str, Any] = {}
     if temperature is not None:
@@ -535,7 +489,6 @@ def build_openrouter_tts(
     return OpenRouterTTSService(
         api_key=settings.openrouter_api_key,
         base_url=OPENROUTER_BASE_URL,
-        tone_source=tone_source,
         settings=OpenRouterTTSService.Settings(
             model=model,
             voice=voice,

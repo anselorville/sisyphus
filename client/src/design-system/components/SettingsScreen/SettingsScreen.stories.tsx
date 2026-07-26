@@ -1,7 +1,5 @@
-import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { SettingsScreen } from "./SettingsScreen";
-import { LANGUAGES } from "../../../data/languages";
 
 const meta: Meta<typeof SettingsScreen> = {
   title: "Components/SettingsScreen",
@@ -15,10 +13,6 @@ const meta: Meta<typeof SettingsScreen> = {
     ),
   ],
   args: {
-    source: LANGUAGES.find((l) => l.code === "ZH")!,
-    target: LANGUAGES.find((l) => l.code === "EN")!,
-    onSourceChange: () => {},
-    onTargetChange: () => {},
     serverAddress: "http://localhost:7860",
     onServerAddressChange: () => {},
     connectionState: "disconnected",
@@ -40,23 +34,4 @@ export const LockedWhileConnected: Story = {
 
 export const OfflineEngine: Story = {
   args: { engineMode: "offline" },
-};
-
-export const Interactive: Story = {
-  render: (args) => {
-    function Wrapper() {
-      const [source, setSource] = useState(args.source);
-      const [target, setTarget] = useState(args.target);
-      return (
-        <SettingsScreen
-          {...args}
-          source={source}
-          target={target}
-          onSourceChange={setSource}
-          onTargetChange={setTarget}
-        />
-      );
-    }
-    return <Wrapper />;
-  },
 };

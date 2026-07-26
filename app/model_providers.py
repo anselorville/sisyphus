@@ -6,23 +6,26 @@ reserved-but-inert "omni" slot), and whether the pipeline runs in "local"
 This is a different axis than app/model_settings.py's "Model Lab": Model
 Provider (this module) picks WHICH provider/model serves a capability; Model
 Lab tunes whichever provider/model ends up active (temperature/top_p/voice/
-speed/instructions/language_hint). They compose -- see app/pipeline.py's
-wiring, which loads both stores and threads Model Lab overrides into
-whichever service Model Provider selects.
+speed/instructions/language_hint). They compose -- see
+app/providers/transcription.py's and app/providers/speech.py's wiring,
+which load both stores and thread Model Lab overrides into whichever
+service Model Provider selects.
 
 Persistence: a single flat JSON file, `model_providers.json`, at the repo
 root -- same tier/lifecycle as `model_settings.json` (gitignored,
-runtime-local, loaded once per connection in app/pipeline.py's
-`build_pipeline()`). Mirrors app/model_settings.py's load/save/
-apply_partial_update/schema-and-payload pattern exactly; see that module's
-docstring for the rationale behind that shape.
+runtime-local, loaded once per connection in
+app/realtime/media_pipeline.py's `build_media_pipeline()`). Mirrors
+app/model_settings.py's load/save/apply_partial_update/schema-and-payload
+pattern exactly; see that module's docstring for the rationale behind that
+shape.
 
 Provider/model catalogs are intentionally NOT hardcoded as a flat enum --
 `available_models()` builds the per-(capability, provider) list from
 `Settings` (Anthropic/Cartesia/Deepgram each have exactly one supported
-model id, hardcoded to match whatever app/pipeline.py's `_build_cloud_services`
-already uses today; OpenRouter's lists come from the env-var-driven catalogs
-on `Settings`, see app/config.py).
+model id, hardcoded to match whatever app/providers/transcription.py's
+`_build_cloud_stt` and app/providers/speech.py's `_build_cloud_tts` already
+use today; OpenRouter's lists come from the env-var-driven catalogs on
+`Settings`, see app/config.py).
 """
 
 from __future__ import annotations
@@ -52,11 +55,12 @@ ModelProviderMode = Literal["local", "cloud"]
 ModelCapability = Literal["text", "speech", "transcription", "omni"]
 
 # The only local engine that actually does anything today (see
-# app/pipeline.py's `_build_mlx_service_trio`). Kept as a single named
-# constant rather than scattered string literals, but `local.engine` itself
-# is stored/dispatched generically (see `local_engine_dispatch_key` usage in
-# app/pipeline.py) so adding a second local engine later doesn't require
-# touching deep dispatch logic, only this catalog and the actual builder.
+# app/mlx_services.py's builders). Kept as a single named constant rather
+# than scattered string literals, but `local.engine` itself is stored/
+# dispatched generically (see `_uses_omlx()` in app/providers/transcription.py,
+# reused by app/providers/speech.py) so adding a second local engine later
+# doesn't require touching deep dispatch logic, only this catalog and the
+# actual builder.
 AVAILABLE_LOCAL_ENGINES: tuple[str, ...] = ("omlx",)
 
 # Real provider ids selectable per capability. "omni" has none -- it's a
@@ -70,14 +74,15 @@ CAPABILITY_PROVIDERS: dict[ModelCapability, tuple[str, ...]] = {
 }
 
 # Hardcoded single-model providers' model ids, matching exactly what
-# app/pipeline.py's `_build_cloud_services` already uses today as its
+# app/providers/transcription.py's `_build_cloud_stt` and
+# app/providers/speech.py's `_build_cloud_tts` already use today as their
 # defaults:
 # - Anthropic: AnthropicLLMSettings's own default model (no explicit `model=`
-#   override is passed in `_build_cloud_services`, so this is
-#   AnthropicLLMService's/AnthropicLLMSettings's built-in default) --
+#   override is passed by this product's own text-capability callers, so
+#   this is AnthropicLLMService's/AnthropicLLMSettings's built-in default) --
 #   confirmed by reading pipecat.services.anthropic.llm's `AnthropicLLMSettings`
 #   default directly: `model="claude-sonnet-4-6"`.
-# - Cartesia: `model="sonic-3.5"`, hardcoded in `_build_cloud_services`.
+# - Cartesia: `model="sonic-3.5"`, hardcoded in `_build_cloud_tts`.
 # - Deepgram: `DeepgramSTTService.Settings`'s own default model,
 #   `"nova-3-general"` (confirmed by reading
 #   pipecat.services.deepgram.stt.DeepgramSTTSettings's default; verified
@@ -123,11 +128,11 @@ class LocalProviderConfig:
     """`mode == "local"` configuration: which local engine to use.
 
     `engine` defaults to `"omlx"`, the only engine that does anything today
-    (see app/pipeline.py's dispatch -- anything else falls back to omlx with
-    a logged warning rather than crashing, so this field is forward-looking:
-    a second local engine can be added later by extending
-    `AVAILABLE_LOCAL_ENGINES` and the pipeline's dispatch table, without
-    needing to touch this dataclass).
+    (see app/providers/transcription.py's and app/providers/speech.py's
+    dispatch -- anything else falls back to omlx with a logged warning
+    rather than crashing, so this field is forward-looking: a second local
+    engine can be added later by extending `AVAILABLE_LOCAL_ENGINES` and
+    those modules' dispatch, without needing to touch this dataclass).
     """
 
     engine: str = "omlx"
@@ -139,7 +144,8 @@ class CloudCapabilityConfig:
 
     `provider=None` means "use today's existing hardcoded default for this
     capability" (Anthropic for text, Cartesia for speech, Zhipu for
-    transcription) -- see app/pipeline.py's dispatch. `omni` is always
+    transcription) -- see app/providers/transcription.py's and
+    app/providers/speech.py's dispatch. `omni` is always
     `provider=None, model=None` and not independently settable (see
     `apply_partial_update` below, which ignores any incoming `omni` value).
 
@@ -149,8 +155,9 @@ class CloudCapabilityConfig:
     can actually work out of the box, and on a typical setup for this
     product only `OPENROUTER_API_KEY` is populated (Anthropic/Cartesia/
     Deepgram keys are usually blank). `model=None` is left as-is --
-    `_openrouter_model_or_first` (app/pipeline.py) already falls back to the
-    first entry of the relevant `OPENROUTER_*_MODELS` catalog (reordered for
+    `_openrouter_model_or_first` (app/providers/transcription.py and
+    app/providers/speech.py each have their own copy) already falls back to
+    the first entry of the relevant `OPENROUTER_*_MODELS` catalog (reordered for
     text to prefer `OPENROUTER_SUGGESTED_TEXT_MODEL`), so there's no need to
     hardcode a specific model id here and risk it drifting from that catalog.
 
@@ -218,9 +225,10 @@ def model_providers_configured() -> bool:
     `load_model_providers().mode`, which defaults to `"local"` even when the
     file is absent (see that function's docstring).
 
-    This distinction matters for app/pipeline.py's dispatch: `mode=="local"`
-    must only be able to override an `ENGINE=cloud`/`auto`-resolved "cloud"
-    outcome into "omlx" when the user actually chose "Local" via the Model
+    This distinction matters for app/providers/transcription.py's and
+    app/providers/speech.py's dispatch: `mode=="local"` must only be able to
+    override an `ENGINE=cloud`/`auto`-resolved "cloud" outcome into "omlx"
+    when the user actually chose "Local" via the Model
     Provider UI (i.e. the file exists) -- never merely because the file has
     never been created yet, which would silently break every existing
     `ENGINE=cloud` deployment that has never touched this feature (confirmed
@@ -236,15 +244,17 @@ def load_model_providers() -> ModelProviders:
     (`mode="local"`, `engine="omlx"`, every cloud capability unset) if the
     file doesn't exist or fails to parse.
 
-    This is the first-run/no-file default app/pipeline.py falls back to --
-    matching `select_engine()`'s existing `ENGINE` env var behavior, since
+    This is the first-run/no-file default app/providers/transcription.py's
+    and app/providers/speech.py's dispatch falls back to -- matching
+    `select_engine()`'s existing `ENGINE` env var behavior, since
     `mode="local"` + `engine="omlx"`... wait: existing deployments that rely
     on `ENGINE=cloud`/`ENGINE=offline` env var behavior are NOT affected by
-    this default at all -- see app/pipeline.py's wiring, which only consults
-    `ModelProviders` for the "cloud" capability-dispatch *within* the
-    existing `engine == "cloud"` branch, and leaves `engine == "offline"`
-    completely untouched. `mode` here only matters once `select_engine()`
-    has already resolved to "omlx" or "cloud" upstream.
+    this default at all -- see those modules' `_uses_omlx()` helper, which
+    only consults `ModelProviders` for the "cloud" capability-dispatch
+    *within* the existing `engine == "cloud"` branch, and leaves
+    `engine == "offline"` completely untouched. `mode` here only matters
+    once `select_engine()` has already resolved to "omlx" or "cloud"
+    upstream.
 
     Unknown top-level keys/sections in the file are ignored (forward
     compatibility); unknown fields within a known section are also ignored,
@@ -366,8 +376,9 @@ def available_models(settings: Settings, capability: ModelCapability, provider: 
 
     Single-model cloud providers (Anthropic/Cartesia/Deepgram) return their
     one hardcoded default model id as a single-entry list -- there's nothing
-    else to choose from today (matching app/pipeline.py's existing hardcoded
-    behavior). `openrouter` returns whichever catalog `Settings` parsed from
+    else to choose from today (matching app/providers/transcription.py's and
+    app/providers/speech.py's existing hardcoded behavior). `openrouter`
+    returns whichever catalog `Settings` parsed from
     its corresponding `OPENROUTER_*_MODELS` env var (empty list if unset).
     `omni`/unknown providers return an empty list.
 
@@ -375,9 +386,11 @@ def available_models(settings: Settings, capability: ModelCapability, provider: 
     catalog is reordered (not filtered -- every configured entry is still
     present and selectable) so `OPENROUTER_SUGGESTED_TEXT_MODEL` sorts
     first, if it's present in the configured catalog at all. This matters
-    because both this module's own pipeline-dispatch fallback
-    (`app.pipeline._openrouter_model_or_first`, used when a capability's
-    `model` is unset) and a plausible naive client UI default both pick
+    because both the pipeline-dispatch fallback
+    (`_openrouter_model_or_first`, defined separately in each of
+    `app.providers.transcription`/`app.providers.speech`, used when a
+    capability's `model` is unset) and a plausible naive client UI default
+    both pick
     "the first entry" -- and the raw env-var order in this repo's `.env`
     happens to put `nvidia/nemotron-3.5-content-safety:free` first, which
     was verified live (by the agent that built app/openrouter_services.py)

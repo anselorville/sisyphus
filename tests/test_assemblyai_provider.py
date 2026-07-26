@@ -10,7 +10,7 @@ from app.model_providers import (
     CloudProviderConfig,
     available_models,
 )
-from app.pipeline import _build_cloud_transcription_service
+from app.providers.transcription import _build_cloud_stt
 
 
 class AssemblyAIProviderTests(unittest.TestCase):
@@ -33,9 +33,8 @@ class AssemblyAIProviderTests(unittest.TestCase):
         with patch.dict(os.environ, {"ASSEMBLYAI_API_KEY": "assemblyai-test-key"}, clear=False):
             settings = load_settings()
 
-        service = _build_cloud_transcription_service(
+        service = _build_cloud_stt(
             settings,
-            {},
             CloudProviderConfig(
                 transcription=CloudCapabilityConfig(provider="assemblyai", model=ASSEMBLYAI_DEFAULT_MODEL)
             ),

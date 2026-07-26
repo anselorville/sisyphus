@@ -32,16 +32,7 @@ from pipecat.frames.frames import ErrorFrame, Frame, TTSAudioRawFrame
 from pipecat.services.settings import TTSSettings
 from pipecat.services.tts_service import TTSService
 
-# Per-language default voice, sourced from app/language_map.py's
-# EDGE_TTS_LANGUAGES (single source of truth for every TTS model's
-# language→voice mapping).  The *available* voices per language are
-# richer -- see app.language_map.tts_voices("edge_tts", iso) for the
-# full list including alternate genders.
-from app.language_map import EDGE_TTS_LANGUAGES, tts_default_voice as _edge_default
-
-EDGE_TTS_VOICES: dict[str, str] = {
-    iso: lang.param_value for iso, lang in EDGE_TTS_LANGUAGES.items()
-}
+from app.language_map import tts_default_voice as _edge_default
 
 EDGE_TTS_DEFAULT_VOICE: str = _edge_default("edge_tts", "en") or "en-US-AriaNeural"
 
@@ -70,48 +61,23 @@ def _decode_mp3_to_pcm(mp3_bytes: bytes) -> bytes:
     return b"".join(pcm_chunks)
 
 
-class ToneAwareEdgeTTSService(TTSService):
-    """Edge TTS with automatic voice selection by translation direction.
-
-    Reads `tone_source.last_direction` (e.g. "ZH->EN") before each utterance
-    synthesis call and picks the Edge TTS voice for the *destination* language.
-    Falls back to `default_voice` when no direction has been parsed yet (the
-    first utterance of a session, before TranslationDirectionStripper has
-    emitted any tag).
-
-    `tone_source` is a reference to the pipeline's TranslationDirectionStripper
-    instance. Reading it synchronously in `run_tts()` is safe for the same
-    reason it's safe in MlxTTSService / OpenRouterTTSService: the pipeline
-    processes one utterance at a time, so `last_direction` always belongs to
-    the utterance currently being synthesized.
-    """
+class EdgeTTSService(TTSService):
+    """Edge TTS with a static configured voice."""
 
     def __init__(
         self,
         *,
-        tone_source: "Any | None" = None,
         default_voice: str = EDGE_TTS_DEFAULT_VOICE,
         **kwargs: Any,
     ) -> None:
         super().__init__(push_start_frame=True, push_stop_frames=True, **kwargs)
-        self._tone_source = tone_source
         self._default_voice = default_voice
 
     def can_generate_metrics(self) -> bool:
         return True
 
-    def _voice_for_current_direction(self) -> str:
-        """Map last_direction → Edge TTS voice for the destination language."""
-        if self._tone_source is None:
-            return self._default_voice
-        direction: str | None = getattr(self._tone_source, "last_direction", None)
-        if not direction or "->" not in direction:
-            return self._default_voice
-        dst_code = direction.split("->", 1)[1].lower()
-        return EDGE_TTS_VOICES.get(dst_code, self._default_voice)
-
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame | None, None]:
-        voice = self._voice_for_current_direction()
+        voice = self._default_voice
         logger.debug(f"{self}: Generating TTS via Edge TTS [{text}] voice={voice}")
 
         await self.start_tts_usage_metrics(text)
@@ -144,18 +110,9 @@ class ToneAwareEdgeTTSService(TTSService):
             await self.stop_processing_metrics()
 
 
-def build_edge_tts(
-    tone_source: "Any | None" = None,
-    default_voice: str = EDGE_TTS_DEFAULT_VOICE,
-) -> ToneAwareEdgeTTSService:
-    """Construct the Edge TTS service for the cloud pipeline.
-
-    `tone_source`: the pipeline's TranslationDirectionStripper, forwarded so
-    the service can select the correct voice per utterance (ZH→EN gets an
-    English voice, EN→ZH gets a Chinese voice).
-    """
-    return ToneAwareEdgeTTSService(
-        tone_source=tone_source,
+def build_edge_tts(default_voice: str = EDGE_TTS_DEFAULT_VOICE) -> EdgeTTSService:
+    """Construct the Edge TTS service for the cloud media plane."""
+    return EdgeTTSService(
         default_voice=default_voice,
         settings=TTSSettings(model=None, voice=default_voice, language=None),
     )

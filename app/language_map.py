@@ -5,8 +5,8 @@ One module answers three questions:
   2. What parameter name/value sends language L to model M?
   3. What voices are available for language L on TTS model M?
 
-This replaces the implicit assumption that a single ``_LANGUAGE_CODES`` dict
-(app/pipeline.py) suffices for every backend -- each model has its own
+This replaces the implicit assumption that a single flat language-code dict
+suffices for every backend -- each model has its own
 language set, parameter format, and voice catalog, and those differences
 matter when the same language (e.g. Hungarian ``"hu"``) is passed to ten
 different services that each expect it in a different shape.
@@ -132,7 +132,7 @@ NEMOTRON_ASR_LANGUAGES: dict[str, AsrLanguage] = {
 
 # Map model id → its language table.  Model ids match the keys used in
 # ``app/model_providers.py``'s ``available_models()`` and the cloud/local
-# dispatch in ``app/pipeline.py``.
+# dispatch in ``app/providers/transcription.py``/``app/providers/speech.py``.
 ASR_LANGUAGE_MAP: dict[str, dict[str, AsrLanguage]] = {
     "deepgram": DEEPGRAM_LANGUAGES,
     "assemblyai": ASSEMBLYAI_LANGUAGES,
@@ -149,10 +149,11 @@ ASR_LANGUAGE_MAP: dict[str, dict[str, AsrLanguage]] = {
 # Sonic is multilingual -- any Cartesia voice_id works with any language when
 # paired with the correct ``language`` field.  The voice catalog below lists
 # the *verified* per-language voices from Cartesia's public library; every
-# entry currently resolves to the same ``CARTESIA_RELEASE_VOICE_ID`` (see
-# app/pipeline.py) because Sonic's multilingual model doesn't require native-
-# language voice recordings.  Swap in real per-language voice_ids here once a
-# Cartesia account/API key is available to browse the voice library.
+# entry currently resolves to the same default voice id (see
+# app/providers/speech.py's ``CARTESIA_DEFAULT_VOICE``) because Sonic's
+# multilingual model doesn't require native-language voice recordings.  Swap
+# in real per-language voice_ids here once a Cartesia account/API key is
+# available to browse the voice library.
 
 CARTESIA_LANGUAGES: dict[str, TtsLanguage] = {
     iso: TtsLanguage(

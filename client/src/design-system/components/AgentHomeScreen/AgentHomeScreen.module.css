@@ -1,0 +1,31 @@
+.screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--ds-color-bg-app);
+}
+
+/* Scrollable detail region -- task list + ecology panel. Scrolling in here
+   must never move .footer (the talk control): they are separate flex
+   children, not part of the same scroll container. */
+.content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Fixed-size footer: TalkButton has its own fixed pixel dimensions (see
+   TalkButton.module.css), so this region's height never changes with status
+   text length elsewhere on the screen. */
+.footer {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--ds-space-5) var(--ds-space-4);
+  border-top: 1px solid var(--ds-color-border);
+  background: var(--ds-color-bg-surface);
+}

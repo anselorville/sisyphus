@@ -25,7 +25,7 @@
       "key": "instructions",
       "label": "Style / delivery instructions",
       "kind": "textarea",
-      "help": "Free-text style/delivery hint sent to the model (e.g. \"speak warmly and a little slower\"). Verified live to measurably change generated audio. This is the static fallback used until the translation LLM infers a live per-utterance tone."
+      "help": "Free-text style/delivery hint sent to the model (e.g. \"speak warmly and a little slower\"). Verified live to measurably change generated audio. This is the static fallback used until an LLM step infers a live per-utterance tone."
     },
     {
       "key": "temperature",

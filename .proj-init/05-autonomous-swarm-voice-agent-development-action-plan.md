@@ -1964,46 +1964,36 @@ git commit -m "test: enforce runtime latency and memory budgets"
 - Modify: `client/package.json`
 - Modify: `client/src-tauri/tauri.conf.json`
 - Delete: translator-only components, tests, docs and environment examples
-- Create: `tests/test_no_translation_runtime.py`
+- Create: `tests/test_voice_agent_runtime_contract.py`
 - Create: `.proj-init/06-software-release-acceptance.md`
 
 **Interfaces:**
 - Produces: `sisyphus-voice-agent` 产品命名和启动说明。
-- Produces: 无翻译运行依赖的静态防回归测试。
+- Produces: 无翻译运行依赖的行为契约测试与发布静态验收记录。
 - Produces: 软件发布验收记录。
 
-- [ ] **Step 1: 写翻译遗留失败测试**
+- [ ] **Step 1: 写 Voice Agent 运行契约失败测试**
 
 ```python
-from pathlib import Path
+def test_default_settings_do_not_expose_translation_language_pair() -> None:
+    settings = Settings()
+
+    assert not hasattr(settings, "source_lang")
+    assert not hasattr(settings, "target_lang")
 
 
-FORBIDDEN_RUNTIME_TERMS = (
-    "build_translation_system_prompt",
-    "TranslationDirectionStripper",
-    "SOURCE_LANG",
-    "TARGET_LANG",
-    "translation_direction",
-)
+def test_media_pipeline_contract_has_no_business_llm() -> None:
+    contract = describe_media_pipeline_contract()
 
-
-def test_runtime_contains_no_translation_business_symbols() -> None:
-    roots = [Path("app"), Path("client/src")]
-    text = "\n".join(
-        path.read_text(errors="ignore")
-        for root in roots
-        for path in root.rglob("*")
-        if path.is_file() and path.suffix in {".py", ".ts", ".tsx", ".json"}
-    )
-    for term in FORBIDDEN_RUNTIME_TERMS:
-        assert term not in text
+    assert contract.business_llm is None
+    assert contract.outputs == ["voice.transcript.final", "voice.speech.enqueue"]
 ```
 
-- [ ] **Step 2: 运行测试并确认旧符号仍存在**
+- [ ] **Step 2: 运行测试并确认当前旧运行契约仍失败**
 
-Run: `uv run pytest tests/test_no_translation_runtime.py -q`
+Run: `uv run pytest tests/test_voice_agent_runtime_contract.py -q`
 
-Expected: FAIL，并准确列出尚未删除的旧符号。
+Expected: FAIL，并准确指出语言对状态或业务 LLM 契约尚未移除。
 
 - [ ] **Step 3: 删除旧实现和产品文案**
 
@@ -2040,7 +2030,7 @@ Run:
 uv run pytest -q
 cd agent-runtime && npm ci && npm test && npm run check && npm run build
 cd client && npm ci && npm run build && npm run build-storybook
-rg -n "build_translation_system_prompt|TranslationDirectionStripper|SOURCE_LANG|TARGET_LANG" app client/src tests
+rg -n "build_translation_system_prompt|TranslationDirectionStripper|SOURCE_LANG|TARGET_LANG|translation_direction" app client/src tests
 git diff --check
 ```
 

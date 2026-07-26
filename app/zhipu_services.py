@@ -18,8 +18,8 @@ Two GLM ASR specifics not shared with oMLX/OpenAI:
 
 - `prompt`: GLM ASR accepts a `prompt` field to pre-set the transcription
   scene/context. Set to a fixed bilingual-scene hint here (mirroring
-  `ASSEMBLYAI_BILINGUAL_PROMPT` in app/pipeline.py), since this pipeline's
-  two configured languages are Chinese/English.
+  `ASSEMBLYAI_BILINGUAL_PROMPT` in app/providers/transcription.py), since
+  this deployment's two most common spoken languages are Chinese/English.
 - Audio format: GLM ASR only accepts WAV or MP3. No conversion needed --
   `SegmentedSTTService` (the base of `BaseWhisperSTTService`/
   `OpenAISTTService`) already wraps buffered PCM into a WAV container before
@@ -47,11 +47,11 @@ from app.config import Settings
 ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 ZHIPU_ASR_DEFAULT_MODEL = "glm-asr-2512"
 
-# Reused verbatim from app/pipeline.py's ASSEMBLYAI_BILINGUAL_PROMPT so every
-# cloud ASR provider gets the same scene hint for this bidirectional zh/en
-# pipeline. Kept as its own constant (not imported from pipeline.py) to avoid
-# a circular import -- app/pipeline.py imports from this module, not the
-# other way around.
+# Mirrors app/providers/transcription.py's ASSEMBLYAI_BILINGUAL_PROMPT so
+# every cloud ASR provider gets the same scene hint for zh/en speech. Kept
+# as its own constant (not imported from that module) to avoid a circular
+# import -- app/providers/transcription.py imports from this module, not
+# the other way around.
 ZHIPU_BILINGUAL_PROMPT = (
     "Transcribe Mandarin Chinese and English. The speaker may switch between "
     "Chinese and English within the same conversation."

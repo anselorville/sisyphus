@@ -1,11 +1,11 @@
-"""oMLX-backed equivalents of the cloud/local STT, translation (LLM), and TTS
-services used by app/pipeline.py.
+"""oMLX-backed equivalents of the cloud/local STT, LLM, and TTS services
+used by app/providers/ (see app/providers/transcription.py and
+app/providers/speech.py).
 
 These mirror the shape of the cloud/local service construction in
-app/pipeline.py and app/local_services.py exactly -- same constructor
-pattern, same role in the pipeline -- so that `build_pipeline()` can swap in
-the oMLX trio without changing the pipeline's shape (VAD -> STT -> LLM -> TTS
-stays identical; only the concrete service classes differ).
+app/providers/ and app/local_services.py exactly -- same constructor
+pattern, same role in the media pipeline -- so the STT/TTS builders can
+swap in the oMLX pair without changing the pipeline's shape.
 
 **This engine is NOT Pi-portable.** oMLX is built on Apple's MLX framework,
 which only runs on Apple Silicon (it has no CPU/Linux/Raspberry Pi backend).
@@ -73,7 +73,7 @@ from __future__ import annotations
 
 import base64
 from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from loguru import logger
 from openai import AsyncOpenAI, BadRequestError
@@ -85,9 +85,6 @@ from pipecat.services.tts_service import TTSService
 from pipecat.utils.tracing.service_decorators import traced_tts
 
 from app.config import Settings
-
-if TYPE_CHECKING:
-    from app.pipeline import TranslationDirectionStripper
 
 
 def build_mlx_llm(
@@ -160,11 +157,9 @@ class MlxSTTService(OpenAISTTService):
     `self._settings.language is not None` and always includes a `language`
     key in the request, defaulting to `Language.EN` if none is configured --
     there is no supported way via `Settings`/constructor args to omit the
-    field entirely. That default is actively harmful for this pipeline,
-    which is genuinely bidirectional (either configured language may be
-    spoken in a given utterance -- see
-    `app.pipeline.build_translation_system_prompt`); forcing `language=en`
-    on every request is wrong half the time.
+    field entirely. That default is actively harmful for multilingual
+    speech, so the media plane leaves the field unset unless a caller
+    provides an explicit hint.
 
     Verified live against oMLX's `/v1/audio/transcriptions` with the same
     Chinese test utterance in three configurations:
@@ -251,24 +246,8 @@ class MlxTTSService(TTSService):
     response" shape -- to strip the header, auto-detect the real source
     sample rate from it, and resample to the pipeline's target rate. No
     websocket/streaming support is needed: oMLX's endpoint is a one-shot
-    REST call per utterance, matching this pipeline's "translate one
-    complete utterance, then speak it" shape exactly.
-
-    `tone_source` (optional): a reference to the pipeline's
-    `app.pipeline.TranslationDirectionStripper` instance, read synchronously
-    in `run_tts()` for its `last_tone` attribute -- the short free-text tone
-    hint the translation LLM infers per utterance (see
-    `app.pipeline.build_translation_system_prompt`'s Step 4) -- and forwarded
-    as the `instructions` field on oMLX's `/v1/audio/speech` request. Same
-    "hold a reference to an upstream processor, read its public attribute
-    synchronously" pattern as `TranscriptTapProcessor.direction_source` in
-    app/pipeline.py; safe for the same reason that pattern is safe there
-    (the pipeline processes one utterance at a time, no concurrent in-flight
-    translations). Verified live (this session) against the real oMLX
-    server: identical input text with vs. without a non-empty `instructions`
-    value produces audibly/measurably different output (different WAV
-    duration for the same text), confirming the field is load-bearing, not a
-    no-op.
+    REST call per utterance. Static ``instructions`` can be supplied at
+    construction time for a provider-specific voice style.
     """
 
     def __init__(
@@ -277,7 +256,6 @@ class MlxTTSService(TTSService):
         api_key: str,
         base_url: str,
         model: str,
-        tone_source: "TranslationDirectionStripper | None" = None,
         default_instructions: str | None = None,
         speed: float | None = None,
         temperature: float | None = None,
@@ -291,7 +269,6 @@ class MlxTTSService(TTSService):
         super().__init__(push_start_frame=True, push_stop_frames=True, **kwargs)
         self._model = model
         self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-        self._tone_source = tone_source
         # Model Lab overrides (app/model_settings.py): `default_instructions`
         # is the static fallback used when there's no live per-utterance tone
         # yet (e.g. the very first utterance of a session); `speed`/
@@ -332,15 +309,6 @@ class MlxTTSService(TTSService):
         detects the real (48kHz) source sample rate from it, and resamples
         to `self.sample_rate`.
 
-        If `self._tone_source` is set, reads its `last_tone` attribute
-        (synchronously -- see this class's docstring for why that's safe)
-        and forwards it as the `instructions` field, giving oMLX's TTS model
-        a free-text style/delivery hint derived from the translation LLM's
-        own per-utterance tone inference. Omits the field entirely when
-        there's no tone source or no tone has been inferred yet (e.g. the
-        very first utterance of a session, before any direction tag has
-        been parsed), rather than sending an empty string.
-
         Also requests `stream=True` (with a short `streaming_interval`) via
         `extra_body` -- oMLX's `AudioSpeechRequest` schema has these two
         fields (confirmed via its live openapi.json), separate from
@@ -380,10 +348,7 @@ class MlxTTSService(TTSService):
         """
         logger.debug(f"{self}: Generating TTS [{text}]")
         voice = assert_given(self._settings.voice)
-        # Per-utterance tone (from the translation LLM) wins; falls back to
-        # the Model Lab's static `instructions_template` override when no
-        # tone has been inferred yet (e.g. the session's first utterance).
-        instructions = (self._tone_source.last_tone if self._tone_source else None) or self._default_instructions
+        instructions = self._default_instructions
         if instructions:
             logger.debug(f"{self}: Using tone instructions [{instructions}]")
         try:
@@ -450,7 +415,6 @@ class MlxTTSService(TTSService):
 
 def build_mlx_tts(
     settings: Settings,
-    tone_source: "TranslationDirectionStripper | None" = None,
     *,
     voice: str | None = None,
     default_instructions: str | None = None,
@@ -481,19 +445,8 @@ def build_mlx_tts(
     function's own `model=` constructor arg instead, and language is
     auto-detected oMLX-side), so `None` is correct, not a placeholder.
 
-    `tone_source` is forwarded to `MlxTTSService` so it can read the
-    translation LLM's per-utterance tone hint (see `MlxTTSService`'s
-    docstring) and pass it as the `instructions` field. `None` (the
-    default) disables this -- callers that don't care about tone (e.g. a
-    future caller that just wants oMLX TTS standalone) get the exact same
-    behavior as before this feature existed.
-
     `voice`/`default_instructions`/`speed`/`temperature`/`top_p`/`top_k`/
-    `repetition_penalty` (the Model Lab feature -- see app/model_settings.py
-    and app/model_adapters/specs/omlx_voxcpm2.json) are Model-Lab overrides,
-    all `None`/inert by default. `default_instructions` is the static
-    fallback `MlxTTSService.run_tts` uses when no live per-utterance tone
-    has been inferred yet.
+    `repetition_penalty` are optional provider overrides.
     """
     ref_audio_b64: str | None = None
     ref_text_value: str | None = None
@@ -513,7 +466,6 @@ def build_mlx_tts(
         api_key=settings.omlx_api_key,
         base_url=settings.omlx_base_url,
         model=settings.omlx_tts_model,
-        tone_source=tone_source,
         default_instructions=default_instructions,
         speed=speed,
         temperature=temperature,

@@ -16,9 +16,10 @@ Two tiers, matching how the product actually varies:
   OpenRouter for speech, Deepgram/OpenRouter for transcription) is broadly
   OpenAI-style/Anthropic-style-compatible on the handful of parameters this
   product actually exposes (temperature/top_p/voice/speed/instructions/
-  language hint) -- see app/pipeline.py's `_build_cloud_*` functions, which
-  already apply the same override dict regardless of which cloud provider
-  ends up selected.
+  language hint) -- see app/providers/transcription.py's and
+  app/providers/speech.py's `_build_cloud_*` functions, which already apply
+  the same override dict regardless of which cloud provider ends up
+  selected.
 - Local (oMLX): one adapter PER MODEL ARCHITECTURE (keyed by oMLX's own
   `config_model_type`, e.g. `"qwen3_5"`, `"voxcpm2"`, `"nemotron_asr"` --
   NOT the exact model id string, which can change across quantization/
@@ -265,8 +266,8 @@ def omlx_config_model_type(settings: Settings, model_id: str) -> str | None:
     """Look up `config_model_type` for `model_id` via a live `GET
     /v1/models/status` call against `settings.omlx_base_url`.
 
-    Public (not underscore-prefixed) because app/pipeline.py's
-    `_build_mlx_service_trio` also needs this exact lookup (keyed by
+    Public (not underscore-prefixed) because app/providers/transcription.py
+    and app/providers/speech.py also need this exact lookup (keyed by
     `config_model_type`, not the raw model id -- see this module's
     docstring for why) to resolve which adapter's saved values apply to
     each of the three configured oMLX models, without duplicating the

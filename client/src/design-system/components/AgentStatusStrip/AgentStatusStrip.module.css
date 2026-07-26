@@ -1,0 +1,61 @@
+.strip {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-3);
+  padding: var(--ds-space-3) var(--ds-space-4);
+  border-bottom: 1px solid var(--ds-color-border);
+  background: var(--ds-color-bg-surface);
+  min-width: 0;
+}
+
+.activity {
+  display: flex;
+  align-items: center;
+  gap: var(--ds-space-2);
+  min-width: 0;
+  color: var(--ds-color-text-primary);
+}
+
+.activityIcon {
+  flex: none;
+  display: flex;
+  color: var(--ds-color-primary-strong);
+}
+
+.strip[data-activity="hibernating"] .activityIcon {
+  color: var(--ds-color-text-secondary);
+}
+
+.activityLabel {
+  flex: none;
+  font-size: var(--ds-font-size-sm);
+  font-weight: var(--ds-font-weight-bold);
+}
+
+.detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--ds-font-size-sm);
+  color: var(--ds-color-text-secondary);
+}
+
+.spacer {
+  flex: 1 1 auto;
+  min-width: var(--ds-space-2);
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
