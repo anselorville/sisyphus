@@ -46,10 +46,11 @@ cp .env.example .env
 
 Edit `.env`. Which keys you need depends on which engine you're running --
 see "Engines" below. For the default cloud engine, the default stack is
-Zhipu GLM ASR (transcription) + Cartesia (speech) + AssemblyAI/Deepgram/
-OpenRouter as configurable alternatives -- fill in whichever provider keys
-your Model Provider configuration selects (see `GET/PUT
-/api/model-providers`, or the client's Settings -> Model Provider screen).
+Zhipu GLM ASR (transcription) + MiniMax (speech) + Cartesia/Edge TTS/
+AssemblyAI/Deepgram/OpenRouter as configurable alternatives -- fill in
+whichever provider keys your Model Provider configuration selects (see
+`GET/PUT /api/model-providers`, or the client's Settings -> Model Provider
+screen).
 These are only validated (and required) at the moment the cloud engine is
 actually selected and a given provider is built -- running with
 `ENGINE=offline` or `ENGINE=omlx` needs none of them.
@@ -66,6 +67,24 @@ note above). They are kept as available configuration for whoever wires
 up a local/Anthropic LLM step in the media plane in the future.
 
 ## Run
+
+`scripts/start.sh` brings up all three pieces (sidecar, backend, frontend)
+in one shot, stopping any previously-running instances first -- safe to
+re-run repeatedly:
+
+```bash
+scripts/start.sh          # stop old instances, start sidecar + backend + frontend
+scripts/start.sh stop     # equivalent to scripts/stop.sh -- stop everything, start nothing
+scripts/stop.sh           # stop everything
+```
+
+It builds the sidecar (`agent-runtime/dist/`) if missing, logs each
+process to `/tmp/sisyphus-{sidecar,backend,frontend}.log`, and opens
+log-tail Terminal windows on macOS. See the scripts' own header comments
+for port resolution (`.env`'s `WEBRTC_PORT`/`AGENT_RUNTIME_PORT`) and exact
+behavior.
+
+To run just the Python backend directly instead:
 
 ```bash
 uv run python -m app.server
@@ -132,7 +151,7 @@ architecture note at the top of this file.)
 
 | Engine    | STT                  | TTS                        | Pi-portable? | When to use |
 |-----------|----------------------|------------------------------|--------------|-------------|
-| `cloud`   | Zhipu GLM ASR (default) / Deepgram / AssemblyAI / OpenRouter | Cartesia (default) / Edge TTS / MiniMax / OpenRouter / VoxCPM2-CUDA | Yes (needs internet) | Production / has internet |
+| `cloud`   | Zhipu GLM ASR (default) / Deepgram / AssemblyAI / OpenRouter | MiniMax (default) / Cartesia / Edge TTS / OpenRouter / VoxCPM2-CUDA | Yes (needs internet) | Production / has internet |
 | `offline` | `faster-whisper` (`WhisperSTTService`) | Piper (`PiperTTSService`) | **Yes** -- the real Raspberry Pi target | No internet, on the eventual Pi hardware |
 | `omlx`    | oMLX server (`/v1/audio/transcriptions`) | oMLX server (`/v1/audio/speech`) | **No -- Apple Silicon/MLX only** | Fast local dev/test on a Mac, zero cloud spend, zero network dependency |
 
@@ -191,7 +210,7 @@ inference time:
 | Stage | Cloud (default) | Local/offline fallback |
 |-------|------------------|-------------------------|
 | STT | Zhipu GLM ASR (or Deepgram/AssemblyAI/OpenRouter) | `faster-whisper` via Pipecat's `WhisperSTTService` |
-| TTS | Cartesia (or Edge TTS/MiniMax/OpenRouter/VoxCPM2-CUDA) | Piper via Pipecat's `PiperTTSService` |
+| TTS | MiniMax (or Cartesia/Edge TTS/OpenRouter/VoxCPM2-CUDA) | Piper via Pipecat's `PiperTTSService` |
 
 **Selection happens once, at pipeline-build time.** `app/server.py` builds
 one pipeline per WebRTC connection; at that point,

@@ -31,7 +31,7 @@ def tts_provider_name(settings: Settings) -> str:
         return "local"
     if _uses_omlx(settings):
         return "omlx"
-    return load_model_providers().cloud.speech.provider or "cartesia"
+    return load_model_providers().cloud.speech.provider or "minimax"
 
 
 def _require(value: str, env_name: str, provider: str) -> None:
@@ -48,7 +48,7 @@ def _openrouter_model_or_first(settings: Settings, configured: str | None) -> st
 
 
 def _build_cloud_tts(settings: Settings, cloud: CloudProviderConfig) -> TTSService:
-    provider = cloud.speech.provider or "cartesia"
+    provider = cloud.speech.provider or "minimax"
     values = values_for("cloud:speech", load_model_settings())
     voice = values.get("voice")
     speed = values.get("speed")

@@ -31,7 +31,7 @@
 # NOTE: this kills whatever holds port 1420, including Claude Code's own
 # Preview server if one is running -- that's intentional: this script is for
 # running the stack YOURSELF, outside Claude Code. (Claude Code sessions
-# should keep using the Preview feature + scripts/restart-backend.sh.)
+# should keep using the Preview feature for the frontend instead.)
 #
 # Logs: /tmp/sisyphus-sidecar.log, /tmp/sisyphus-backend.log and /tmp/sisyphus-frontend.log
 
@@ -49,7 +49,7 @@ SIDECAR_ENTRY="$REPO_ROOT/agent-runtime/dist/index.js"
 # Resolve the backend port from .env's WEBRTC_PORT, falling back to 7860.
 BACKEND_PORT=7860
 if [[ -f "$REPO_ROOT/.env" ]]; then
-  ENV_PORT="$(grep -E '^WEBRTC_PORT=' "$REPO_ROOT/.env" | tail -n1 | cut -d'=' -f2- | tr -d '[:space:]')"
+  ENV_PORT="$(grep -E '^WEBRTC_PORT=' "$REPO_ROOT/.env" | tail -n1 | cut -d'=' -f2- | tr -d '[:space:]' || true)"
   if [[ -n "$ENV_PORT" ]]; then
     BACKEND_PORT="$ENV_PORT"
   fi
@@ -60,7 +60,7 @@ fi
 # app/config.py's AGENT_RUNTIME_URL default (ws://127.0.0.1:8765/events).
 SIDECAR_PORT=8765
 if [[ -f "$REPO_ROOT/.env" ]]; then
-  ENV_SIDECAR_PORT="$(grep -E '^AGENT_RUNTIME_PORT=' "$REPO_ROOT/.env" | tail -n1 | cut -d'=' -f2- | tr -d '[:space:]')"
+  ENV_SIDECAR_PORT="$(grep -E '^AGENT_RUNTIME_PORT=' "$REPO_ROOT/.env" | tail -n1 | cut -d'=' -f2- | tr -d '[:space:]' || true)"
   if [[ -n "$ENV_SIDECAR_PORT" ]]; then
     SIDECAR_PORT="$ENV_SIDECAR_PORT"
   fi
@@ -141,7 +141,19 @@ fi
 
 if [[ "$NODE_OK" -eq 1 && -f "$SIDECAR_ENTRY" ]]; then
   echo "==> Starting sidecar (node agent-runtime/dist/index.js) on port ${SIDECAR_PORT}..."
-  (cd "$REPO_ROOT" && AGENT_RUNTIME_PORT="$SIDECAR_PORT" nohup node "$SIDECAR_ENTRY" >"$SIDECAR_LOG" 2>&1 </dev/null &) >/dev/null 2>&1 </dev/null
+  # Source .env into this subshell first (set -a auto-exports every var it
+  # defines) so cloud LLM provider keys (ANTHROPIC_API_KEY, DEEPSEEK_API_KEY,
+  # etc.) reach the sidecar's process env -- pi-ai (the sidecar's provider
+  # auth layer, see @earendil-works/pi-ai) resolves those directly from
+  # process.env, and unlike the Python backend (which loads .env itself via
+  # python-dotenv), plain `node dist/index.js` never reads .env on its own.
+  (
+    cd "$REPO_ROOT"
+    set -a
+    [[ -f "$REPO_ROOT/.env" ]] && source "$REPO_ROOT/.env"
+    set +a
+    AGENT_RUNTIME_PORT="$SIDECAR_PORT" nohup node "$SIDECAR_ENTRY" >"$SIDECAR_LOG" 2>&1 </dev/null &
+  ) >/dev/null 2>&1 </dev/null
 fi
 
 # --- Step 3: wait for the sidecar to be healthy (if we tried to start it) --

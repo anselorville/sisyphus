@@ -143,28 +143,31 @@ class CloudCapabilityConfig:
     """One cloud capability's selected provider/model.
 
     `provider=None` means "use today's existing hardcoded default for this
-    capability" (Anthropic for text, Cartesia for speech, Zhipu for
+    capability" (Anthropic for text, MiniMax for speech, Zhipu for
     transcription) -- see app/providers/transcription.py's and
     app/providers/speech.py's dispatch. `omni` is always
     `provider=None, model=None` and not independently settable (see
     `apply_partial_update` below, which ignores any incoming `omni` value).
 
-    The non-omni capabilities default `provider` to `"openrouter"` (not
-    `None`) -- see `ModelProviders.cloud`'s docstring for why: a fresh
-    install (no model_providers.json yet) should default to a provider that
-    can actually work out of the box, and on a typical setup for this
-    product only `OPENROUTER_API_KEY` is populated (Anthropic/Cartesia/
-    Deepgram keys are usually blank). `model=None` is left as-is --
-    `_openrouter_model_or_first` (app/providers/transcription.py and
-    app/providers/speech.py each have their own copy) already falls back to
-    the first entry of the relevant `OPENROUTER_*_MODELS` catalog (reordered for
-    text to prefer `OPENROUTER_SUGGESTED_TEXT_MODEL`), so there's no need to
-    hardcode a specific model id here and risk it drifting from that catalog.
+    `text` defaults `provider` to `"openrouter"` (not `None`) -- see
+    `ModelProviders.cloud`'s docstring for why: a fresh install (no
+    model_providers.json yet) should default to a provider that can
+    actually work out of the box, and on a typical setup for this product
+    only `OPENROUTER_API_KEY` is populated (Anthropic/Cartesia/Deepgram keys
+    are usually blank). `model=None` is left as-is -- `_openrouter_model_or_first`
+    (app/providers/transcription.py and app/providers/speech.py each have
+    their own copy) already falls back to the first entry of the relevant
+    `OPENROUTER_*_MODELS` catalog (reordered for text to prefer
+    `OPENROUTER_SUGGESTED_TEXT_MODEL`), so there's no need to hardcode a
+    specific model id here and risk it drifting from that catalog.
 
-    `transcription` is the one exception: it defaults `provider` to
-    `"zhipu"`, not `"openrouter"` -- Zhipu's GLM ASR is this product's
-    designated default cloud transcription provider (see
-    `_default_zhipu_transcription_capability` below).
+    `speech` and `transcription` are the two exceptions: `speech` defaults
+    `provider` to `"minimax"` (see `_default_minimax_speech_capability`
+    below) and `transcription` defaults `provider` to `"zhipu"` (see
+    `_default_zhipu_transcription_capability` below) -- MiniMax TTS and
+    Zhipu's GLM ASR are this product's designated default cloud speech/
+    transcription providers, independent of which OpenRouter key happens to
+    be populated.
     """
 
     provider: str | None = None
@@ -173,6 +176,10 @@ class CloudCapabilityConfig:
 
 def _default_openrouter_capability() -> CloudCapabilityConfig:
     return CloudCapabilityConfig(provider="openrouter")
+
+
+def _default_minimax_speech_capability() -> CloudCapabilityConfig:
+    return CloudCapabilityConfig(provider="minimax")
 
 
 def _default_zhipu_transcription_capability() -> CloudCapabilityConfig:
@@ -185,7 +192,7 @@ class CloudProviderConfig:
     capability slot."""
 
     text: CloudCapabilityConfig = field(default_factory=_default_openrouter_capability)
-    speech: CloudCapabilityConfig = field(default_factory=_default_openrouter_capability)
+    speech: CloudCapabilityConfig = field(default_factory=_default_minimax_speech_capability)
     transcription: CloudCapabilityConfig = field(
         default_factory=_default_zhipu_transcription_capability
     )
@@ -299,7 +306,7 @@ def load_model_providers() -> ModelProviders:
         local=LocalProviderConfig(engine=engine),
         cloud=CloudProviderConfig(
             text=_capability("text"),
-            speech=_capability("speech"),
+            speech=_capability("speech", _default_minimax_speech_capability),
             transcription=_capability("transcription", _default_zhipu_transcription_capability),
             # omni is never loaded from disk as a real value -- always
             # reset to the placeholder, even if a stale/hand-edited file has

@@ -14,7 +14,7 @@ FRONTEND_PORT=1420
 # Resolve the backend port from .env's WEBRTC_PORT, falling back to 7860.
 BACKEND_PORT=7860
 if [[ -f "$REPO_ROOT/.env" ]]; then
-  ENV_PORT="$(grep -E '^WEBRTC_PORT=' "$REPO_ROOT/.env" | tail -n1 | cut -d'=' -f2- | tr -d '[:space:]')"
+  ENV_PORT="$(grep -E '^WEBRTC_PORT=' "$REPO_ROOT/.env" | tail -n1 | cut -d'=' -f2- | tr -d '[:space:]' || true)"
   if [[ -n "$ENV_PORT" ]]; then
     BACKEND_PORT="$ENV_PORT"
   fi
@@ -25,7 +25,7 @@ fi
 # app/config.py's AGENT_RUNTIME_URL default (ws://127.0.0.1:8765/events).
 SIDECAR_PORT=8765
 if [[ -f "$REPO_ROOT/.env" ]]; then
-  ENV_SIDECAR_PORT="$(grep -E '^AGENT_RUNTIME_PORT=' "$REPO_ROOT/.env" | tail -n1 | cut -d'=' -f2- | tr -d '[:space:]')"
+  ENV_SIDECAR_PORT="$(grep -E '^AGENT_RUNTIME_PORT=' "$REPO_ROOT/.env" | tail -n1 | cut -d'=' -f2- | tr -d '[:space:]' || true)"
   if [[ -n "$ENV_SIDECAR_PORT" ]]; then
     SIDECAR_PORT="$ENV_SIDECAR_PORT"
   fi
