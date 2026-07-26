@@ -11,19 +11,27 @@ worker 角色种姓（caste）管理、生态/经济预算治理、隔离的角�
 
 ## 目录
 
-- [它在整个生态中的位置](#它在整个生态中的位置)
-- [核心比喻：蜂群生态](#核心比喻蜂群生态)
-- [模块架构与启动顺序](#模块架构与启动顺序)
-- [一次语音指令的完整链路](#一次语音指令的完整链路)
-- [角色矩阵](#角色矩阵七个常驻角色)
-- [语音路由与打断](#语音路由与打断)
-- [权限与提权（Diplomacy Gateway）](#权限与提权diplomacy-gateway)
-- [生态与经济系统](#生态与经济系统)
-- [LLM 接入模式：Cloud only，完全由 pi-ai 接管](#llm-接入模式cloud-only完全由-pi-ai-接管)
-- [存储层](#存储层)
-- [目录结构](#目录结构)
-- [测试与构建健康度](#测试与构建健康度)
-- [已知缺口](#已知缺口)
+- [agent-runtime —— 自主蜂群语音智能体的「大脑」](#agent-runtime--自主蜂群语音智能体的大脑)
+  - [目录](#目录)
+  - [它在整个生态中的位置](#它在整个生态中的位置)
+  - [核心比喻：蜂群生态](#核心比喻蜂群生态)
+  - [模块架构与启动顺序](#模块架构与启动顺序)
+  - [一次语音指令的完整链路](#一次语音指令的完整链路)
+  - [角色矩阵（七个常驻角色）](#角色矩阵七个常驻角色)
+  - [语音路由与打断](#语音路由与打断)
+  - [权限与提权（Diplomacy Gateway）](#权限与提权diplomacy-gateway)
+  - [生态与经济系统](#生态与经济系统)
+  - [LLM 接入模式：Cloud only，完全由 pi-ai 接管](#llm-接入模式cloud-only完全由-pi-ai-接管)
+  - [存储层](#存储层)
+  - [目录结构](#目录结构)
+  - [测试与构建健康度](#测试与构建健康度)
+  - [已知缺口](#已知缺口)
+  - [近期路线图](#近期路线图)
+    - [P0 — 直接影响正确性/一致性，工作量小](#p0--直接影响正确性一致性工作量小)
+    - [P0 — 影响审计/合规，当前纯内存有丢失风险](#p0--影响审计合规当前纯内存有丢失风险)
+    - [P1 — 生态治理的数据闭环，装配层缺失](#p1--生态治理的数据闭环装配层缺失)
+    - [P2 — 功能完整性，非阻塞](#p2--功能完整性非阻塞)
+    - [P3 — 范围明确排除在外，视产品目标决定是否要做](#p3--范围明确排除在外视产品目标决定是否要做)
 
 ## 它在整个生态中的位置
 
@@ -342,10 +350,16 @@ agent-runtime/
 
 （按影响面从大到小排列；每一条在源码里都有对应的文档注释可查）
 
-- **模型路由未接线**（见上文「LLM 接入模式」一节）—— `modelClass`/
-  `modelPolicy` 已声明、已填充，但没有任何代码读取它们来挑选具体
-  provider/model；`RpcChamber` 对所有隔离角色一律使用固定的
-  `anthropic`/`default`。这是当前设计里唯一「有意留白」的路由环节。
+- **模型路由半接线**（原「模型路由未接线」，2026-07-26 部分修复）——
+  常驻角色（`PiRoleSessionManager.createDefaultPiSessionProvider()`）
+  现在会经 `src/roles/model-routing.ts` 的 `resolveRoleModel()` 把
+  `modelClass` 解析成具体 `provider:modelId`，走 `ModelCatalog.
+  getAvailable()` 做凭证校验，配错会显式抛 `UnresolvedRoleModelError`
+  而不是静默换模型（见 `config.ts` 的 `AGENT_RUNTIME_MODEL_FAST/
+  BALANCED/DEEP`）。**仍未接线的一半**：`RpcChamber`
+  （`createPiRpcProcessSpawner()`，隔离角色专用）依旧对所有隔离角色
+  一律使用固定的 `anthropic`/`default`，既不读取该角色 genome 的
+  `modelPolicy`，也不复用 `resolveRoleModel()`。
 - **`CapabilityGateway` 的提权记录仍是纯内存**：待批准请求、批准记录、
   `DiplomacyLogEntry` 都只存在这个类实例的内存里，尚未接到 SQLite 持久
   化，也尚未真正 emit `diplomacy.elevation.requested`/`resolved` 这两
@@ -368,3 +382,24 @@ agent-runtime/
 
 以上均不影响当前已实现功能的正确性——全部由测试覆盖，只是刻意还没往
 下一层深挖的方向。
+
+
+## 近期路线图
+### P0 — 直接影响正确性/一致性，工作量小
+1. [ ] RpcChamber 模型路由收尾：给 createPiRpcProcessSpawner() 接一条等价路径，复用 resolveRoleModel()（走 catalog.getAvailable() 校验），读取该隔离角色 genome 的 modelPolicy 而不是写死 anthropic:default。配错就在子进程里显式抛错，别静默退化——和常驻角色那半保持同一条设计原则。这是把上面那条缺口彻底收尾，工作量最小、复用度最高。
+
+### P0 — 影响审计/合规，当前纯内存有丢失风险
+2. [ ] CapabilityGateway 提权持久化接线：onLog/onElevationRequested/onElevationResolved 三个钩子已经就位，接到 src/storage/database.ts 真正落 SQLite，并把 diplomacy.elevation.requested/resolved 这两个协议里已定义好的 RealtimeEvent 真正 emit 出去（目前语音侧提权确认走的是临时内存态，sidecar 重启就丢）。
+
+### P1 — 生态治理的数据闭环，装配层缺失
+3. [ ] Ecology 状态持久化装配：GeneBank/PopulationRegistry/PheromoneMap 目前是纯内存，task.assimilate 这条原子写入命令已经能用，但没有任何编排层在任务终态时调用它——需要在 TaskNest 或类似位置接一个「任务结束 → assimilate」的钩子。这条不做，进程重启后基因型/信息素/角色适应度全部归零，蜂群治理形同虚设。
+4. [ ] PopulationRegistry.olationCap 与 RpcChamber.capacity 统一：目前两条独立维护的上限靠人工保持一致，建议让其中一个成为唯一真源（推荐 PopulationRegistry.isolationCap 驱动 RpcChamber 的构造参数），消除漂移风险。可以和 #1 一起做，因为都要碰 RpcChamber 的构造路径。
+
+### P2 — 功能完整性，非阻塞
+5. [ ] Queen 的 merge/wake 决策 + PopulationRegistry.retire() 触发条件：类型已存在，缺具体触发规则（比如两个角色能力高度重叠时 merge、休眠角色被高频路由命中时 wake）。依赖 #3 的持久化数据（适应度、信息素）才能做出有意义的判断，建议排在 #3 之后。
+6. [ ] AgentlyMailClient.watch() 真实流式化：从单次轮询换成 agently-cli +watch 的 NDJSON 持续流，stop() 也要从空操作变成真正取消底层进程/连接。
+
+### P3 — 范围明确排除在外，视产品目标决定是否要做
+7. [ ] 设备控制器真实实现（DeviceStatusProvider/ServiceController）：接口占位已经很完整，缺的是"具体接哪些系统"这个产品决策，工作量取决于目标平台（systemd？launchd？特定 IoT 网关?），建议先明确范围再排期。
+
+建议顺序：1→4（同一批改 RpcChamber）→ 2 → 3 → 5 → 6 → 7。前四项都是"接线已就位、缺最后一步"，性价比最高；5/6/7 需要新的产品/行为决策，适合放后面单独开任务讨论范围。
