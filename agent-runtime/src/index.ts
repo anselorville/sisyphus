@@ -66,6 +66,7 @@ import {
 } from "./roles/manifests.js";
 import { CapabilityGateway } from "./tools/capability-gateway.js";
 import { DiplomacyOfficer } from "./tools/diplomacy-officer.js";
+import { createDiplomacyPersistenceHooks } from "./tools/diplomacy-persistence.js";
 import { ReflexRouter } from "./routing/reflex-router.js";
 import { TrafficCommander } from "./voice/traffic-commander.js";
 import { VoiceHerald } from "./voice/voice-herald.js";
@@ -229,8 +230,12 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     // (DiplomacyOfficer's own fail-safe: always ELEVATE the one genuinely
     // ambiguous rule case) -- never wiring a real Pi classifier is explicitly
     // sanctioned by diplomacy-officer.ts's own doc comment for this stage.
+    // Elevation persistence + broadcast is real (see
+    // ./tools/diplomacy-persistence.ts), closing the "CapabilityGateway
+    // persistence" gap named in README.md's roadmap.
     const diplomacyOfficer = new DiplomacyOfficer();
-    const capabilityGateway = new CapabilityGateway({ officer: diplomacyOfficer });
+    const diplomacyPersistence = createDiplomacyPersistenceHooks({ db, broadcast: (event) => server.broadcast(event) });
+    const capabilityGateway = new CapabilityGateway({ officer: diplomacyOfficer, ...diplomacyPersistence });
 
     // 8. Routing/voice layer.
     const reflexRouter = new ReflexRouter();

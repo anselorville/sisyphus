@@ -113,6 +113,74 @@ export interface TaskAssimilateInput {
   readonly updatedAt: string;
 }
 
+/** A `diplomacy_log` row exactly as stored. */
+export interface DiplomacyLogRow {
+  readonly id: number;
+  readonly task_id: string;
+  readonly role_id: string;
+  readonly tool_name: string;
+  readonly target: string;
+  readonly operation: string;
+  readonly decision: string;
+  readonly impact: string;
+  readonly recovery_note: string | null;
+  readonly recorded_at: string;
+}
+
+/** A `diplomacy_pending_elevations` row exactly as stored -- `envelope` is the JSON-encoded ActionEnvelope, not yet parsed back. */
+export interface DiplomacyPendingElevationRow {
+  readonly request_id: string;
+  readonly task_id: string;
+  readonly role_id: string;
+  readonly tool_name: string;
+  readonly target: string;
+  readonly operation: string;
+  readonly envelope: string;
+  readonly created_at: string;
+}
+
+/** A `diplomacy_elevation_approvals` row exactly as stored. */
+export interface DiplomacyElevationApprovalRow {
+  readonly id: number;
+  readonly request_id: string;
+  readonly target: string;
+  readonly approved_at: string;
+  readonly expires_at: string | null;
+}
+
+/** One CapabilityGateway.execute() decision to append to `diplomacy_log` -- mirrors ../tools/capability-gateway.ts's DiplomacyLogEntry field-for-field (append-only, never updated or deleted). */
+export interface DiplomacyLogInsertInput {
+  readonly taskId: string;
+  readonly roleId: string;
+  readonly toolName: string;
+  readonly target: string;
+  readonly operation: string;
+  readonly decision: string;
+  readonly impact: string;
+  readonly recoveryNote: string | null;
+  readonly recordedAt: string;
+}
+
+/** One newly-opened elevation request to append to `diplomacy_pending_elevations` -- mirrors ../tools/capability-gateway.ts's PendingElevationRequest. `envelope` is the full ActionEnvelope (../tools/diplomacy-officer.ts) -- accepted as `unknown` since this layer only ever JSON.stringify()s it for audit purposes, never inspects its shape. */
+export interface DiplomacyPendingElevationInsertInput {
+  readonly requestId: string;
+  readonly taskId: string;
+  readonly roleId: string;
+  readonly toolName: string;
+  readonly target: string;
+  readonly operation: string;
+  readonly envelope: unknown;
+  readonly createdAt: string;
+}
+
+/** One CapabilityGateway.approve() call to append to `diplomacy_elevation_approvals` -- mirrors ../tools/capability-gateway.ts's ElevationApprovalRecord. Append-only (like role_fitness/pheromones): approve() does not require a matching pending row to already exist, so this is never an upsert onto the pending table. */
+export interface DiplomacyElevationApprovalInsertInput {
+  readonly requestId: string;
+  readonly target: string;
+  readonly approvedAt: string;
+  readonly expiresAt: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Command / result protocol
 // ---------------------------------------------------------------------------
@@ -127,7 +195,10 @@ export interface TaskAssimilateInput {
 // curator.ts, ../ecology/pheromone-map.ts) is the first command to also
 // touch `roles`, `role_fitness`, `pheromones`, and `memories` -- all four,
 // plus the `tasks` status update, inside one nested transaction (see
-// db-worker.ts's assimilateTask).
+// db-worker.ts's assimilateTask). The three `diplomacy.*` commands
+// (../tools/diplomacy-persistence.ts) are the first callers of the
+// `diplomacy_log`/`diplomacy_pending_elevations`/`diplomacy_elevation_approvals`
+// tables added by migrations.ts version 3.
 
 export interface DbCommandResultMap {
   ping: { readonly ok: true };
@@ -142,6 +213,12 @@ export interface DbCommandResultMap {
     readonly pheromoneRecorded: boolean;
     readonly memoryRecorded: boolean;
   };
+  "diplomacy.log": { readonly recorded: true };
+  "diplomacy.elevation-requested": { readonly recorded: true };
+  "diplomacy.elevation-resolved": { readonly recorded: true };
+  "diplomacy.log.list": { readonly entries: readonly DiplomacyLogRow[] };
+  "diplomacy.pending-elevations.list": { readonly requests: readonly DiplomacyPendingElevationRow[] };
+  "diplomacy.elevation-approvals.list": { readonly approvals: readonly DiplomacyElevationApprovalRow[] };
 }
 
 export type DbCommand =
@@ -151,7 +228,13 @@ export type DbCommand =
   | { readonly type: "task.get"; readonly id: string }
   | { readonly type: "task.list-active" }
   | { readonly type: "metrics.record"; readonly sample: MetricsSampleInput }
-  | { readonly type: "task.assimilate"; readonly assimilation: TaskAssimilateInput };
+  | { readonly type: "task.assimilate"; readonly assimilation: TaskAssimilateInput }
+  | { readonly type: "diplomacy.log"; readonly entry: DiplomacyLogInsertInput }
+  | { readonly type: "diplomacy.elevation-requested"; readonly request: DiplomacyPendingElevationInsertInput }
+  | { readonly type: "diplomacy.elevation-resolved"; readonly approval: DiplomacyElevationApprovalInsertInput }
+  | { readonly type: "diplomacy.log.list" }
+  | { readonly type: "diplomacy.pending-elevations.list" }
+  | { readonly type: "diplomacy.elevation-approvals.list" };
 
 /** `workerData` handed to db-worker.ts at spawn time. */
 export interface DbWorkerData {

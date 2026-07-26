@@ -152,6 +152,47 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    version: 3,
+    description: "create diplomacy tables for CapabilityGateway persistence",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS diplomacy_log (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id TEXT NOT NULL,
+          role_id TEXT NOT NULL,
+          tool_name TEXT NOT NULL,
+          target TEXT NOT NULL,
+          operation TEXT NOT NULL,
+          decision TEXT NOT NULL,
+          impact TEXT NOT NULL,
+          recovery_note TEXT,
+          recorded_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_diplomacy_log_task_id ON diplomacy_log (task_id);
+
+        CREATE TABLE IF NOT EXISTS diplomacy_pending_elevations (
+          request_id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL,
+          role_id TEXT NOT NULL,
+          tool_name TEXT NOT NULL,
+          target TEXT NOT NULL,
+          operation TEXT NOT NULL,
+          envelope TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS diplomacy_elevation_approvals (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          request_id TEXT NOT NULL,
+          target TEXT NOT NULL,
+          approved_at TEXT NOT NULL,
+          expires_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_diplomacy_elevation_approvals_request_id ON diplomacy_elevation_approvals (request_id);
+      `);
+    },
+  },
 ];
 
 /** Reads the schema version currently applied to `db` (0 for a brand-new database). */

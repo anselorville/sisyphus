@@ -361,11 +361,22 @@ agent-runtime/
   `spawner` 因此多了一个真实的 await 点，`RpcChamber.spawn()` 相应加了
   `pendingSpawns` 预留计数，避免并发 `spawn()` 在这个 await 点之间双双
   越过容量上限。
-- **`CapabilityGateway` 的提权记录仍是纯内存**：待批准请求、批准记录、
-  `DiplomacyLogEntry` 都只存在这个类实例的内存里，尚未接到 SQLite 持久
-  化，也尚未真正 emit `diplomacy.elevation.requested`/`resolved` 这两
-  个协议里已经定义好的 RealtimeEvent（`onLog`/`onElevationRequested`/
-  `onElevationResolved` 钩子已就位，等待接线）。
+- ~~`CapabilityGateway` 的提权记录仍是纯内存~~ **已接线（2026-07-27）**：
+  `onLog`/`onElevationRequested`/`onElevationResolved` 三个钩子现在由
+  `src/tools/diplomacy-persistence.ts` 的 `createDiplomacyPersistenceHooks()`
+  实现——分别落 `diplomacy_log`/`diplomacy_pending_elevations`/
+  `diplomacy_elevation_approvals` 三张新表（migrations.ts version 3），
+  且 `onElevationRequested`/`onElevationResolved` 会真正 emit
+  `diplomacy.elevation.requested`/`resolved` 这两个协议里已定义好的
+  RealtimeEvent（经 `server.broadcast()`）。`onLog` 的 `DiplomacyLogEntry`
+  没有对应的 RealtimeEventType，因此只持久化、不广播。持久化/广播失败会
+  被吞掉并转发到 `onPersistError`（镜像 `runtime-metrics.ts` 的
+  `onSample`/`onPersistError`），永远不会让一次审计写入失败反过来污染
+  `CapabilityGateway.execute()`/`approve()` 已经成功的那一半。**已知的
+  刻意留白**：出站事件的 `sequence` 目前只是进程内自增计数器，没有跨重
+  启的持久化序号源——这是当前唯一发出 RealtimeEvent 的 Node 侧代码，尚
+  无现成序号基础设施可复用；见 `diplomacy-persistence.ts` 的
+  `DiplomacyPersistenceOptions.nextSequence` 文档注释。
 - ~~`PopulationRegistry.isolationCap` 与 `RpcChamber.capacity` 是两条
   独立维护的上限~~ **已统一（2026-07-26）**：`src/index.ts` 构造
   `RpcChamber` 时直接传入 `population.isolationCap`，`PopulationRegistry`
@@ -393,7 +404,7 @@ agent-runtime/
 1. [x] RpcChamber 模型路由收尾（**2026-07-26 完成**）：`createPiRpcProcessSpawner()` 现在复用 `resolveRoleModel()`（走 `catalog.getAvailable()` 校验），读取隔离角色 genome 的 `modelPolicy.preferredClass` 而不是写死 `anthropic:default`。配错在子进程 spawn 前就显式抛 `UnresolvedRoleModelError`，不会静默退化——和常驻角色那半保持同一条设计原则。副作用：spawner 签名从同步改为可 async，`RpcChamber.spawn()` 加了 `pendingSpawns` 预留计数以保住并发场景下的容量上限（见 `rpc-chamber.test.ts` 新增的并发用例）。测试：`test/isolation/rpc-chamber.test.ts`（28 tests，含 3 个新增的 async-spawner/并发用例 + 3 个新增的 model-routing 用例）。
 
 ### P0 — 影响审计/合规，当前纯内存有丢失风险
-2. [ ] CapabilityGateway 提权持久化接线：onLog/onElevationRequested/onElevationResolved 三个钩子已经就位，接到 src/storage/database.ts 真正落 SQLite，并把 diplomacy.elevation.requested/resolved 这两个协议里已定义好的 RealtimeEvent 真正 emit 出去（目前语音侧提权确认走的是临时内存态，sidecar 重启就丢）。
+2. [x] CapabilityGateway 提权持久化接线（**2026-07-27 完成**）：新增 `src/tools/diplomacy-persistence.ts` 的 `createDiplomacyPersistenceHooks()`，把 onLog/onElevationRequested/onElevationResolved 接到新迁移的 `diplomacy_log`/`diplomacy_pending_elevations`/`diplomacy_elevation_approvals` 三张表（migrations.ts version 3，`src/storage/database.ts`/`db-worker.ts` 新增 `diplomacy.log`/`diplomacy.elevation-requested`/`diplomacy.elevation-resolved` 三个写命令 + 三个 `*.list` 读命令），并把 `diplomacy.elevation.requested`/`resolved` 这两个协议里已定义好的 RealtimeEvent 经 `server.broadcast()` 真正 emit 出去。测试：`test/storage/database.test.ts`（+6 用例）、`test/tools/diplomacy-persistence.test.ts`（新增，8 用例）。已知留白：出站事件 `sequence` 只是进程内计数器，非跨重启持久化序号（见该模块 doc comment）。
 
 ### P1 — 生态治理的数据闭环，装配层缺失
 3. [ ] Ecology 状态持久化装配：GeneBank/PopulationRegistry/PheromoneMap 目前是纯内存，task.assimilate 这条原子写入命令已经能用，但没有任何编排层在任务终态时调用它——需要在 TaskNest 或类似位置接一个「任务结束 → assimilate」的钩子。这条不做，进程重启后基因型/信息素/角色适应度全部归零，蜂群治理形同虚设。
@@ -406,4 +417,4 @@ agent-runtime/
 ### P3 — 范围明确排除在外，视产品目标决定是否要做
 7. [ ] 设备控制器真实实现（DeviceStatusProvider/ServiceController）：接口占位已经很完整，缺的是"具体接哪些系统"这个产品决策，工作量取决于目标平台（systemd？launchd？特定 IoT 网关?），建议先明确范围再排期。
 
-进度：1、4 已完成。建议顺序：2 → 3 → 5 → 6 → 7。#2/#3 是"接线已就位、缺最后一步"，性价比最高；5/6/7 需要新的产品/行为决策，适合放后面单独开任务讨论范围。
+进度：1、2、4 已完成。建议顺序：3 → 5 → 6 → 7。#3 是"接线已就位、缺最后一步"，性价比最高；5/6/7 需要新的产品/行为决策，适合放后面单独开任务讨论范围。

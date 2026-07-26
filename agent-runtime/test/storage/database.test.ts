@@ -390,3 +390,111 @@ describe("task.assimilate -- one transaction across tasks/roles/role_fitness/phe
     await db.close();
   });
 });
+
+describe("diplomacy.* -- CapabilityGateway persistence (Roadmap #2)", () => {
+  it("persists a diplomacy_log entry and reads it back", async () => {
+    const db = await DatabaseClient.open(nextDbPath());
+
+    await expect(
+      db.request({
+        type: "diplomacy.log",
+        entry: {
+          taskId: "task-1",
+          roleId: "mail",
+          toolName: "agently-mail.send",
+          target: "email to a@example.com",
+          operation: "send",
+          decision: "ALLOW_LOGGED",
+          impact: "send on \"email to a@example.com\"; 1 object(s) affected",
+          recoveryNote: null,
+          recordedAt: "2026-01-01T00:00:00.000Z",
+        },
+      }),
+    ).resolves.toEqual({ recorded: true });
+
+    const { entries } = await db.request({ type: "diplomacy.log.list" });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      task_id: "task-1",
+      role_id: "mail",
+      decision: "ALLOW_LOGGED",
+      recovery_note: null,
+    });
+
+    await db.close();
+  });
+
+  it("persists a pending elevation request (envelope JSON-encoded) and reads it back", async () => {
+    const db = await DatabaseClient.open(nextDbPath());
+
+    await db.request({
+      type: "diplomacy.elevation-requested",
+      request: {
+        requestId: "req-1",
+        taskId: "task-2",
+        roleId: "device",
+        toolName: "device-tools.shutdown",
+        target: "shutdown printer-01",
+        operation: "shutdown",
+        envelope: { taskId: "task-2", roleId: "device", operation: "shutdown", targetSummary: "shutdown printer-01" },
+        createdAt: "2026-01-01T00:01:00.000Z",
+      },
+    });
+
+    const { requests } = await db.request({ type: "diplomacy.pending-elevations.list" });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.request_id).toBe("req-1");
+    expect(JSON.parse(requests[0]?.envelope ?? "{}")).toMatchObject({ operation: "shutdown" });
+
+    await db.close();
+  });
+
+  it("persists an elevation approval independently of any pending row (approve() doesn't require one to pre-exist)", async () => {
+    const db = await DatabaseClient.open(nextDbPath());
+
+    await db.request({
+      type: "diplomacy.elevation-resolved",
+      approval: {
+        requestId: "req-ghost",
+        target: "shutdown printer-01",
+        approvedAt: "2026-01-01T00:02:00.000Z",
+        expiresAt: "2026-01-01T00:07:00.000Z",
+      },
+    });
+
+    const { approvals } = await db.request({ type: "diplomacy.elevation-approvals.list" });
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]).toMatchObject({
+      request_id: "req-ghost",
+      target: "shutdown printer-01",
+      expires_at: "2026-01-01T00:07:00.000Z",
+    });
+
+    await db.close();
+  });
+
+  it("diplomacy.log.list observes a write still sitting in the batch buffer, like task.list-active does", async () => {
+    const db = await DatabaseClient.open(nextDbPath());
+
+    const write = db.request({
+      type: "diplomacy.log",
+      entry: {
+        taskId: "task-3",
+        roleId: "web",
+        toolName: "web-tools.fetch",
+        target: "https://example.com",
+        operation: "read",
+        decision: "ALLOW_LOGGED",
+        impact: "read on \"https://example.com\"; 1 object(s) affected",
+        recoveryNote: null,
+        recordedAt: "2026-01-01T00:03:00.000Z",
+      },
+    });
+
+    const { entries } = await db.request({ type: "diplomacy.log.list" });
+    expect(entries).toHaveLength(1);
+
+    await write;
+    await db.close();
+  });
+});

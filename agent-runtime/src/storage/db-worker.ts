@@ -22,6 +22,9 @@ import { runMigrations } from "./migrations.js";
 import type {
   DbCommand,
   DbWorkerData,
+  DiplomacyElevationApprovalRow,
+  DiplomacyLogRow,
+  DiplomacyPendingElevationRow,
   TaskAssimilateInput,
   TaskRow,
   WorkerInboundMessage,
@@ -116,6 +119,36 @@ interface MemoryInsertBindParams {
   readonly updatedAt: string;
 }
 
+interface DiplomacyLogInsertBindParams {
+  readonly taskId: string;
+  readonly roleId: string;
+  readonly toolName: string;
+  readonly target: string;
+  readonly operation: string;
+  readonly decision: string;
+  readonly impact: string;
+  readonly recoveryNote: string | null;
+  readonly recordedAt: string;
+}
+
+interface DiplomacyPendingElevationInsertBindParams {
+  readonly requestId: string;
+  readonly taskId: string;
+  readonly roleId: string;
+  readonly toolName: string;
+  readonly target: string;
+  readonly operation: string;
+  readonly envelope: string;
+  readonly createdAt: string;
+}
+
+interface DiplomacyElevationApprovalInsertBindParams {
+  readonly requestId: string;
+  readonly target: string;
+  readonly approvedAt: string;
+  readonly expiresAt: string | null;
+}
+
 const MAX_RUNTIME_METRICS_ROWS = 10_000;
 
 const statements = {
@@ -161,6 +194,25 @@ const statements = {
     INSERT INTO memories (id, role_id, key, value, created_at, updated_at)
     VALUES (@id, @roleId, @key, @value, @createdAt, @updatedAt)
   `),
+  insertDiplomacyLog: db.prepare<DiplomacyLogInsertBindParams>(`
+    INSERT INTO diplomacy_log (task_id, role_id, tool_name, target, operation, decision, impact, recovery_note, recorded_at)
+    VALUES (@taskId, @roleId, @toolName, @target, @operation, @decision, @impact, @recoveryNote, @recordedAt)
+  `),
+  insertDiplomacyPendingElevation: db.prepare<DiplomacyPendingElevationInsertBindParams>(`
+    INSERT INTO diplomacy_pending_elevations (request_id, task_id, role_id, tool_name, target, operation, envelope, created_at)
+    VALUES (@requestId, @taskId, @roleId, @toolName, @target, @operation, @envelope, @createdAt)
+  `),
+  insertDiplomacyElevationApproval: db.prepare<DiplomacyElevationApprovalInsertBindParams>(`
+    INSERT INTO diplomacy_elevation_approvals (request_id, target, approved_at, expires_at)
+    VALUES (@requestId, @target, @approvedAt, @expiresAt)
+  `),
+  listDiplomacyLog: db.prepare<[], DiplomacyLogRow>(`SELECT * FROM diplomacy_log ORDER BY id ASC`),
+  listDiplomacyPendingElevations: db.prepare<[], DiplomacyPendingElevationRow>(
+    `SELECT * FROM diplomacy_pending_elevations ORDER BY created_at ASC`,
+  ),
+  listDiplomacyElevationApprovals: db.prepare<[], DiplomacyElevationApprovalRow>(
+    `SELECT * FROM diplomacy_elevation_approvals ORDER BY id ASC`,
+  ),
 };
 
 interface AssimilateResult {
@@ -376,6 +428,24 @@ function handleRequest(id: number, command: DbCommand): void {
         postResponse(id, true, { tasks });
         return;
       }
+      case "diplomacy.log.list": {
+        flushIfPending();
+        const entries = statements.listDiplomacyLog.all();
+        postResponse(id, true, { entries });
+        return;
+      }
+      case "diplomacy.pending-elevations.list": {
+        flushIfPending();
+        const requests = statements.listDiplomacyPendingElevations.all();
+        postResponse(id, true, { requests });
+        return;
+      }
+      case "diplomacy.elevation-approvals.list": {
+        flushIfPending();
+        const approvals = statements.listDiplomacyElevationApprovals.all();
+        postResponse(id, true, { approvals });
+        return;
+      }
       case "task.insert": {
         const { task } = command;
         enqueueWrite(
@@ -435,6 +505,60 @@ function handleRequest(id: number, command: DbCommand): void {
       case "task.assimilate": {
         const { assimilation } = command;
         enqueueWrite(makeWriteEntry(id, () => assimilateTask(assimilation)));
+        return;
+      }
+      case "diplomacy.log": {
+        const { entry } = command;
+        enqueueWrite(
+          makeWriteEntry(id, () => {
+            statements.insertDiplomacyLog.run({
+              taskId: entry.taskId,
+              roleId: entry.roleId,
+              toolName: entry.toolName,
+              target: entry.target,
+              operation: entry.operation,
+              decision: entry.decision,
+              impact: entry.impact,
+              recoveryNote: entry.recoveryNote,
+              recordedAt: entry.recordedAt,
+            });
+            return { recorded: true };
+          }),
+        );
+        return;
+      }
+      case "diplomacy.elevation-requested": {
+        const { request } = command;
+        enqueueWrite(
+          makeWriteEntry(id, () => {
+            statements.insertDiplomacyPendingElevation.run({
+              requestId: request.requestId,
+              taskId: request.taskId,
+              roleId: request.roleId,
+              toolName: request.toolName,
+              target: request.target,
+              operation: request.operation,
+              envelope: JSON.stringify(request.envelope),
+              createdAt: request.createdAt,
+            });
+            return { recorded: true };
+          }),
+        );
+        return;
+      }
+      case "diplomacy.elevation-resolved": {
+        const { approval } = command;
+        enqueueWrite(
+          makeWriteEntry(id, () => {
+            statements.insertDiplomacyElevationApproval.run({
+              requestId: approval.requestId,
+              target: approval.target,
+              approvedAt: approval.approvedAt,
+              expiresAt: approval.expiresAt,
+            });
+            return { recorded: true };
+          }),
+        );
         return;
       }
       default: {
