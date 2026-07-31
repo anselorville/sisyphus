@@ -271,7 +271,7 @@ function clamp01(value: number): number {
 // RoleIncubator for the same, already-established split).
 // ---------------------------------------------------------------------------
 
-export type RoleLifecycleAction = "promote_resident" | "sleep" | "release_session_keep_gene" | "no_change";
+export type RoleLifecycleAction = "promote_resident" | "retire" | "sleep" | "release_session_keep_gene" | "no_change";
 
 export interface RoleLifecycleDecision {
   readonly action: RoleLifecycleAction;
@@ -298,24 +298,44 @@ export interface RoleLifecycleEvaluationOptions {
 
 const PROMOTION_SUCCESS_THRESHOLD = 3;
 const SLEEP_CONSECUTIVE_FAILURE_THRESHOLD = 2;
+/**
+ * Roadmap item 5 (see ../README.md): distinctly higher than
+ * SLEEP_CONSECUTIVE_FAILURE_THRESHOLD so a role always sleeps first and is
+ * only retired if it keeps failing after being woken -- retirement is a
+ * one-way trip (PopulationRegistry.retire()), sleep is not, so the bar for
+ * it must be strictly higher, never merely different.
+ */
+const RETIRE_CONSECUTIVE_FAILURE_THRESHOLD = 5;
 const DEFAULT_LONG_UNUSED_THRESHOLD_MS = 14 * 24 * 60 * 60 * 1000;
 
 /**
  * Pure, deterministic mapping from one role's observed experience to a
- * lifecycle decision, in this priority order (design doc 8.4; safety-
- * relevant signals are checked first -- mirrors CapabilityGateway's own
- * "never fail open" fail-safe ordering):
- *   1. `consecutiveFailures` at or past the sleep threshold -> "sleep",
+ * lifecycle decision, in this priority order (design doc 8.4 plus the
+ * roadmap item 5 retire extension; safety-relevant signals are checked
+ * first -- mirrors CapabilityGateway's own "never fail open" fail-safe
+ * ordering):
+ *   1. `consecutiveFailures` at or past the retire threshold -> "retire"
+ *      (checked before sleep specifically because every retire-eligible
+ *      snapshot is also sleep-eligible -- the stronger, one-way decision
+ *      must win).
+ *   2. `consecutiveFailures` at or past the sleep threshold -> "sleep",
  *      regardless of any success count also present.
- *   2. `crossTaskSuccessCount` at or past the promotion threshold AND no
+ *   3. `crossTaskSuccessCount` at or past the promotion threshold AND no
  *      serious incident -> "promote_resident".
- *   3. Unused for at least `longUnusedThresholdMs` -> "release_session_keep_gene".
- *   4. Otherwise -> "no_change".
+ *   4. Unused for at least `longUnusedThresholdMs` -> "release_session_keep_gene".
+ *   5. Otherwise -> "no_change".
  */
 export function evaluateRoleLifecycle(
   snapshot: RoleExperienceSnapshot,
   options: RoleLifecycleEvaluationOptions,
 ): RoleLifecycleDecision {
+  if (snapshot.consecutiveFailures >= RETIRE_CONSECUTIVE_FAILURE_THRESHOLD) {
+    return Object.freeze({
+      action: "retire" as const,
+      reason: `${snapshot.consecutiveFailures} consecutive failures reached the retire threshold of ${RETIRE_CONSECUTIVE_FAILURE_THRESHOLD}`,
+    });
+  }
+
   if (snapshot.consecutiveFailures >= SLEEP_CONSECUTIVE_FAILURE_THRESHOLD) {
     return Object.freeze({
       action: "sleep" as const,

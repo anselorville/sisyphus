@@ -143,6 +143,33 @@ export class PopulationRegistry {
     this.members.set(roleId, { lifecycle: existing.lifecycle, status: "retired" });
   }
 
+  /** Current bookkeeping for `roleId`, or undefined if it has never been hatch()ed. */
+  get(roleId: string): PopulationMember | undefined {
+    const existing = this.members.get(roleId);
+    return existing ? toMember(roleId, existing) : undefined;
+  }
+
+  /**
+   * Re-activates a currently-sleeping member, preserving its original
+   * lifecycle -- the concrete trigger for the design doc's "wake" decision,
+   * never triggered by anything until Roadmap item 5 (see
+   * ../ecology/queen.ts's module doc comment). A harmless no-op (returns
+   * undefined) for a roleId that is unknown, already active, or retired --
+   * "wake" only ever applies to a role this registry currently considers
+   * "sleeping" (mirrors sleep()'s own precondition, just the reverse
+   * transition). Delegates to hatch() for the actual cap-checking/mutation,
+   * so waking a role still respects activeCap/isolationCap exactly like
+   * bringing in a brand-new role would -- it can throw
+   * PopulationCapExceededError.
+   */
+  wake(roleId: string): PopulationMember | undefined {
+    const existing = this.members.get(roleId);
+    if (!existing || existing.status !== "sleeping") {
+      return undefined;
+    }
+    return this.hatch(roleId, existing.lifecycle);
+  }
+
   /** Every role this registry has ever hatched, in insertion order, including sleeping and retired ones. */
   list(): readonly PopulationMember[] {
     return [...this.members.entries()].map(([roleId, member]) => toMember(roleId, member));

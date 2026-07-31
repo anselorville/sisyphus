@@ -110,3 +110,57 @@ describe("PopulationRegistry.list", () => {
     expect(new PopulationRegistry().list()).toEqual([]);
   });
 });
+
+describe("PopulationRegistry.get", () => {
+  it("returns current bookkeeping for a known role", () => {
+    const registry = new PopulationRegistry();
+    registry.hatch("mail");
+    expect(registry.get("mail")).toEqual({ roleId: "mail", lifecycle: "resident", status: "active" });
+  });
+
+  it("returns undefined for a role that has never been hatched", () => {
+    expect(new PopulationRegistry().get("ghost")).toBeUndefined();
+  });
+});
+
+describe("PopulationRegistry.wake (Roadmap #5)", () => {
+  it("re-activates a sleeping role, preserving its original lifecycle", () => {
+    const registry = new PopulationRegistry();
+    registry.hatch("device", "isolated");
+    registry.sleep("device");
+
+    const woken = registry.wake("device");
+
+    expect(woken).toEqual({ roleId: "device", lifecycle: "isolated", status: "active" });
+    expect(registry.get("device")?.status).toBe("active");
+  });
+
+  it("frees the sleeping slot and re-consumes an active slot -- still respects activeCap", () => {
+    const registry = new PopulationRegistry({ activeCap: 1 });
+    registry.hatch("mail");
+    registry.sleep("mail");
+    registry.hatch("code"); // takes the one active slot mail vacated
+
+    expect(() => registry.wake("mail")).toThrow(/cap/);
+  });
+
+  it("is a harmless no-op (returns undefined) for an unknown role", () => {
+    const registry = new PopulationRegistry();
+    expect(registry.wake("ghost")).toBeUndefined();
+  });
+
+  it("is a harmless no-op for an already-active role", () => {
+    const registry = new PopulationRegistry();
+    registry.hatch("mail");
+    expect(registry.wake("mail")).toBeUndefined();
+    expect(registry.get("mail")?.status).toBe("active");
+  });
+
+  it("is a harmless no-op for a retired role -- retirement never wakes", () => {
+    const registry = new PopulationRegistry();
+    registry.hatch("mail");
+    registry.retire("mail");
+    expect(registry.wake("mail")).toBeUndefined();
+    expect(registry.get("mail")?.status).toBe("retired");
+  });
+});

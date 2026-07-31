@@ -26,12 +26,6 @@ worker 角色种姓（caste）管理、生态/经济预算治理、隔离的角�
   - [目录结构](#目录结构)
   - [测试与构建健康度](#测试与构建健康度)
   - [已知缺口](#已知缺口)
-  - [近期路线图](#近期路线图)
-    - [P0 — 直接影响正确性/一致性，工作量小](#p0--直接影响正确性一致性工作量小)
-    - [P0 — 影响审计/合规，当前纯内存有丢失风险](#p0--影响审计合规当前纯内存有丢失风险)
-    - [P1 — 生态治理的数据闭环，装配层缺失](#p1--生态治理的数据闭环装配层缺失)
-    - [P2 — 功能完整性，非阻塞](#p2--功能完整性非阻塞)
-    - [P3 — 范围明确排除在外，视产品目标决定是否要做](#p3--范围明确排除在外视产品目标决定是否要做)
 
 ## 它在整个生态中的位置
 
@@ -267,31 +261,20 @@ stateDiagram-v2
 由 `@earendil-works/pi-coding-agent`（内部依赖 `pi-ai`）接管，本包不做
 任何自己的 provider/model 选择：
 
-- `src/config.ts` 的 `AgentRuntimeConfig` 里**没有任何** LLM
-  provider/model/API-key 字段 —— 只有传输、存储、预算相关的配置。
-- `RoleManifest.modelClass`（`"fast" | "balanced" | "deep"`，见
-  `src/roles/types.ts`）和 `RoleGenome.modelPolicy`
-  （`src/ecology/gene-bank.ts`）都是**已声明、已在全部 7 个角色清单里
-  填好、但从未被任何代码消费**的字段 —— 它们只表达「这个角色期望多强的
-  模型」这个意图，具体路由到哪个 provider/model 由 pi-ai SDK 自己的默
-  认逻辑决定，这是一处明确、有文档记录的设计留白（见
-  `src/roles/session-manager.ts` 与 `src/isolation/rpc-chamber.ts` 里
-  `createDefaultPiSessionProvider()`/`createPiRpcProcessSpawner()` 各自
-  的文档注释：模型路由是「a later task's concern」）。
-- 实际发起 LLM 调用的唯一路径是 `createDefaultPiSessionProvider()`
-  （`src/roles/session-manager.ts`）里的 `createAgentSession()` ——
-  这是 `@earendil-works/pi-coding-agent` SDK 的真实入口，credentials/
-  模型选择全部由 pi-ai 自身的配置（如 `~/.pi/agent`）决定，`agent-runtime`
-  不拦截、不重写、不做二次封装。
-- 唯一的例外是 `RpcChamber`（隔离角色的独立 OS 进程）：
-  `createPiRpcProcessSpawner()` 传入固定的 `provider="anthropic"`/
-  `model="default"`，对所有隔离角色一视同仁，同样**不读取**该角色
-  genome 自己的 `modelPolicy`。
-
-也就是说：「LLM 只需要 Cloud 模式」和「Cloud 模式由 pi-ai 完全接管」都
-已经是当前代码的真实状态，不需要额外开发；`modelClass`/`modelPolicy`
-两个字段是留给未来「把粗粒度意图路由到具体模型」这一步的挂钩点，目前
-故意保持空转。
+- `src/config.ts` 的 `AgentRuntimeConfig.modelClassRouting` 把
+  `RoleManifest.modelClass`（`"fast" | "balanced" | "deep"`）映射到具体
+  `provider:modelId`，可通过 `AGENT_RUNTIME_MODEL_FAST`/`BALANCED`/`DEEP`
+  按 tier 覆盖；常驻角色（`session-manager.ts` 的
+  `createDefaultPiSessionProvider()`）与隔离角色（`rpc-chamber.ts` 的
+  `createPiRpcProcessSpawner()`，读取 genome 自己的
+  `modelPolicy.preferredClass`）都经 `src/roles/model-routing.ts` 的
+  `resolveRoleModel()` 解析。
+- `resolveRoleModel()` 用 `ModelCatalog.getAvailable()` 做凭证校验
+  （id 未知或 provider 未配凭据）后才返回具体 `Model`，配错会显式抛
+  `UnresolvedRoleModelError`，从不静默换成另一个模型。
+- 实际发起 LLM 调用的唯一路径是 `createAgentSession()`
+  （`@earendil-works/pi-coding-agent` SDK 的真实入口）；除上述 tier 路由外，
+  `agent-runtime` 不做任何自己的 provider/model 选择或二次封装。
 
 ## 存储层
 
@@ -335,117 +318,26 @@ agent-runtime/
 
 ## 测试与构建健康度
 
-截至最近一次核查（`npm test` / `npx tsc -p tsconfig.json --noEmit`）：
-
-- **35 个测试文件、509 个用例，全部通过**，0 失败、0 跳过。其中包含真
-  实的延迟/性能预算测试：`ReflexRouter.route()` 在 10 万次调用上 p95
-  < 2ms；DB 争用下事件循环延迟 p95 在预算内；1000 轮会话下常驻内存
-  （RSS）稳定不增长。
-- **TypeScript 编译（`tsc --noEmit`）零错误**。
-
-结论：本包声明的功能面已经落地并有测试覆盖；下面「已知缺口」列出的都
-是**有文档记录、故意延后**的设计留白，不是隐藏的半成品。
+`npm test` / `npx tsc -p tsconfig.json --noEmit`：全部测试文件通过，0
+失败、0 跳过，`tsc --noEmit` 零错误。覆盖包含延迟/资源预算测试：
+`ReflexRouter.route()` 在 10 万次调用上 p95 < 2ms；DB 争用下事件循环延迟
+p95 在预算内；1000 轮会话下常驻内存（RSS）稳定不增长。
 
 ## 已知缺口
 
-（按影响面从大到小排列；每一条在源码里都有对应的文档注释可查）
-
-- ~~模型路由半接线~~ **已收尾（2026-07-26）**——常驻角色
-  （`PiRoleSessionManager.createDefaultPiSessionProvider()`）与隔离角色
-  （`RpcChamber` 的 `createPiRpcProcessSpawner()`）现在都经
-  `src/roles/model-routing.ts` 的 `resolveRoleModel()` 把
-  `modelClass`/`genome.modelPolicy.preferredClass` 解析成具体
-  `provider:modelId`，走 `ModelCatalog.getAvailable()` 做凭证校验，配错
-  会显式抛 `UnresolvedRoleModelError` 而不是静默换模型（见 `config.ts`
-  的 `AGENT_RUNTIME_MODEL_FAST/BALANCED/DEEP`）。`RpcChamber` 的
-  `spawner` 因此多了一个真实的 await 点，`RpcChamber.spawn()` 相应加了
-  `pendingSpawns` 预留计数，避免并发 `spawn()` 在这个 await 点之间双双
-  越过容量上限。
-- ~~`CapabilityGateway` 的提权记录仍是纯内存~~ **已接线（2026-07-27）**：
-  `onLog`/`onElevationRequested`/`onElevationResolved` 三个钩子现在由
-  `src/tools/diplomacy-persistence.ts` 的 `createDiplomacyPersistenceHooks()`
-  实现——分别落 `diplomacy_log`/`diplomacy_pending_elevations`/
-  `diplomacy_elevation_approvals` 三张新表（migrations.ts version 3），
-  且 `onElevationRequested`/`onElevationResolved` 会真正 emit
-  `diplomacy.elevation.requested`/`resolved` 这两个协议里已定义好的
-  RealtimeEvent（经 `server.broadcast()`）。`onLog` 的 `DiplomacyLogEntry`
-  没有对应的 RealtimeEventType，因此只持久化、不广播。持久化/广播失败会
-  被吞掉并转发到 `onPersistError`（镜像 `runtime-metrics.ts` 的
-  `onSample`/`onPersistError`），永远不会让一次审计写入失败反过来污染
-  `CapabilityGateway.execute()`/`approve()` 已经成功的那一半。**已知的
-  刻意留白**：出站事件的 `sequence` 目前只是进程内自增计数器，没有跨重
-  启的持久化序号源——这是当前唯一发出 RealtimeEvent 的 Node 侧代码，尚
-  无现成序号基础设施可复用；见 `diplomacy-persistence.ts` 的
-  `DiplomacyPersistenceOptions.nextSequence` 文档注释。
-- ~~`PopulationRegistry.isolationCap` 与 `RpcChamber.capacity` 是两条
-  独立维护的上限~~ **已统一（2026-07-26）**：`src/index.ts` 构造
-  `RpcChamber` 时直接传入 `population.isolationCap`，`PopulationRegistry`
-  是唯一真源；裸构造的 `new RpcChamber()`（如测试）仍回退到与
-  `population.ts` 相同的默认值 1。
-- ~~`GeneBank`/`PopulationRegistry`/`PheromoneMap` 均为纯内存结构，
-  task.assimilate 没有编排层调用~~ **部分接线（2026-07-27）**：
-  `TaskNest` 新增 `onTerminalTransition` 钩子，任务落到
-  completed/failed/cancelled 时调用；`src/index.ts` 用新增的
-  `src/tasks/task-assimilation.ts`（`createTaskAssimilationHook()`）实现
-  它——`cancelled` 直接跳过（用户取消不代表角色能力好坏，不当成一次
-  fitness 信号），`completed`/`failed` 各写一条 `task_outcome`
-  role_fitness delta，并用新增的 `src/ecology/role-experience.ts`
-  （`RoleExperienceTracker`，evaluateRoleLifecycle() 一直缺的「调用方自
-  行组装的历史」入参来源）驱动 `evaluateRoleLifecycle()` 决定
-  `roleStatus`（trial 角色不会因为一次成功就被误判为 resident——沿用
-  `GeneBank.get(roleId)?.lifecycle.state` 作为当前状态的真源）。**仍然
-  留白，诚实标注、没有假装做了**：`pheromone`/`memory` 两个字段固定传
-  `null`——一个真实的信息素 delta 需要 task-feature/device/network 上下
-  文，一个真实的 memory 需要 MemoryCurator 审核过的压缩内容，`TaskRecord`
-  本身都不携带这些，这里不编造。`roleName` 直接写 `roleId` 本身——
-  `RoleManifest`/`RoleGenome` 都没有独立于 `roleId` 的展示名字段。另外，
-  这条钩子目前只有 `TaskNest.transition()` 这一条腿——**本仓库当前没有任
-  何生产代码真正驱动一个任务从 `pending`/`assigned` 走到终态**（没有
-  "把任务派给角色、拿到执行结果、调 transition()" 的编排循环），所以这
-  个钩子虽然接线完整、测试也覆盖了，但在真实运行中要等那个更大的、本次
-  路线图未列出的任务执行循环补上才会被真正触发。测试：
-  `test/ecology/role-experience.test.ts`（新增，7 用例）、
-  `test/tasks/task-assimilation.test.ts`（新增，8 用例）、
-  `test/tasks/task-nest.test.ts`（+4 用例覆盖 `onTerminalTransition`）。
-- ~~`AgentlyMailClient.watch()` 只是单次轮询~~ **已换成真实持续流
-  （2026-07-27）**：新增 `AgentlyCliWatchSpawner` 独立于 `AgentlyCliTransport`
-  的一次性请求/响应模型，`watch()` 现在 spawn 一个长驻的
-  `agently-cli message +watch` 子进程，用 `../../isolation/jsonl-decoder.js`
-  同一套 `JsonlDecoder` 逐行解析 NDJSON（经真实安装的 `agently-cli message
-  +watch --print-output-schema` 核对过：默认 `--msg-format=full` 下每行是
-  `{"message": {...}}`，`message.message_id` 必填；取不到详情时是
-  `{"fetch_error": {...}}`；CLI 自己会静默重试空轮询超时和瞬时错误，所以
-  长时间没有新行不代表流已经结束）。`fetch_error`/畸形行/stderr 输出/进程
-  意外退出都经新增的 `onWatchError` 报告，不会当成"流结束"去关流；
-  `stop()` 现在真正 `kill()` 掉子进程。测试：
-  `test/tools/mail/agently-mail.test.ts`（+9 用例）。
-- **`Queen` 的 `"merge"`/`"wake"` 决策类型、`PopulationRegistry.retire()`**
-  已经存在于类型系统里，但尚无任何触发源会产生它们——留给后续任务接入
-  具体触发条件。
-- 邮件之外的具体设备控制器（`DeviceStatusProvider`/`ServiceController`
-  真实实现）仍是可注入的接口占位，`src/tools/device-tools.ts` 明确标注
-  「生产环境接线在本任务范围之外」。
-
-以上均不影响当前已实现功能的正确性——全部由测试覆盖，只是刻意还没往
-下一层深挖的方向。
-
-
-## 近期路线图
-### P0 — 直接影响正确性/一致性，工作量小
-1. [x] RpcChamber 模型路由收尾（**2026-07-26 完成**）：`createPiRpcProcessSpawner()` 现在复用 `resolveRoleModel()`（走 `catalog.getAvailable()` 校验），读取隔离角色 genome 的 `modelPolicy.preferredClass` 而不是写死 `anthropic:default`。配错在子进程 spawn 前就显式抛 `UnresolvedRoleModelError`，不会静默退化——和常驻角色那半保持同一条设计原则。副作用：spawner 签名从同步改为可 async，`RpcChamber.spawn()` 加了 `pendingSpawns` 预留计数以保住并发场景下的容量上限（见 `rpc-chamber.test.ts` 新增的并发用例）。测试：`test/isolation/rpc-chamber.test.ts`（28 tests，含 3 个新增的 async-spawner/并发用例 + 3 个新增的 model-routing 用例）。
-
-### P0 — 影响审计/合规，当前纯内存有丢失风险
-2. [x] CapabilityGateway 提权持久化接线（**2026-07-27 完成**）：新增 `src/tools/diplomacy-persistence.ts` 的 `createDiplomacyPersistenceHooks()`，把 onLog/onElevationRequested/onElevationResolved 接到新迁移的 `diplomacy_log`/`diplomacy_pending_elevations`/`diplomacy_elevation_approvals` 三张表（migrations.ts version 3，`src/storage/database.ts`/`db-worker.ts` 新增 `diplomacy.log`/`diplomacy.elevation-requested`/`diplomacy.elevation-resolved` 三个写命令 + 三个 `*.list` 读命令），并把 `diplomacy.elevation.requested`/`resolved` 这两个协议里已定义好的 RealtimeEvent 经 `server.broadcast()` 真正 emit 出去。测试：`test/storage/database.test.ts`（+6 用例）、`test/tools/diplomacy-persistence.test.ts`（新增，8 用例）。已知留白：出站事件 `sequence` 只是进程内计数器，非跨重启持久化序号（见该模块 doc comment）。
-
-### P1 — 生态治理的数据闭环，装配层缺失
-3. [x] Ecology 状态持久化装配（**2026-07-27 部分完成**）：新增 `TaskNest.onTerminalTransition` 钩子 + `src/tasks/task-assimilation.ts`/`src/ecology/role-experience.ts`，任务终态时调用 `task.assimilate` 写 `task_outcome` fitness delta 并驱动 `evaluateRoleLifecycle()`。诚实标注的剩余缺口：`pheromone`/`memory` 两个字段目前固定 `null`（真实信号源不存在，未编造）；且本仓库仍没有任何代码真正把一个任务从 pending 推进到终态——这条钩子已经就位、测试覆盖完整，但要等一个更大的、路线图之外的"任务执行循环"任务补上才会在真实运行中被触发。见 README 上方"已知缺口"一节的完整说明。
-4. [x] PopulationRegistry.isolationCap 与 RpcChamber.capacity 统一（**2026-07-26 完成，随 #1 一起改**）：`src/index.ts` 构造 `RpcChamber` 时改为 `new RpcChamber({ capacity: population.isolationCap })`，`PopulationRegistry` 成为唯一真源，消除了漂移风险。
-
-### P2 — 功能完整性，非阻塞
-5. [ ] Queen 的 merge/wake 决策 + PopulationRegistry.retire() 触发条件：类型已存在，缺具体触发规则（比如两个角色能力高度重叠时 merge、休眠角色被高频路由命中时 wake）。依赖 #3 的持久化数据（适应度、信息素）才能做出有意义的判断，建议排在 #3 之后。
-6. [x] AgentlyMailClient.watch() 真实流式化（**2026-07-27 完成**）：从单次轮询换成 agently-cli +watch 的 NDJSON 持续流（独立的 AgentlyCliWatchSpawner 长驻子进程 + JsonlDecoder 逐行解析，经真实安装的 CLI 的 `--print-output-schema` 核对过输出结构），stop() 从空操作变成真正 kill() 底层进程；fetch_error/畸形行/stderr/意外退出经新增的 onWatchError 报告。
-
-### P3 — 范围明确排除在外，视产品目标决定是否要做
-7. [ ] 设备控制器真实实现（DeviceStatusProvider/ServiceController）：接口占位已经很完整，缺的是"具体接哪些系统"这个产品决策，工作量取决于目标平台（systemd？launchd？特定 IoT 网关?），建议先明确范围再排期。
-
-进度：1、2、3、4、6 已完成（#3 为部分完成，见其条目里的诚实缺口说明）。剩余 5、7 都需要新的产品/行为决策（具体的 merge/wake/retire 触发规则；设备控制器要接哪个平台），不适合在没有明确决策的情况下自行拍板实现，留给单独开任务讨论范围。
+- 没有任务执行编排循环：本仓库目前没有代码把一个任务从
+  pending/assigned 驱动到终态（分配给角色、拿到结果、判定完成/失败）。
+  `TaskNest.onTerminalTransition` 及其驱动的生态/适应度更新
+  （`src/tasks/task-assimilation.ts`）已实现并测试覆盖，但在真实运行中
+  要等这个执行循环存在才会被触发。
+- `task-assimilation` 写入的 `pheromone`/`memory` 增量固定为 `null`：
+  尚无生成真实信息素 delta（需要 task-feature/device/network 上下文）或
+  真实 memory 内容（需经 `MemoryCurator` 审核）的数据源。
+- `Queen` 的 `"merge"`/`"wake"` 决策、`PopulationRegistry.retire()`：类型
+  已定义，尚无触发规则。
+- `diplomacy-persistence.ts` 广播事件的 `sequence` 是进程内自增计数器，
+  重启后归零，无跨重启的持久化序号源。
+- 邮件之外的设备控制器（`DeviceStatusProvider`/`ServiceController`）仍
+  是可注入的接口占位，未接入具体系统。
+- 真实语音端到端对话、树莓派硬件性能基准：本开发环境没有麦克风/扬声器/
+  真实 LLM 凭据/ARM 硬件，未做人工验证。

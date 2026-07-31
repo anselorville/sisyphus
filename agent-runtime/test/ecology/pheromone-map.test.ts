@@ -150,6 +150,24 @@ describe("evaluateRoleLifecycle (Step 6 promotion/retirement rules)", () => {
     expect(decision.action).toBe("sleep");
   });
 
+  it("retires after 5 consecutive failures instead of merely sleeping (Roadmap #5)", () => {
+    const decision = evaluateRoleLifecycle(snapshot({ consecutiveFailures: 5 }), { nowMs: 0 });
+    expect(decision.action).toBe("retire");
+    expect(decision.reason).toMatch(/5 consecutive failures/);
+  });
+
+  it("still sleeps (not retires) at exactly one below the retire threshold", () => {
+    const decision = evaluateRoleLifecycle(snapshot({ consecutiveFailures: 4 }), { nowMs: 0 });
+    expect(decision.action).toBe("sleep");
+  });
+
+  it("retire wins over an otherwise-qualifying promotion, exactly like sleep does", () => {
+    const decision = evaluateRoleLifecycle(snapshot({ crossTaskSuccessCount: 10, consecutiveFailures: 5 }), {
+      nowMs: 0,
+    });
+    expect(decision.action).toBe("retire");
+  });
+
   it("signals release-session-keep-gene once unused past the threshold", () => {
     const longUnusedThresholdMs = 14 * 24 * 60 * 60 * 1000;
     const decision = evaluateRoleLifecycle(snapshot({ lastUsedAtMs: 0 }), {
