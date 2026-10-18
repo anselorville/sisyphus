@@ -73,4 +73,21 @@ docs/cartesia/voice-call-log.md
 # legitimately-committed same-named assets elsewhere (e.g.
 # docs/minimax/voice-capability-*/assets/output.mp3, a capability sample).
 /output.mp3
-tests/
+
+# Local agent/orchestration state and QA artifacts. These are per-machine
+# runtime data, never source: plan/evidence files from the agent harness,
+# Playwright screenshots/captures, and one-off debug journals.
+.omo/
+.sisyphus/
+.playwright-cli/
+output/
+.debug-journal.md
+
+# NOTE: an earlier `tests/` entry here silently excluded every test file
+# added after the repo's first commit (e.g. test_voice_endpoints.py,
+# tests/realtime/test_pre_synth_queue.py). Tests are source -- never ignore
+# the whole directory. Use `__pycache__/` above for generated files.
+
+# Ad-hoc scratch validation scripts that contain pasted live API keys.
+# Never commit these; rotate the key if they were ever shared.
+tests/validate/
