@@ -90,7 +90,7 @@ const UNVERIFIED_MARKERS = [
   "i think it might",
 ];
 
-const RECEIPT_TEXT = "好的，我在处理。";
+const RECEIPT_TEXT = "嗯，我先看看。";
 const CANCEL_ACK_TEXT = "好的，已经取消了。";
 const DEFAULT_COMPLETED_TEXT = "已经完成了。";
 const DEFAULT_FAILED_TEXT = "遇到问题，任务失败了。";
@@ -191,6 +191,22 @@ export class VoiceHerald {
         // bookkeeping, not part of the allowed-to-speak list.
         return null;
     }
+  }
+
+  /**
+   * Gates a deterministic local phrase that is not represented by a normal
+   * task event, such as a tool-start acknowledgement or an idle filler.
+   * Keeping this seam here preserves Voice Herald's sole-gatekeeper rule.
+   */
+  acceptLocalSpeech(
+    text: string,
+    kind: "receipt" | "progress",
+    taskId?: string,
+  ): SpeechDirective | null {
+    if (isForbiddenContent(text)) {
+      return null;
+    }
+    return { kind, text: text.trim(), taskId };
   }
 
   /**

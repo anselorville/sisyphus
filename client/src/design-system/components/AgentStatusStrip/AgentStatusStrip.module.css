@@ -47,6 +47,28 @@
   min-width: var(--ds-space-2);
 }
 
+.connectButton {
+  flex: none;
+  font-size: var(--ds-font-size-sm);
+  font-weight: var(--ds-font-weight-bold);
+  padding: var(--ds-space-1) var(--ds-space-3);
+  border: 1px solid var(--ds-color-border);
+  border-radius: 999px;
+  background: var(--ds-color-bg-surface);
+  color: var(--ds-color-text-primary);
+  cursor: pointer;
+}
+
+.connectButton:hover {
+  background: var(--ds-color-bg-hover, var(--ds-color-bg-surface));
+  border-color: var(--ds-color-primary-strong);
+}
+
+.connectButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .spin {
   animation: spin 1s linear infinite;
 }

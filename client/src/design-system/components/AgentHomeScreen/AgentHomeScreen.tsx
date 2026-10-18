@@ -1,6 +1,7 @@
 import { TalkButton } from "../TalkButton";
 import { AgentStatusStrip, type AgentActivityState } from "../AgentStatusStrip";
 import { TaskNestPanel } from "../TaskNestPanel";
+import { TranscriptPanel, type TranscriptEntry } from "../TranscriptPanel";
 import { EcologyPanel } from "../EcologyPanel";
 import { ElevationDialog, type ElevationRequest } from "../ElevationDialog";
 import type { ConnectionState } from "../../../hooks/useAgentConnection";
@@ -13,21 +14,22 @@ export interface AgentHomeScreenProps {
   // component, reused here unmodified).
   connectionState: ConnectionState;
   micLevel: number;
-  onConnect: () => void;
-  onDisconnect: () => void;
-  manualTurnMode: boolean;
   micOpen: boolean;
   onToggleMic: () => void;
+
+  // Connection toggle (status strip) -- independent of the mic.
+  onConnect: () => void;
+  onDisconnect: () => void;
 
   // Status strip
   activity: AgentActivityState;
   statusDetail?: string;
 
-  // Tasks
+  // Tasks (Scribe-driven ledger, display-only)
   tasks: readonly AgentTask[];
-  onCancelTask: (taskId: string) => void;
-  onSteerTask: (taskId: string, text: string) => void;
-  onFollowUpTask: (taskId: string, text: string) => void;
+
+  // Live subtitles (user STT in, agent speech out)
+  transcriptEntries: readonly TranscriptEntry[];
 
   // Ecology / budget
   ecology: FoodBand;
@@ -57,15 +59,12 @@ export function AgentHomeScreen({
   micLevel,
   onConnect,
   onDisconnect,
-  manualTurnMode,
   micOpen,
   onToggleMic,
   activity,
   statusDetail,
   tasks,
-  onCancelTask,
-  onSteerTask,
-  onFollowUpTask,
+  transcriptEntries,
   ecology,
   food,
   sidecarConnected,
@@ -80,10 +79,13 @@ export function AgentHomeScreen({
         activity={activity}
         detail={statusDetail}
         ecologyBand={ecology}
+        onConnect={onConnect}
+        onDisconnect={onDisconnect}
       />
 
       <main className={styles.content}>
-        <TaskNestPanel tasks={tasks} onCancel={onCancelTask} onSteer={onSteerTask} onFollowUp={onFollowUpTask} />
+        <TaskNestPanel tasks={tasks} />
+        <TranscriptPanel entries={transcriptEntries} />
         <EcologyPanel ecology={ecology} food={food} sidecarConnected={sidecarConnected} />
       </main>
 
@@ -92,8 +94,6 @@ export function AgentHomeScreen({
           connectionState={connectionState}
           level={micLevel}
           onConnect={onConnect}
-          onDisconnect={onDisconnect}
-          manualTurnMode={manualTurnMode}
           micOpen={micOpen}
           onToggleMic={onToggleMic}
         />

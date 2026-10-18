@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ActiveTaskRef } from "../../src/routing/interruption-router.js";
+import { WEB_ROLE_MANIFEST } from "../../src/roles/manifests.js";
 import type { CapabilityProvider, RouteState } from "../../src/routing/reflex-router.js";
 import { ReflexRouter } from "../../src/routing/reflex-router.js";
 
@@ -100,6 +101,16 @@ describe("ReflexRouter.route priority order", () => {
         stress: { threatensAvailability: true },
       });
       expect(decision.kind).toBe("capability_match");
+    });
+
+    it("routes a dynamic weather request using the Web role manifest capabilities", () => {
+      const decision = router.route("帮我查一下明天上海的天气", {
+        capabilityProviders: [
+          { roleId: WEB_ROLE_MANIFEST.id, capabilities: WEB_ROLE_MANIFEST.capabilities },
+        ],
+      });
+      expect(decision.kind).toBe("capability_match");
+      expect(decision.roleId).toBe("web");
     });
   });
 

@@ -27,6 +27,12 @@ export interface InboundEventRouterOptions {
    * ack" contract; this never throws.
    */
   readonly onIgnored?: (event: RealtimeEvent, reason: string) => void;
+  /**
+   * When provided, called instead of the default taskNest.create() for each
+   * valid transcript. The composition root uses this to delegate to
+   * TaskExecutor.onVoiceTranscript(), which creates AND drives the task.
+   */
+  readonly onTranscript?: (text: string, interactionId: string, sourceEventId: string) => Promise<void>;
 }
 
 /** Reads the one field this router needs from an untyped payload, without assuming any other shape is present. */
@@ -57,10 +63,14 @@ export function createInboundEventRouter(
       return;
     }
 
-    await taskNest.create({
-      goal: text,
-      interactionId: event.interaction_id ?? connectionId,
-      metadata: { sourceEventId: event.event_id },
-    });
+    if (options.onTranscript) {
+      await options.onTranscript(text, event.interaction_id ?? connectionId, event.event_id);
+    } else {
+      await taskNest.create({
+        goal: text,
+        interactionId: event.interaction_id ?? connectionId,
+        metadata: { sourceEventId: event.event_id },
+      });
+    }
   };
 }

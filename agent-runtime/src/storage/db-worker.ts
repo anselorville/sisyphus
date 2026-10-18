@@ -25,6 +25,7 @@ import type {
   DiplomacyElevationApprovalRow,
   DiplomacyLogRow,
   DiplomacyPendingElevationRow,
+  MemorySearchResult,
   TaskAssimilateInput,
   TaskRow,
   WorkerInboundMessage,
@@ -213,6 +214,13 @@ const statements = {
   listDiplomacyElevationApprovals: db.prepare<[], DiplomacyElevationApprovalRow>(
     `SELECT * FROM diplomacy_elevation_approvals ORDER BY id ASC`,
   ),
+  searchMemories: db.prepare<[string, number], MemorySearchResult>(`
+    SELECT key, value, rank
+    FROM memories_fts
+    WHERE memories_fts MATCH ?
+    ORDER BY bm25(memories_fts)
+    LIMIT ?
+  `),
 };
 
 interface AssimilateResult {
@@ -444,6 +452,14 @@ function handleRequest(id: number, command: DbCommand): void {
         flushIfPending();
         const approvals = statements.listDiplomacyElevationApprovals.all();
         postResponse(id, true, { approvals });
+        return;
+      }
+      case "memory.search": {
+        flushIfPending();
+        const results = command.query.trim()
+          ? statements.searchMemories.all(command.query, command.limit)
+          : [];
+        postResponse(id, true, { results });
         return;
       }
       case "task.insert": {

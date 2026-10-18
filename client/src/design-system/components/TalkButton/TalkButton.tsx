@@ -13,19 +13,9 @@ export interface TalkButtonProps {
   /** Mic input level, 0-1. Drives the reactive glow ring while connected. */
   level: number;
   onConnect: () => void;
-  onDisconnect: () => void;
-  /**
-   * Manual turn mode (the default noisy-environment UX): once connected,
-   * this button gates VOICE INPUT (open mic = start a turn, close mic =
-   * "I'm done, translate now") instead of toggling the connection -- the
-   * connection itself is owned by the service switch in the header. When
-   * false (auto/hands-free mode), the button keeps its original
-   * connect/disconnect behavior.
-   */
-  manualTurnMode?: boolean;
-  /** Manual turn mode: whether the mic is currently open. */
+  /** Whether the mic is currently open (voice input flowing). */
   micOpen?: boolean;
-  /** Manual turn mode: toggle the mic open/closed. */
+  /** Toggle the mic open/closed. */
   onToggleMic?: () => void;
 }
 
@@ -48,8 +38,6 @@ export function TalkButton({
   connectionState,
   level,
   onConnect,
-  onDisconnect,
-  manualTurnMode = false,
   micOpen = false,
   onToggleMic,
 }: TalkButtonProps) {
@@ -57,30 +45,26 @@ export function TalkButton({
   const isConnecting = connectionState === "connecting";
   const clampedLevel = Math.min(1, Math.max(0, level));
 
-  // Visual state: manual mode adds "ready" (connected, mic closed --
-  // service is up but nothing is listening) on top of the original four.
-  const visualState = manualTurnMode && isConnected && !micOpen ? "ready" : connectionState;
+  // Visual state once connected is driven by the mic, in both turn modes:
+  // "ready" (mic closed) vs "connected" (mic open). The connection state
+  // itself lives in the header switch, so the talk button's own state is
+  // always "what will tapping do to the mic".
+  const visualState = isConnected && !micOpen ? "ready" : connectionState;
 
   const label = (() => {
-    if (!manualTurnMode || !isConnected) return CONNECT_LABEL[connectionState];
-    return micOpen ? "Tap when done" : "Tap to talk";
+    if (!isConnected) return CONNECT_LABEL[connectionState];
+    return micOpen ? "Tap to mute" : "Tap to talk";
   })();
 
   const handleClick = (() => {
-    if (manualTurnMode) {
-      if (isConnected) return onToggleMic ?? (() => {});
-      return onConnect; // not connected yet: first tap still brings the service up
-    }
-    return isConnected ? onDisconnect : onConnect;
+    if (!isConnected) return onConnect;
+    return onToggleMic ?? (() => {});
   })();
 
   const icon = (() => {
-    if (isConnecting) return <Spinner size={32} aria-label="Connecting" />;
-    if (connectionState === "error") return <AlertTriangle size={32} strokeWidth={2} />;
-    if (manualTurnMode && isConnected) {
-      return micOpen ? <Mic size={32} strokeWidth={2} /> : <MicOff size={32} strokeWidth={2} />;
-    }
-    return isConnected ? <Mic size={32} strokeWidth={2} /> : <MicOff size={32} strokeWidth={2} />;
+    if (isConnecting) return <Spinner size={26} aria-label="Connecting" />;
+    if (connectionState === "error") return <AlertTriangle size={26} strokeWidth={2} />;
+    return isConnected && !micOpen ? <MicOff size={26} strokeWidth={2} /> : <Mic size={26} strokeWidth={2} />;
   })();
 
   return (
@@ -92,7 +76,7 @@ export function TalkButton({
         style={{ "--ds-talk-level": clampedLevel } as TalkButtonStyle}
         onClick={handleClick}
         disabled={isConnecting}
-        aria-pressed={manualTurnMode ? micOpen : isConnected}
+        aria-pressed={isConnected && micOpen}
         aria-label={label}
       >
         <span className={styles.glow} aria-hidden="true" />

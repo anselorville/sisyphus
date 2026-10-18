@@ -36,6 +36,36 @@ SpeechKind = Literal["progress", "ack", "final", "elevation", "budget"]
 
 DEFAULT_CAPACITY = 32
 
+_DIRECTIVE_KIND_BY_NAME: dict[str, SpeechKind] = {
+    "receipt": "ack",
+    "progress": "progress",
+    "final": "final",
+    "elevation": "elevation",
+    "budget": "budget",
+    "error": "final",
+    "hibernation": "budget",
+}
+
+_SPEECH_PRIORITIES: dict[SpeechKind, int] = {
+    "progress": 10,
+    "ack": 20,
+    "budget": 80,
+    "final": 100,
+    "elevation": 100,
+}
+
+
+def speech_kind_from_directive(value: str | None) -> SpeechKind:
+    """Map the sidecar's SpeechDirective kind to the local queue contract."""
+    if value is None:
+        return "final"
+    return _DIRECTIVE_KIND_BY_NAME.get(value, "final")
+
+
+def speech_priority(kind: SpeechKind) -> int:
+    """Return the local priority used to order sidecar speech requests."""
+    return _SPEECH_PRIORITIES[kind]
+
 # Kinds that represent state the agent must never silently lose. Enqueuing
 # one of these when the queue is full applies backpressure (blocks the
 # producer) instead of dropping it -- see SpeechQueue.enqueue().
@@ -47,6 +77,16 @@ class SpeechRequest(msgspec.Struct, frozen=True):
     kind: SpeechKind
     task_id: str
     priority: int
+
+
+def speech_request_from_directive(
+    text: str,
+    task_id: str,
+    directive_kind: str | None,
+) -> SpeechRequest:
+    """Build a queue request from one sidecar speech directive."""
+    kind = speech_kind_from_directive(directive_kind)
+    return SpeechRequest(text=text, kind=kind, task_id=task_id, priority=speech_priority(kind))
 
 
 class SpeechQueue:

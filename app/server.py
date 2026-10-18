@@ -18,7 +18,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import secrets
+import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -66,7 +69,8 @@ from app.model_settings import (
 )
 from app.providers import select_engine, stt_provider_name, tts_provider_name
 from app.realtime.event_bridge import SidecarEventBridge
-from app.realtime.media_pipeline import build_pipeline_worker
+from app.realtime.speech_queue import SpeechQueue, speech_request_from_directive
+from app.realtime.media_pipeline import build_media_pipeline, build_pipeline_worker
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -877,12 +881,116 @@ async def run_bot(
 ) -> None:
     """Build and run the media plane for one WebRTC connection."""
     settings = load_settings()
-    logger.info("Starting voice-agent media pipeline for new connection")
-    worker = build_pipeline_worker(webrtc_connection, settings, agent_link=None)
+    conn_id = getattr(webrtc_connection, "pc_id", "unknown")
+    logger.info(f"[conn:{conn_id}] Starting voice-agent media pipeline")
+
+    bridge = app.state.event_bridge
+    logger.info(f"Event bridge: {bridge}, connected: {bridge.is_connected if bridge else 'N/A'}")
+
+    # Dedup window for STT finals: streaming STT (esp. after VAD stop) can
+    # emit the same final transcript twice within milliseconds. The same
+    # text within this window is treated as one utterance -- otherwise the
+    # agent gets asked the same question twice and the user hears a double
+    # reply. Per-connection state; resets on reconnect.
+    _last_final_text = ""
+    _last_final_at = 0.0
+    _DEDUP_WINDOW_S = 3.0
+
+    async def event_sink(event) -> None:
+        nonlocal _last_final_text, _last_final_at
+        # Echo the user's STT transcript back to the page for the input
+        # subtitle stream, then forward it to the sidecar as-is.
+        if event.type == "voice.transcript.final":
+            text = event.payload.get("text", "")
+            now = time.monotonic()
+            if text and text == _last_final_text and (now - _last_final_at) < _DEDUP_WINDOW_S:
+                logger.info(f"[dedup] dropped duplicate transcript: {text}")
+                return
+            _last_final_text = text
+            _last_final_at = now
+            logger.info(f"[subtitles] USER -> agent: {text}")
+            try:
+                webrtc_connection.send_app_message({
+                    "type": "user.transcript",
+                    "text": text,
+                    "timestamp": event.timestamp,
+                })
+            except Exception:
+                pass
+        if bridge is not None:
+            await bridge.send(event)
+
+    speech_queue_holder: list[SpeechQueue] = []
+    worker = build_pipeline_worker(
+        webrtc_connection, settings, agent_link=None, event_sink=event_sink,
+        speech_queue_sink=speech_queue_holder,
+    )
+    speech_queue = speech_queue_holder[0] if speech_queue_holder else None
+
+    forwarder_task: asyncio.Task[None] | None = None
+    if bridge and speech_queue is not None:
+        async def _forward_sidecar_events() -> None:
+            try:
+                async for event in bridge.events():
+                    if event.type == "voice.speech.enqueue":
+                        raw_text = event.payload.get("text")
+                        if isinstance(raw_text, str) and raw_text:
+                            text = raw_text
+                            logger.info(f"[subtitles] AGENT -> TTS: {text[:100]}")
+                            raw_task_id = event.task_id or event.payload.get("task_id")
+                            task_id = raw_task_id if isinstance(raw_task_id, str) else "unknown"
+                            raw_kind = event.payload.get("kind")
+                            directive_kind = raw_kind if isinstance(raw_kind, str) else None
+                            await speech_queue.enqueue(
+                                speech_request_from_directive(text, task_id, directive_kind),
+                            )
+                            try:
+                                webrtc_connection.send_app_message({
+                                    "type": "agent.transcript",
+                                    "text": text,
+                                    "task_id": event.task_id,
+                                    "timestamp": event.timestamp,
+                                })
+                            except Exception:
+                                pass
+                    # Forward task lifecycle events to the browser over the
+                    # WebRTC data channel for streaming transcript display.
+                    if event.type in ("task.created", "task.assigned", "task.progress", "task.completed", "task.failed", "task.cancelled", "session.topics.updated"):
+                        wire = {
+                            "type": event.type,
+                            "timestamp": event.timestamp,
+                        }
+                        if event.type != "session.topics.updated":
+                            wire["task_id"] = event.task_id
+                        if event.type == "task.created" and event.payload.get("goal"):
+                            wire["goal"] = event.payload["goal"]
+                        if event.type == "task.assigned" and event.payload.get("role_id"):
+                            wire["role_id"] = event.payload["role_id"]
+                        if event.type == "task.progress" and event.payload.get("text"):
+                            wire["text"] = event.payload["text"]
+                        if event.type == "task.completed" and event.payload.get("summary"):
+                            wire["summary"] = event.payload["summary"]
+                        if event.type == "task.failed" and event.payload.get("reason"):
+                            wire["reason"] = event.payload["reason"]
+                        if event.type == "session.topics.updated" and "topics" in event.payload:
+                            wire["topics"] = event.payload["topics"]
+                        try:
+                            webrtc_connection.send_app_message(wire)
+                        except Exception:
+                            pass
+            except Exception as exc:
+                logger.warning(f"Sidecar event forwarder stopped: {exc}")
+        forwarder_task = asyncio.create_task(_forward_sidecar_events())
 
     @webrtc_connection.event_handler("closed")
     async def _on_closed(connection: SmallWebRTCConnection) -> None:
-        logger.info("Connection closed, cancelling pipeline worker")
+        logger.info(f"[conn:{conn_id}] Connection closed, cancelling pipeline worker")
+        if forwarder_task is not None:
+            forwarder_task.cancel()
+            try:
+                await forwarder_task
+            except asyncio.CancelledError:
+                pass
         await worker.cancel()
 
     runner = WorkerRunner(handle_sigint=False)
@@ -927,8 +1035,13 @@ async def offer(request: dict, background_tasks: BackgroundTasks):
 
 def main() -> None:
     settings = load_settings()
-    logger.info(f"Starting Sisyphus voice-agent server on {settings.webrtc_host}:{settings.webrtc_port}")
-    uvicorn.run(app, host=settings.webrtc_host, port=settings.webrtc_port)
+    log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+    from loguru import logger as _logger
+
+    _logger.remove()
+    _logger.add(sys.stderr, level=log_level)
+    logger.info(f"Starting Sisyphus voice-agent server on {settings.webrtc_host}:{settings.webrtc_port} (log level: {log_level})")
+    uvicorn.run(app, host=settings.webrtc_host, port=settings.webrtc_port, log_level=log_level.lower())
 
 
 if __name__ == "__main__":

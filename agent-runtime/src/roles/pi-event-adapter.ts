@@ -27,6 +27,32 @@ export interface PiEventAdapterOptions {
   readonly flushIntervalMs: number;
 }
 
+// Sentence boundaries used to split streaming text into speakable chunks:
+// Chinese/Japanese sentence-final punctuation, Western terminal punctuation
+// (but NOT the "1." of a numbered list -- negative lookbehind excludes a
+// dot preceded by a digit), and newline breaks (markdown paragraphs from
+// the LLM are sentence boundaries too -- a newline usually ends a coherent
+// utterance).
+const SENTENCE_END_RE = /[。！？!?；;…]+|(?<!\d)[.!?]+(?:\s|$)|(?:\n\s*\n)/;
+
+// Secondary breaks used to split an over-long sentence (one that would
+// exceed the voice herald's speakable-length cap and get dropped entirely):
+// commas, semicolons, and the Chinese enumeration comma (顿号). Splitting
+// here keeps every chunk speakable instead of losing a whole paragraph to
+// the length filter.
+const CLAUSE_BREAK_RE = /[，,；;、]/g;
+
+// Soft cap: keep each emitted chunk comfortably under VoiceHerald's
+// MAX_SPEAKABLE_LENGTH (160) so the herald never rejects it wholesale.
+const MAX_CHUNK_LENGTH = 150;
+
+// Normalizes a chunk for speech: collapses internal newlines to a comma so
+// a multi-line list ("1. 巴西\n2. 阿根廷\n...") never trips VoiceHerald's
+// 3-newline reject rule and reads naturally when spoken.
+function normalizeForSpeech(text: string): string {
+  return text.replace(/\n+/g, "，");
+}
+
 export class PiEventAdapter {
   readonly flushIntervalMs: number;
   private pendingText = "";
@@ -109,16 +135,112 @@ export class PiEventAdapter {
   }
 
   /**
-   * Drains buffered text_delta text into one aggregated `task.progress`
-   * update, or returns `undefined` if nothing is pending. Intended to be
-   * called on the owner's flushIntervalMs timer -- never per-token.
+   * Drains buffered text_delta text into aggregated, sentence-complete
+   * `task.progress` updates, or returns `undefined` if nothing is pending.
+   *
+   * Sentence-aware (unlike a plain time-slice flush): only complete
+   * sentences are emitted -- a trailing half-sentence is kept buffered so
+   * TTS never receives chopped "一个字/词组" fragments. The buffered tail
+   * is only released wholesale on agent_end via flushAll().
    */
   flush(): MappedPiUpdate | undefined {
+    const complete = this.takeCompleteSentences();
+    return complete === undefined ? undefined : { type: "task.progress", payload: { text: normalizeForSpeech(complete) } };
+  }
+
+  /**
+   * Emits everything still buffered as length-capped chunks -- called once
+   * on agent_end so the final utterance is not lost. Unlike a raw dump,
+   * it never emits one giant blob (which VoiceHerald's length cap would
+   * reject wholesale); it drains takeCompleteSentences repeatedly, and
+   * force-cuts any long sentence-final tail.
+   */
+  flushAll(): MappedPiUpdate[] {
+    const chunks: string[] = [];
+    for (;;) {
+      const chunk = this.takeCompleteSentences();
+      if (chunk !== undefined) {
+        chunks.push(chunk);
+        continue;
+      }
+      // No sentence boundary remains in the tail (e.g. a short fragment or
+      // a comma-separated list the LLM never punctuated). Emit it: short
+      // tails go wholesale, long ones are force-cut at clause breaks so
+      // VoiceHerald's length cap never rejects the whole blob.
+      if (this.pendingText === "") {
+        break;
+      }
+      const forced = this.cutToChunk(this.pendingText) ?? {
+        chunk: this.pendingText,
+        remainder: "",
+      };
+      chunks.push(forced.chunk);
+      this.pendingText = forced.remainder;
+      if (forced.remainder === "") {
+        break;
+      }
+    }
+    return chunks.map((text) => ({ type: "task.progress", payload: { text: normalizeForSpeech(text) } } as MappedPiUpdate));
+  }
+
+  private takeCompleteSentences(): string | undefined {
     if (this.pendingText === "") {
       return undefined;
     }
-    const text = this.pendingText;
-    this.pendingText = "";
-    return { type: "task.progress", payload: { text } };
+    const match = this.pendingText.match(SENTENCE_END_RE);
+    if (!match || match.index === undefined) {
+      return undefined;
+    }
+    const firstEnd = match.index + match[0].length;
+    let complete = this.pendingText.slice(0, firstEnd).trim();
+    let remainder = this.pendingText.slice(firstEnd);
+
+    // An over-long sentence would be rejected by VoiceHerald's length cap
+    // and lost entirely -- split it at clause boundaries (commas/semicolons)
+    // so every chunk stays speakable.
+    if (complete.length > MAX_CHUNK_LENGTH) {
+      let cut = -1;
+      CLAUSE_BREAK_RE.lastIndex = 0;
+      const clauseMatches = [...complete.matchAll(CLAUSE_BREAK_RE)];
+      for (const clause of clauseMatches) {
+        if ((clause.index ?? 0) + 1 >= MAX_CHUNK_LENGTH) {
+          break;
+        }
+        cut = (clause.index ?? 0) + 1;
+      }
+      if (cut > 0) {
+        const head = complete.slice(0, cut).trim();
+        const tail = complete.slice(cut).trim();
+        if (head !== "") {
+          complete = head;
+          remainder = `${tail}${remainder}`;
+        }
+      }
+    }
+
+    this.pendingText = remainder.trimStart();
+    return complete === "" ? undefined : complete;
+  }
+
+  /** Cuts `text` at the last clause break within MAX_CHUNK_LENGTH, else hard-cuts. Returns {chunk, remainder}. */
+  private cutToChunk(text: string): { chunk: string; remainder: string } | undefined {
+    if (text === "") {
+      return undefined;
+    }
+    let cut = -1;
+    CLAUSE_BREAK_RE.lastIndex = 0;
+    const clauseMatches = [...text.matchAll(CLAUSE_BREAK_RE)];
+    for (const clause of clauseMatches) {
+      if ((clause.index ?? 0) + 1 >= MAX_CHUNK_LENGTH) {
+        break;
+      }
+      cut = (clause.index ?? 0) + 1;
+    }
+    if (cut <= 0) {
+      cut = Math.min(MAX_CHUNK_LENGTH, text.length);
+    }
+    const chunk = text.slice(0, cut).trim();
+    const remainder = text.slice(cut).trimStart();
+    return chunk === "" ? undefined : { chunk, remainder };
   }
 }

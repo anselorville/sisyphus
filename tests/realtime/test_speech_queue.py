@@ -6,7 +6,34 @@ from pipecat.processors.frame_processor import FrameDirection
 from pipecat.tests.utils import SleepFrame, run_test
 
 from app.realtime.queueing import QueueClosed
-from app.realtime.speech_queue import SpeechQueue, SpeechQueueProcessor, SpeechRequest
+from app.realtime.speech_queue import (
+    SpeechQueue,
+    SpeechQueueProcessor,
+    SpeechRequest,
+    speech_kind_from_directive,
+    speech_priority,
+    speech_request_from_directive,
+)
+
+
+def test_sidecar_speech_directives_map_to_preemptible_queue_kinds() -> None:
+    assert speech_kind_from_directive("receipt") == "ack"
+    assert speech_kind_from_directive("progress") == "progress"
+    assert speech_kind_from_directive("final") == "final"
+    assert speech_kind_from_directive("error") == "final"
+    assert speech_kind_from_directive(None) == "final"
+
+
+def test_sidecar_speech_priorities_keep_filler_below_ack_and_final() -> None:
+    assert speech_priority("progress") < speech_priority("ack") < speech_priority("final")
+    assert speech_priority("elevation") == speech_priority("final")
+
+
+def test_sidecar_speech_request_preserves_kind_and_priority() -> None:
+    request = speech_request_from_directive("我查一下。", "task-1", "receipt")
+
+    assert (request.text, request.kind, request.task_id) == ("我查一下。", "ack", "task-1")
+    assert request.priority == speech_priority("ack")
 
 
 @pytest.mark.asyncio

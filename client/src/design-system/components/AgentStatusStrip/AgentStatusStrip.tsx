@@ -28,6 +28,9 @@ export interface AgentStatusStripProps {
    */
   detail?: string;
   ecologyBand: FoodBand;
+  /** Toggles the WebRTC connection. Passed by the parent; hidden while connecting. */
+  onConnect: () => void;
+  onDisconnect: () => void;
 }
 
 const ACTIVITY_ICON: Record<AgentActivityState, ReactNode> = {
@@ -69,7 +72,15 @@ const ECOLOGY_LABEL: Record<FoodBand, string> = {
  * companion to EcologyPanel's fuller breakdown -- together they satisfy the
  * plan's "concise ecology status + food level" requirement.
  */
-export function AgentStatusStrip({ connectionState, activity, detail, ecologyBand }: AgentStatusStripProps) {
+export function AgentStatusStrip({
+  connectionState,
+  activity,
+  detail,
+  ecologyBand,
+  onConnect,
+  onDisconnect,
+}: AgentStatusStripProps) {
+  const isConnected = connectionState === "connected";
   return (
     <div className={styles.strip} data-activity={activity}>
       <ConnectionStatusBadge connectionState={connectionState} />
@@ -79,6 +90,15 @@ export function AgentStatusStrip({ connectionState, activity, detail, ecologyBan
         {detail && <span className={styles.detail}>{detail}</span>}
       </span>
       <span className={styles.spacer} />
+      {connectionState !== "connecting" && (
+        <button
+          type="button"
+          className={styles.connectButton}
+          onClick={isConnected ? onDisconnect : onConnect}
+        >
+          {isConnected ? "Disconnect" : "Connect"}
+        </button>
+      )}
       <Badge tone={ECOLOGY_TONE[ecologyBand]}>{ECOLOGY_LABEL[ecologyBand]}</Badge>
     </div>
   );

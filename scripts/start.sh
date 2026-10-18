@@ -92,6 +92,24 @@ wait_for_port() {
   return 1
 }
 
+# Wait for a port to actually be FREE after a kill. Without this, a new
+# process launched right after kill_port can fail silently (EADDRINUSE)
+# while the OLD process -- still holding the port -- keeps serving stale
+# code. That is exactly the "修复不生效" trap: the fix is in the new code,
+# but the old process is what answers requests. See docs/lessons-learned.md.
+wait_port_free() {
+  local port="$1"
+  local tries=0
+  while (( tries < 30 )); do
+    if ! lsof -ti ":${port}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.5
+    tries=$((tries + 1))
+  done
+  return 1
+}
+
 echo "==> Stopping any existing services..."
 kill_port "$SIDECAR_PORT" "sidecar"
 kill_port "$BACKEND_PORT" "backend"
@@ -102,6 +120,12 @@ kill_port "$FRONTEND_PORT" "frontend"
 pkill -f "agent-runtime/dist/index.js" 2>/dev/null || true
 pkill -f "python -m app.server" 2>/dev/null || true
 pkill -f "vite.*--prefix client" 2>/dev/null || true
+
+# Make sure every port is actually free before launching replacements --
+# see wait_port_free's doc comment for why this matters (stale-process trap).
+wait_port_free "$SIDECAR_PORT" || true
+wait_port_free "$BACKEND_PORT" || true
+wait_port_free "$FRONTEND_PORT" || true
 
 if [[ "${1:-}" == "stop" ]]; then
   echo "==> Stopped. (start nothing: 'stop' given)"

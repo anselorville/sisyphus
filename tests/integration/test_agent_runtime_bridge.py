@@ -257,7 +257,7 @@ async def test_sidecar_crash_recovers_exactly_one_task(sidecar_built, tmp_path) 
 
         assert len(rows) == 1, f"expected exactly one recovered task, got {rows!r}"
         assert rows[0]["goal"] == event.payload["text"]
-        assert rows[0]["status"] == "pending"
+        assert rows[0]["status"] == "running"
 
         # The bridge's own bookkeeping agrees: redelivered and acked
         # exactly once -- nothing left pending-ack for this event.

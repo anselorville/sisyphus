@@ -119,6 +119,14 @@ class PiManagedRoleSession implements ManagedRoleSession {
       const mapped = this.adapter.accept(event);
       if (mapped) {
         this.broadcast(mapped);
+        // agent_end: release any sentence-incomplete tail buffered by the
+        // sentence-aware flush, so the final utterance is not lost. flushAll
+        // returns length-capped chunks, each broadcast separately.
+        if (mapped.type === "task.completed") {
+          for (const chunk of this.adapter.flushAll()) {
+            this.broadcast(chunk);
+          }
+        }
       }
     });
     this.trackDisposer(unsubscribe);
@@ -409,6 +417,8 @@ export interface DefaultPiSessionProviderOptions {
   readonly modelRouting?: RoleModelClassRouting;
   /** Shared ModelRuntime every role's session (and modelClass resolution) is built against. Inject a fake (satisfying ../roles/model-routing.ts's ModelCatalog) in tests; default: one real `ModelRuntime.create({ agentDir })`, built lazily on first use and reused for every subsequent role so the auth/model catalog is only ever loaded once per process. */
   readonly modelRuntime?: ModelRuntime;
+  /** Custom tool definitions to register with each role's Pi Session. Merged with the role's built-in tools. */
+  readonly customTools?: import("@earendil-works/pi-coding-agent").ToolDefinition[];
 }
 
 /**
@@ -467,6 +477,7 @@ export function createDefaultPiSessionProvider(
       resourceLoader,
       sessionManager,
       tools: [...manifest.tools],
+      customTools: options.customTools,
       thinkingLevel: manifest.thinkingLevel,
     });
 

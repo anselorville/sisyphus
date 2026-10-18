@@ -1,200 +1,204 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { CircleAlert, CircleCheck, Hourglass, ListTodo, Loader2, Pause, Send, X } from "lucide-react";
-import { Badge, type BadgeTone } from "../../primitives/Badge";
-import { Button } from "../../primitives/Button";
+import { CircleAlert, CircleCheck, CircleMinus, CirclePause, CirclePlay, Hourglass, ListTodo, Loader2 } from "lucide-react";
 import type { AgentTask, AgentTaskStatus } from "../../../hooks/useAgentTasks";
 import styles from "./TaskNestPanel.module.css";
 
 export interface TaskNestPanelProps {
   tasks: readonly AgentTask[];
-  onCancel: (taskId: string) => void;
-  onSteer: (taskId: string, text: string) => void;
-  onFollowUp: (taskId: string, text: string) => void;
 }
 
-const ACTIVE_STATUSES: ReadonlySet<AgentTaskStatus> = new Set(["assigned", "running", "blocked"]);
-const DONE_STATUSES: ReadonlySet<AgentTaskStatus> = new Set(["completed", "failed", "cancelled"]);
-const MAX_DONE_SHOWN = 4;
+const ROTATE_INTERVAL_MS = 4000;
+const VISIBLE_COUNT = 2; // 1.5 cards visible: one full card + half a card peek
 
-const STATUS_ICON: Record<AgentTaskStatus, ReactNode> = {
-  pending: <Hourglass size={14} />,
-  assigned: <Hourglass size={14} />,
-  running: <Loader2 size={14} className={styles.spin} />,
-  blocked: <Pause size={14} />,
-  completed: <CircleCheck size={14} />,
-  failed: <CircleAlert size={14} />,
-  cancelled: <X size={14} />,
-};
-
-const STATUS_TONE: Record<AgentTaskStatus, BadgeTone> = {
-  pending: "neutral",
-  assigned: "accent",
-  running: "primary",
-  blocked: "accent",
-  completed: "secondary",
-  failed: "danger",
+const STATUS_TONE: Record<AgentTaskStatus, "pending" | "running" | "done" | "failed" | "neutral"> = {
+  pending: "pending",
+  assigned: "pending",
+  running: "running",
+  blocked: "pending",
+  completed: "done",
+  failed: "failed",
   cancelled: "neutral",
 };
 
-const STATUS_LABEL: Record<AgentTaskStatus, string> = {
-  pending: "Queued",
-  assigned: "Assigned",
-  running: "Running",
-  blocked: "Blocked",
-  completed: "Completed",
-  failed: "Failed",
-  cancelled: "Cancelled",
+const STATUS_ICON: Record<AgentTaskStatus, ReactNode> = {
+  pending: <Hourglass size={13} />,
+  assigned: <Hourglass size={13} />,
+  running: <Loader2 size={13} className={styles.spin} />,
+  blocked: <Hourglass size={13} />,
+  completed: <CircleCheck size={13} />,
+  failed: <CircleAlert size={13} />,
+  cancelled: <CircleMinus size={13} />,
 };
 
-/**
- * Current task(s) and queue. Groups the flat task list into Active (assigned
- * / running / blocked), Queued (pending), and a short recent Done tail
- * (completed / failed / cancelled, capped at MAX_DONE_SHOWN) -- rather than
- * having the underlying hook pre-split the list, this presentational
- * component owns the grouping so Storybook fixtures can just be a flat
- * array.
- */
-export function TaskNestPanel({ tasks, onCancel, onSteer, onFollowUp }: TaskNestPanelProps) {
-  const active = tasks.filter((task) => ACTIVE_STATUSES.has(task.status));
-  const queued = tasks.filter((task) => task.status === "pending");
-  const done = tasks.filter((task) => DONE_STATUSES.has(task.status)).slice(-MAX_DONE_SHOWN).reverse();
+const STATUS_LABEL: Record<AgentTaskStatus, string> = {
+  pending: "进行中",
+  assigned: "准备中",
+  running: "处理中",
+  blocked: "等待确认",
+  completed: "已结束",
+  failed: "需要重试",
+  cancelled: "已取消",
+};
 
-  if (tasks.length === 0) {
+export interface RotationPauseState {
+  readonly hovered: boolean;
+  readonly focused: boolean;
+  readonly explicitlyPaused: boolean;
+}
+
+export function shouldPauseRotation(state: RotationPauseState): boolean {
+  return state.hovered || state.focused || state.explicitlyPaused;
+}
+
+export function getPreferredWindowStart(tasks: readonly AgentTask[], requestedIndex: number): number {
+  const maxIndex = Math.max(0, tasks.length - VISIBLE_COUNT);
+  const activeIndex = tasks.findIndex((task) => task.status === "pending" || task.status === "running");
+  const preferredIndex = activeIndex === -1 ? requestedIndex : activeIndex - (VISIBLE_COUNT - 1);
+  return Math.min(Math.max(0, preferredIndex), maxIndex);
+}
+
+export function getVisibleTaskIndexes(tasks: readonly AgentTask[], companionOffset: number): readonly number[] {
+  if (tasks.length <= VISIBLE_COUNT) return tasks.map((_, taskIndex) => taskIndex);
+
+  const activeIndex = tasks.findIndex((task) => task.status === "pending" || task.status === "running");
+  if (activeIndex === -1) {
+    const start = getPreferredWindowStart(tasks, companionOffset);
+    return [start, start + 1];
+  }
+
+  const companions = tasks.flatMap((_, taskIndex) => (taskIndex === activeIndex ? [] : [taskIndex]));
+  const companionIndex = companions[companionOffset % companions.length];
+  return companionIndex === undefined ? [activeIndex] : [activeIndex, companionIndex];
+}
+
+function usePrefersReducedMotion(): boolean {
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const update = () => setPrefersReducedMotion(mediaQuery.matches);
+    update();
+    mediaQuery.addEventListener("change", update);
+    return () => mediaQuery.removeEventListener("change", update);
+  }, []);
+
+  return prefersReducedMotion;
+}
+
+/**
+ * Scribe topics as a cylinder ("滚筒"): a compact vertical carousel showing 1.5
+ * cards at once with no scrollbar. The visible window auto-rotates through
+ * the ledger every few seconds (paused on hover), so the whole session's
+ * task list is discoverable in a small fixed-height strip and the remaining
+ * screen height goes to the live transcript. Display-only: the ledger is
+ * produced by the Scribe agent, not by user interaction here.
+ */
+export function TaskNestPanel({ tasks }: TaskNestPanelProps) {
+  const prefersReducedMotion = usePrefersReducedMotion();
+  const [index, setIndex] = useState(0);
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [explicitlyPaused, setExplicitlyPaused] = useState(false);
+  const count = tasks.length;
+  const paused = shouldPauseRotation({ hovered, focused, explicitlyPaused });
+
+  useEffect(() => {
+    if (count <= VISIBLE_COUNT || prefersReducedMotion || paused) return;
+    const timer = setInterval(() => {
+      if (!paused) {
+        setIndex((i) => (i + 1) % Math.max(1, count - 1));
+      }
+    }, ROTATE_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [count, paused, prefersReducedMotion]);
+
+  useEffect(() => {
+    setIndex(0);
+  }, [tasks]);
+
+  if (count === 0) {
     return (
-      <section className={styles.panel} aria-label="Tasks">
+      <section className={styles.panel} aria-label="会话话题">
         <h2 className={styles.heading}>
-          <ListTodo size={16} /> Tasks
+          <ListTodo size={14} />
+          <span className={styles.headingCopy}>
+            <span className={styles.headingTitle}>会话话题</span>
+            <span className={styles.headingHint}>书记员按顺序整理</span>
+          </span>
         </h2>
-        <p className={styles.empty}>No active tasks. Ask me to do something to get started.</p>
+        <p className={styles.empty}>等待书记员整理本次会话…</p>
       </section>
     );
   }
 
+  const visible = getVisibleTaskIndexes(tasks, index).flatMap((taskIndex, visibleIndex) => {
+    const task = tasks[taskIndex];
+    return task === undefined ? [] : [{ task, isPeek: visibleIndex === 1 }];
+  });
+
   return (
-    <section className={styles.panel} aria-label="Tasks">
+    <section
+      className={styles.panel}
+      aria-label="会话话题"
+      onMouseEnter={() => {
+        setHovered(true);
+      }}
+      onMouseLeave={() => {
+        setHovered(false);
+      }}
+      onFocus={() => {
+        setFocused(true);
+      }}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false);
+      }}
+    >
       <h2 className={styles.heading}>
-        <ListTodo size={16} /> Tasks
+        <ListTodo size={14} />
+        <span className={styles.headingCopy}>
+          <span className={styles.headingTitle}>会话话题</span>
+          <span className={styles.headingHint}>书记员按顺序整理</span>
+        </span>
+        <span className={styles.count}>{count}</span>
+        {count > VISIBLE_COUNT && !prefersReducedMotion && (
+          <button
+            className={styles.pauseButton}
+            type="button"
+            aria-label={explicitlyPaused ? "恢复话题轮播" : "暂停话题轮播"}
+            aria-pressed={explicitlyPaused}
+            onClick={() => {
+              setExplicitlyPaused((value) => !value);
+            }}
+          >
+            {explicitlyPaused ? <CirclePlay size={13} /> : <CirclePause size={13} />}
+          </button>
+        )}
       </h2>
 
-      {active.length > 0 && (
-        <ul className={styles.list}>
-          {active.map((task) => (
-            <TaskRow key={task.id} task={task} onCancel={onCancel} onSteer={onSteer} onFollowUp={onFollowUp} />
-          ))}
-        </ul>
-      )}
-
-      {queued.length > 0 && (
-        <div className={styles.group}>
-          <h3 className={styles.groupHeading}>Queued ({queued.length})</h3>
-          <ul className={styles.list}>
-            {queued.map((task) => (
-              <TaskRow key={task.id} task={task} onCancel={onCancel} onSteer={onSteer} onFollowUp={onFollowUp} />
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {done.length > 0 && (
-        <div className={styles.group}>
-          <h3 className={styles.groupHeading}>Recently finished</h3>
-          <ul className={styles.list}>
-            {done.map((task) => (
-              <TaskRow key={task.id} task={task} onCancel={onCancel} onSteer={onSteer} onFollowUp={onFollowUp} muted />
-            ))}
-          </ul>
-        </div>
-      )}
-    </section>
-  );
-}
-
-interface TaskRowProps {
-  task: AgentTask;
-  onCancel: (taskId: string) => void;
-  onSteer: (taskId: string, text: string) => void;
-  onFollowUp: (taskId: string, text: string) => void;
-  muted?: boolean;
-}
-
-function TaskRow({ task, onCancel, onSteer, onFollowUp, muted = false }: TaskRowProps) {
-  const [messageOpen, setMessageOpen] = useState(false);
-  const [message, setMessage] = useState("");
-  const isTerminal = task.status === "completed" || task.status === "failed" || task.status === "cancelled";
-  // Steering/interrupting a turn only makes sense once a role is actually
-  // mid-turn; queued/assigned-but-not-yet-running tasks can only be
-  // cancelled.
-  const canMessage = task.status === "running";
-
-  const submit = (send: (taskId: string, text: string) => void) => {
-    const trimmed = message.trim();
-    if (trimmed === "") return;
-    send(task.id, trimmed);
-    setMessage("");
-    setMessageOpen(false);
-  };
-
-  return (
-    <li className={styles.row} data-muted={muted}>
-      <div className={styles.rowMain}>
-        <Badge tone={STATUS_TONE[task.status]} icon={STATUS_ICON[task.status]}>
-          {STATUS_LABEL[task.status]}
-        </Badge>
-        <div className={styles.rowText}>
-          <p className={styles.goal} title={task.goal}>
-            {task.goal}
-          </p>
-          {task.detail && (
-            <p className={styles.detail} title={task.detail}>
-              {task.detail}
-            </p>
-          )}
-        </div>
-        <div className={styles.rowActions}>
-          {canMessage && (
-            <button
-              type="button"
-              className={styles.iconButton}
-              onClick={() => setMessageOpen((open) => !open)}
-              aria-label="Send a message to this task"
-              title="Send a message to this task"
+      <div className={styles.cylinder}>
+        {visible.map(({ task, isPeek }) => {
+          const phrase = task.topicPhrase ?? task.goal;
+          const summary = task.topicSummary ?? task.detail;
+          return (
+            <article
+              key={task.id}
+              className={`${styles.card} ${styles[STATUS_TONE[task.status]]}`}
+              data-peek={isPeek && visible.length > 1}
+              aria-label={`${phrase}，${STATUS_LABEL[task.status]}`}
             >
-              <Send size={14} />
-            </button>
-          )}
-          {!isTerminal && (
-            <button
-              type="button"
-              className={styles.iconButton}
-              onClick={() => onCancel(task.id)}
-              aria-label="Cancel task"
-              title="Cancel task"
-            >
-              <X size={14} />
-            </button>
-          )}
-        </div>
+              <span className={styles.cardIcon}>{STATUS_ICON[task.status]}</span>
+              <div className={styles.cardBody}>
+                <span className={styles.cardTitle} title={task.goal}>
+                  {phrase}
+                </span>
+                {summary && <span className={styles.cardSummary}>{summary}</span>}
+              </div>
+              <span className={styles.stateLabel}>{STATUS_LABEL[task.status]}</span>
+            </article>
+          );
+        })}
       </div>
-
-      {messageOpen && canMessage && (
-        <div className={styles.messageRow}>
-          <input
-            type="text"
-            className={styles.messageInput}
-            value={message}
-            onChange={(event) => setMessage(event.target.value)}
-            placeholder="Say something to this task…"
-            aria-label="Message text"
-          />
-          <Button variant="secondary" onClick={() => submit(onSteer)}>
-            Steer
-          </Button>
-          <Button variant="primary" onClick={() => submit(onFollowUp)}>
-            Follow up
-          </Button>
-        </div>
-      )}
-    </li>
+    </section>
   );
 }

@@ -6,7 +6,6 @@ const meta: Meta<typeof TalkButton> = {
   component: TalkButton,
   args: {
     onConnect: () => {},
-    onDisconnect: () => {},
   },
 };
 

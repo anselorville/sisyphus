@@ -34,15 +34,11 @@ export interface AgentServerStatus {
  * scope here) carrying newline-free JSON text messages tagged by a `type`
  * field, e.g. today's `{"type":"mic","open":true}`.
  *
- * IMPORTANT KNOWN GAP (see this task's own brief): nothing on the Python
- * side forwards the TypeScript agent-runtime sidecar's RealtimeEvent stream
- * (agent-runtime/src/protocol/events.ts's `RealtimeEventType` union) onto
- * this channel yet. The shapes below are this hook's (and useAgentTasks's /
- * useEcologyStatus's) DOCUMENTED, but not yet backend-wired, EXPECTED wire
- * format -- the concrete target for whichever future task builds that
- * Python-side forwarder. Designed so that forwarder's job is as close to
- * "pass the sidecar's own RealtimeEvent.type straight through, lift a
- * handful of payload fields to the top level" as possible:
+ * app/server.py forwards the sidecar's RealtimeEvent stream onto this channel.
+ * The shapes below document that concrete browser-facing wire format. The
+ * forwarder's job is as close to "pass the sidecar's own RealtimeEvent.type
+ * straight through, lift a handful of payload fields to the top level" as
+ * possible:
  *
  *   - `type` is always IDENTICAL to the sidecar's own RealtimeEventType
  *     string (e.g. "task.completed", "ecology.state.changed") wherever a
@@ -99,16 +95,19 @@ export interface AgentServerStatus {
  */
 
 export interface TaskWireEventBase {
-  readonly task_id: string;
   readonly timestamp?: string;
 }
+interface TaskLifecycleWireEventBase extends TaskWireEventBase {
+  readonly task_id: string;
+}
 export type TaskWireEvent =
-  | (TaskWireEventBase & { type: "task.created"; goal: string })
-  | (TaskWireEventBase & { type: "task.assigned"; role_id?: string })
-  | (TaskWireEventBase & { type: "task.progress"; text?: string })
-  | (TaskWireEventBase & { type: "task.completed"; summary?: string })
-  | (TaskWireEventBase & { type: "task.failed"; reason?: string })
-  | (TaskWireEventBase & { type: "task.cancelled" });
+  | (TaskLifecycleWireEventBase & { type: "task.created"; goal: string })
+  | (TaskLifecycleWireEventBase & { type: "task.assigned"; role_id?: string })
+  | (TaskLifecycleWireEventBase & { type: "task.progress"; text?: string })
+  | (TaskLifecycleWireEventBase & { type: "task.completed"; summary?: string })
+  | (TaskLifecycleWireEventBase & { type: "task.failed"; reason?: string })
+  | (TaskLifecycleWireEventBase & { type: "task.cancelled" })
+  | (TaskWireEventBase & { type: "session.topics.updated"; topics?: unknown });
 
 export interface EcologyWireEvent {
   readonly type: "ecology.state.changed" | "budget.updated";
@@ -130,7 +129,15 @@ export interface SpeechWireEvent {
   readonly timestamp?: string;
 }
 
-export type AgentWireEvent = TaskWireEvent | EcologyWireEvent | ElevationWireEvent | SpeechWireEvent;
+/** Real-time subtitle stream events: user STT in, agent speech out. */
+export interface TranscriptWireEvent {
+  readonly type: "user.transcript" | "agent.transcript";
+  readonly text: string;
+  readonly task_id?: string;
+  readonly timestamp?: string;
+}
+
+export type AgentWireEvent = TaskWireEvent | EcologyWireEvent | ElevationWireEvent | SpeechWireEvent | TranscriptWireEvent;
 
 /** Outbound control messages this hook can send -- see sendControl() below. */
 export type AgentControlMessage =
@@ -146,12 +153,15 @@ const AGENT_WIRE_EVENT_TYPES = new Set<string>([
   "task.completed",
   "task.failed",
   "task.cancelled",
+  "session.topics.updated",
   "ecology.state.changed",
   "budget.updated",
   "diplomacy.elevation.requested",
   "diplomacy.elevation.resolved",
   "voice.speech.enqueue",
   "voice.speech.cancel",
+  "user.transcript",
+  "agent.transcript",
 ]);
 
 function parseAgentWireEvent(raw: string): AgentWireEvent | null {

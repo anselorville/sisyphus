@@ -6,15 +6,27 @@
   background: var(--ds-color-bg-app);
 }
 
-/* Scrollable detail region -- task list + ecology panel. Scrolling in here
-   must never move .footer (the talk control): they are separate flex
-   children, not part of the same scroll container. */
+/* Scrollable detail region -- task list + transcript + ecology panel.
+   Tasks sit on top (non-realtime, compact), the transcript stream fills
+   the remaining space (realtime), ecology is pinned to the bottom with a
+   small fixed height. Scrolling in here must never move .footer (the talk
+   control): they are separate flex children, not part of the same scroll
+   container. */
 .content {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  gap: var(--ds-space-3);
+  padding: var(--ds-space-3) var(--ds-space-4);
+}
+
+/* The transcript panel (second child after the task list) absorbs all
+   remaining vertical space; everything else keeps its natural height. */
+.content > :nth-child(2) {
+  flex: 1 1 auto;
+  min-height: 160px;
 }
 
 /* Fixed-size footer: TalkButton has its own fixed pixel dimensions (see

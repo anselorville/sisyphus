@@ -47,12 +47,14 @@ import { pathToFileURL } from "node:url";
 
 import { config as defaultConfig, type AgentRuntimeConfig } from "./config.js";
 import type { RealtimeEvent } from "./protocol/events.js";
+import { randomUUID } from "node:crypto";
 import { RuntimeWebSocketServer } from "./transport/websocket-server.js";
 import { RuntimeMetrics } from "./telemetry/runtime-metrics.js";
 import { DatabaseClient } from "./storage/database.js";
 import { TaskNest, type TaskRecord } from "./tasks/task-nest.js";
 import { createInboundEventRouter } from "./tasks/inbound-event-router.js";
 import { createTaskAssimilationHook } from "./tasks/task-assimilation.js";
+import { TaskExecutor } from "./tasks/task-executor.js";
 import { RoleManifestRegistry } from "./roles/registry.js";
 import { PiRoleSessionManager, createDefaultPiSessionProvider } from "./roles/session-manager.js";
 import type { PiSessionProvider } from "./roles/types.js";
@@ -64,12 +66,16 @@ import {
   MAIL_ROLE_MANIFEST,
   INSPECTOR_ROLE_MANIFEST,
   MEMORY_ROLE_MANIFEST,
+  SCRIBE_ROLE_MANIFEST,
 } from "./roles/manifests.js";
 import { CapabilityGateway } from "./tools/capability-gateway.js";
 import { DiplomacyOfficer } from "./tools/diplomacy-officer.js";
 import { createDiplomacyPersistenceHooks } from "./tools/diplomacy-persistence.js";
+import { WebTools } from "./tools/web-tools.js";
+import { createWebToolDefinitions } from "./tools/web-tool-definitions.js";
 import { ReflexRouter } from "./routing/reflex-router.js";
 import { TrafficCommander } from "./voice/traffic-commander.js";
+import { AckGenerator } from "./voice/ack-generator.js";
 import { VoiceHerald } from "./voice/voice-herald.js";
 import { ApiBudgetLedger } from "./economy/api-budget.js";
 import { ProviderRouter } from "./economy/provider-router.js";
@@ -82,6 +88,9 @@ import { RoleExperienceTracker } from "./ecology/role-experience.js";
 import { RpcChamber } from "./isolation/rpc-chamber.js";
 import { Inspector } from "./inspection/inspector.js";
 import { MemoryCurator } from "./memory/memory-curator.js";
+import { Scribe } from "./scribe/scribe.js";
+import { TranscriptBoard } from "./scribe/transcript-board.js";
+import { InfoHub } from "./hub/info-hub.js";
 
 const ALL_ROLE_MANIFESTS = [
   GENERAL_ROLE_MANIFEST,
@@ -91,7 +100,20 @@ const ALL_ROLE_MANIFESTS = [
   MAIL_ROLE_MANIFEST,
   INSPECTOR_ROLE_MANIFEST,
   MEMORY_ROLE_MANIFEST,
+  SCRIBE_ROLE_MANIFEST,
 ];
+
+let nextSequenceValue = 0;
+function nextSequence(): number {
+  nextSequenceValue += 1;
+  return nextSequenceValue;
+}
+
+/** Assigned inside createAgentRuntime() once Scribe exists; see onConnectionClose. */
+let resetSessionForNewConnection: () => void = () => {};
+
+/** Assigned inside createAgentRuntime() once Scribe exists; poked by TaskExecutor on task terminal. */
+let pokeScribe: () => void = () => {};
 
 export interface CreateAgentRuntimeOptions {
   /** Overrides config.dbPath (e.g. a temp file in tests). */
@@ -121,6 +143,7 @@ export interface AgentRuntime {
   readonly roleRegistry: RoleManifestRegistry;
   readonly sessionManager: PiRoleSessionManager;
   readonly taskNest: TaskNest;
+  readonly taskExecutor: TaskExecutor;
   readonly capabilityGateway: CapabilityGateway;
   readonly diplomacyOfficer: DiplomacyOfficer;
   readonly reflexRouter: ReflexRouter;
@@ -204,6 +227,12 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
         }
         return routeInboundEvent(event, connectionId);
       },
+      // A session is one WebSocket connection: when it closes, the Scribe's
+      // board and topic ledger reset so the next connection starts a fresh
+      // session (the court stenographer does not carry one trial's notes
+      // into the next). Assigned lazily because Scribe is constructed after
+      // this server; see resetSessionForNewConnection below.
+      onConnectionClose: () => resetSessionForNewConnection(),
     });
     rollbacks.push(() => server.close());
     // Documented expectation from websocket-server.ts's own module comment:
@@ -216,15 +245,31 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
       roleRegistry.register(manifest);
     }
 
-    // 5. PiRoleSessionManager. Building the default provider does no I/O and
+    // 5. CapabilityGateway + DiplomacyOfficer -- hoisted ahead of
+    // PiRoleSessionManager (step 6) because the web tool definitions below
+    // route through the gateway. Default classifier (DiplomacyOfficer's own
+    // fail-safe: always ELEVATE the one genuinely ambiguous rule case) --
+    // never wiring a real Pi classifier is explicitly sanctioned by
+    // diplomacy-officer.ts's own doc comment for this stage. Elevation
+    // persistence + broadcast is real (see ./tools/diplomacy-persistence.ts).
+    const diplomacyOfficer = new DiplomacyOfficer();
+    const diplomacyPersistence = createDiplomacyPersistenceHooks({ db, broadcast: (event) => server.broadcast(event) });
+    const capabilityGateway = new CapabilityGateway({ officer: diplomacyOfficer, ...diplomacyPersistence });
+
+    // 6. PiRoleSessionManager. Building the default provider does no I/O and
     // needs no credentials (see the module doc comment); only ensure()/
     // prompt() ever touches a real Pi backend, and this composition root
-    // never calls either at startup.
-    const piSessionProvider = options.piSessionProvider ?? createDefaultPiSessionProvider();
+    // never calls either at startup. Web custom tools are registered via
+    // customTools so the LLM can actually call web_search/web_fetch.
+    const piSessionProvider =
+      options.piSessionProvider ??
+      createDefaultPiSessionProvider({
+        customTools: createWebToolDefinitions(new WebTools({ gateway: capabilityGateway })),
+      });
     const sessionManager = new PiRoleSessionManager({ registry: roleRegistry, provider: piSessionProvider });
     rollbacks.push(() => sessionManager.close());
 
-    // 6. TaskNest -- now routeInboundEvent can be given its real target.
+    // 7. TaskNest -- now routeInboundEvent can be given its real target.
     // GeneBank and RoleExperienceTracker are hoisted ahead of their step-10
     // Ecology siblings (both are dependency-free to construct, like GeneBank
     // already was) specifically so TaskNest's onTerminalTransition hook can
@@ -232,28 +277,97 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     // item 3 -- see ./tasks/task-assimilation.ts.
     const geneBank = new GeneBank();
     const roleExperienceTracker = new RoleExperienceTracker();
+    const memoryCurator = new MemoryCurator();
     const taskNest = new TaskNest({
       db,
       now: options.now,
-      onTerminalTransition: createTaskAssimilationHook({ db, geneBank, experienceTracker: roleExperienceTracker }),
+      onTerminalTransition: createTaskAssimilationHook({ db, geneBank, experienceTracker: roleExperienceTracker, memoryCurator }),
     });
-    routeInboundEvent = createInboundEventRouter(taskNest);
+    // routeInboundEvent is assigned after the routing/voice layer is built
+    // (step 8 below) so TaskExecutor has all its dependencies. The forward
+    // reference is safe: routeInboundEvent is only ever called once a client
+    // connects, which cannot happen before server.start() at the very end.
 
     // 7. CapabilityGateway + DiplomacyOfficer. Default classifier
     // (DiplomacyOfficer's own fail-safe: always ELEVATE the one genuinely
     // ambiguous rule case) -- never wiring a real Pi classifier is explicitly
     // sanctioned by diplomacy-officer.ts's own doc comment for this stage.
-    // Elevation persistence + broadcast is real (see
-    // ./tools/diplomacy-persistence.ts), closing the "CapabilityGateway
-    // persistence" gap named in README.md's roadmap.
-    const diplomacyOfficer = new DiplomacyOfficer();
-    const diplomacyPersistence = createDiplomacyPersistenceHooks({ db, broadcast: (event) => server.broadcast(event) });
-    const capabilityGateway = new CapabilityGateway({ officer: diplomacyOfficer, ...diplomacyPersistence });
-
     // 8. Routing/voice layer.
     const reflexRouter = new ReflexRouter();
-    const trafficCommander = new TrafficCommander();
+    const trafficCommander = new TrafficCommander({
+      ackGenerator: new AckGenerator(),
+    });
     const voiceHerald = new VoiceHerald();
+
+    // TaskExecutor: the orchestration loop that drives a task from
+    // pending to terminal. Now that every dependency exists, wire it as
+    // the real inbound-event handler for voice.transcript.final.
+    // Scribe: the session topic-segmentation expert. Every inbound user
+    // transcript is appended to its board; a periodic sweep detects topic
+    // shifts and publishes a topic ledger to the InfoHub, broadcast as
+    // session.topics.updated. TaskExecutor reads hub context for prompts.
+    const infoHub = new InfoHub();
+    const taskExecutor = new TaskExecutor({
+      taskNest,
+      reflexRouter,
+      sessionManager,
+      voiceHerald,
+      trafficCommander,
+      server,
+      roleRegistry,
+      db,
+      hub: infoHub,
+      onTerminal: () => pokeScribe(),
+    });
+
+    const scribeBoard = new TranscriptBoard();
+    const scribe = new Scribe({
+      board: scribeBoard,
+      sessionManager,
+      hub: infoHub,
+      onTopicsUpdated: (topics, reason) => {
+        console.log(`[scribe] topics updated (${reason}): ${topics.map((t) => `${t.phrase}[${t.status}]`).join(", ")}`);
+        const event: RealtimeEvent = {
+          event_id: randomUUID(),
+          sequence: nextSequence(),
+          source: "swarm",
+          type: "session.topics.updated",
+          timestamp: new Date().toISOString(),
+          payload: { topics, reason },
+        };
+        try { server.broadcast(event); } catch { /* server closed */ }
+      },
+      onError: (error) => console.log(`[scribe] error: ${error instanceof Error ? error.message : String(error)}`),
+    });
+
+    // Session boundary: one WebSocket connection == one session. When the
+    // connection closes, wipe the Scribe board and topic ledger so a fresh
+    // connection starts clean (see onConnectionClose above).
+    resetSessionForNewConnection = (): void => {
+      scribeBoard.reset();
+      infoHub.setTopics([], () => new Date());
+      console.log("[scribe] session reset (connection closed)");
+    };
+
+    // A completed turn pokes an immediate Scribe sweep (instead of waiting
+    // for the 30s timer), so the topic ledger updates right after the
+    // agent answers. sweep() is guarded against re-entry.
+    pokeScribe = (): void => {
+      void scribe.sweep(true).catch((error: unknown) => console.log(`[scribe] poke error: ${error instanceof Error ? error.message : String(error)}`));
+    };
+
+    const handleInboundEvent = taskExecutor.handleInboundEvent;
+    routeInboundEvent = async (event: RealtimeEvent, connectionId: string) => {
+      if (event.type === "voice.transcript.final") {
+        const text = typeof event.payload.text === "string" ? event.payload.text : "";
+        scribeBoard.append("user", text);
+      }
+      await handleInboundEvent(event, connectionId);
+    };
+    scribe.start();
+    rollbacks.push(async () => {
+      scribe.stop();
+    });
 
     // 9. Economy.
     const apiBudget = new ApiBudgetLedger({
@@ -278,12 +392,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     const rpcChamber = new RpcChamber({ capacity: population.isolationCap });
     rollbacks.push(() => rpcChamber.close());
 
-    // 12. Inspector + MemoryCurator (Task 16) -- see the module doc comment
-    // for why these are included despite not being named in this task's own
-    // ordered wiring list. Both are pure, side-effect-free, and own no
-    // resource that needs releasing.
     const inspector = new Inspector();
-    const memoryCurator = new MemoryCurator();
 
     // Recovery: reload whatever SQLite still holds durable from a prior
     // crash/restart before this instance ever accepts a connection.
@@ -326,6 +435,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
       roleRegistry,
       sessionManager,
       taskNest,
+      taskExecutor,
       capabilityGateway,
       diplomacyOfficer,
       reflexRouter,

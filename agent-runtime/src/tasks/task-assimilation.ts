@@ -54,6 +54,7 @@
 import type { RoleGenome } from "../ecology/gene-bank.js";
 import { evaluateRoleLifecycle } from "../ecology/pheromone-map.js";
 import type { RoleExperienceTracker } from "../ecology/role-experience.js";
+import type { MemoryCurator, MemoryEvent } from "../memory/memory-curator.js";
 import type { DbCommand, DbCommandResultMap } from "../storage/database.js";
 import type { TaskRecord } from "./task-nest.js";
 
@@ -71,6 +72,7 @@ export interface TaskAssimilationOptions {
   readonly db: TaskAssimilationDb;
   readonly geneBank: TaskAssimilationGeneBank;
   readonly experienceTracker: RoleExperienceTracker;
+  readonly memoryCurator?: MemoryCurator;
   readonly now?: () => Date;
   /** Called whenever the underlying task.assimilate write throws -- diagnostics only, never re-thrown. */
   readonly onError?: (error: unknown, taskId: string) => void;
@@ -107,6 +109,22 @@ export function createTaskAssimilationHook(options: TaskAssimilationOptions): (t
         roleStatus = DORMANT_ROLE_STATUS;
       }
 
+      let memory: { id: string; key: string; value: string } | null = null;
+      if (options.memoryCurator && outcome === "success") {
+        const event: MemoryEvent = {
+          kind: "task_result_summary",
+          content: `Task completed: ${task.goal.slice(0, 200)}`,
+        };
+        const decision = await options.memoryCurator.consider(event);
+        if (decision.persist && decision.compressedContent) {
+          memory = {
+            id: `mem_${task.id}`,
+            key: `task_${task.roleId}`,
+            value: decision.compressedContent,
+          };
+        }
+      }
+
       await options.db.request({
         type: "task.assimilate",
         assimilation: {
@@ -117,7 +135,7 @@ export function createTaskAssimilationHook(options: TaskAssimilationOptions): (t
           roleStatus,
           roleFitness: [{ metric: "task_outcome", value: outcome === "success" ? 1 : 0 }],
           pheromone: null,
-          memory: null,
+          memory,
           updatedAt: now().toISOString(),
         },
       });

@@ -16,7 +16,8 @@ from app.providers import build_stt, build_tts
 
 from .audio_gate import MicGateProcessor, TTSOutputGateProcessor
 from .events import RealtimeEvent
-from .speech_queue import SpeechQueue, SpeechQueueProcessor
+from .pre_synth_queue import PreSynthQueueProcessor
+from .speech_queue import SpeechQueue
 from .transcription import EventSink, SpeechInputProcessor, TranscriptEventProcessor
 from .turn_detection import SEMANTIC_BUFFER_FLUSH_TIMEOUT_SECONDS, SemanticBufferProcessor
 
@@ -48,7 +49,6 @@ def build_media_pipeline(
         params=TransportParams(audio_in_enabled=True, audio_out_enabled=True),
     )
     stt = build_stt(settings)
-    tts = build_tts(settings)
     transcript_events = TranscriptEventProcessor(event_sink or _ignore_event)
     speech_queue = speech_queue if speech_queue is not None else SpeechQueue()
     processors: list[object] = [
@@ -57,18 +57,25 @@ def build_media_pipeline(
         SemanticBufferProcessor(flush_timeout=SEMANTIC_BUFFER_FLUSH_TIMEOUT_SECONDS),
         transcript_events,
         SpeechInputProcessor(agent_link),
-        SpeechQueueProcessor(speech_queue),
-        tts,
+        # PreSynthQueueProcessor replaces the old SpeechQueueProcessor +
+        # inline TTS stage: it synthesizes speech requests concurrently
+        # (N independent TTS connections) and plays audio in request order,
+        # so sentence B does not wait for sentence A's synthesis to finish.
+        PreSynthQueueProcessor(speech_queue, tts_factory=lambda: build_tts(settings)),
         transport.output(),
     ]
     if settings.turn_mode == "manual":
         processors.insert(1, MicGateProcessor())
         processors.insert(-1, TTSOutputGateProcessor())
+    elif settings.turn_mode == "auto":
+        from pipecat.audio.vad.silero import SileroVADAnalyzer
+        from pipecat.processors.audio.vad_processor import VADProcessor
+
+        processors.insert(1, VADProcessor(vad_analyzer=SileroVADAnalyzer()))
 
     return Pipeline(processors), {
         "transport": transport,
         "stt": stt,
-        "tts": tts,
         "transcript_events": transcript_events,
         "speech_queue": speech_queue,
     }
@@ -78,18 +85,13 @@ def build_pipeline_worker(
     webrtc_connection: SmallWebRTCConnection,
     settings: Settings,
     agent_link: object | None = None,
+    event_sink: EventSink | None = None,
+    *,
+    speech_queue_sink: list[SpeechQueue] | None = None,
 ) -> PipelineWorker:
-    """Build the media pipeline for one connection and wrap it in a
-    PipelineWorker with the configured latency observer attached.
-
-    This is the sole entry point ``app/server.py`` needs per connection --
-    it used to be provided by the now-deleted ``app/pipeline.py``
-    compatibility shim, which just forwarded to ``build_media_pipeline()``
-    above and attached the same observer; that indirection served no purpose
-    once every caller had migrated off the old module, so the logic now
-    lives directly alongside the pipeline it wraps.
-    """
-    pipeline, _resources = build_media_pipeline(webrtc_connection, settings, agent_link)
+    pipeline, resources = build_media_pipeline(webrtc_connection, settings, agent_link, event_sink=event_sink)
+    if speech_queue_sink is not None:
+        speech_queue_sink.append(resources["speech_queue"])
     return PipelineWorker(
         pipeline,
         observers=[build_latency_observer()],

@@ -37,6 +37,13 @@ class FakePiSession implements PiSession {
   dispose(): void {}
 }
 
+/** A PiSession whose prompt() never resolves, so tasks stay "running" forever. Used in crash-recovery tests where the task must survive the crash in a non-terminal state. */
+class BlockingPiSession extends FakePiSession {
+  override async prompt(): Promise<void> {
+    // never resolves — task stays running until abort'd or crashed
+  }
+}
+
 const fakePiSessionProvider: PiSessionProvider = async (): Promise<PiSession> => new FakePiSession();
 
 let tempDir: string;
@@ -93,6 +100,18 @@ function parseAck(raw: unknown): AckMessage {
   return JSON.parse(text) as AckMessage;
 }
 
+function waitForAck(client: WebSocket, sequence: number): Promise<AckMessage> {
+  return new Promise((resolve) => {
+    const onMessage = (raw: unknown) => {
+      const message = parseAck(raw);
+      if (message.kind !== "ack" || message.sequence !== sequence) return;
+      client.off("message", onMessage);
+      resolve(message);
+    };
+    client.on("message", onMessage);
+  });
+}
+
 async function startRuntime(overrides: Parameters<typeof createAgentRuntime>[0] = {}): Promise<AgentRuntime> {
   const runtime = await createAgentRuntime({
     dbPath: nextDbPath(),
@@ -115,9 +134,9 @@ describe("composition root smoke test", () => {
     openClients.push(client);
 
     const event = makeTranscriptFinalEvent();
-    const ackPromise = once<Buffer>(client, "message");
+    const ackPromise = waitForAck(client, event.sequence);
     client.send(encodeEvent(event));
-    const ack = parseAck(await ackPromise);
+    const ack = await ackPromise;
 
     expect(ack).toEqual({ kind: "ack", sequence: event.sequence, duplicate: false });
 
@@ -131,7 +150,7 @@ describe("composition root smoke test", () => {
     expect(tasks).toHaveLength(1);
     expect(tasks[0]?.goal).toBe("check the project tests, then email me the result");
     expect(tasks[0]?.interaction_id).toBe("conv-1");
-    expect(tasks[0]?.status).toBe("pending");
+    expect(tasks[0]?.status).toBe("running");
 
     await expect(runtime.close()).resolves.toBeUndefined();
   });
@@ -168,8 +187,12 @@ describe("crash recovery", () => {
 
     expect(runtimeA.taskNest.size).toBe(1);
     const { tasks: activeBefore } = await runtimeA.db.request({ type: "task.list-active" });
-    expect(activeBefore).toHaveLength(1);
-    const taskId = activeBefore[0]!.id;
+    // TaskExecutor drives tasks: pending → assigned → running.
+    // FakePiSession prompt() resolves instantly but never emits agent_end,
+    // so the task stays "running" (non-terminal) across the crash.
+    const taskId = activeBefore[0]?.id ?? "";
+    expect(taskId).toBeTruthy();
+    expect(runtimeA.taskNest.get(taskId)?.status).toBe("running");
 
     // "Crash": tear down the DB Worker directly, WITHOUT going through
     // runtimeA.close()'s graceful, ordered shutdown (no
@@ -193,13 +216,11 @@ describe("crash recovery", () => {
     expect(runtimeB.recoveredTasks.map((task) => task.id)).toEqual([taskId]);
     expect(runtimeB.recoveredTasks[0]?.goal).toBe("send the report to my inbox");
     expect(runtimeB.recoveredTasks[0]?.interactionId).toBe("conv-recover");
-    expect(runtimeB.recoveredTasks[0]?.status).toBe("pending");
-    expect(runtimeB.taskNest.get(taskId)?.status).toBe("pending");
+    expect(runtimeB.recoveredTasks[0]?.status).toBe("running");
+    expect(runtimeB.taskNest.get(taskId)?.status).toBe("running");
     expect(runtimeB.taskNest.size).toBe(1);
 
-    // Recovered exactly once: calling recoverPending() again must not
-    // duplicate anything (TaskNest's in-memory map is keyed by task id, and
-    // the row is still the only active one in SQLite).
+    // Recovered exactly once: calling recoverPending() again must not duplicate.
     const recoveredAgain = await runtimeB.taskNest.recoverPending();
     expect(recoveredAgain.map((task) => task.id)).toEqual([taskId]);
     expect(runtimeB.taskNest.size).toBe(1);

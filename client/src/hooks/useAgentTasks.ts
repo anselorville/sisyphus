@@ -19,6 +19,7 @@ export const AGENT_TASK_STATUSES = [
 export type AgentTaskStatus = (typeof AGENT_TASK_STATUSES)[number];
 
 const TERMINAL_STATUSES: ReadonlySet<AgentTaskStatus> = new Set(["completed", "failed", "cancelled"]);
+const PLACEHOLDER_PHRASES = new Set(["untitled task", "unknown task", "未命名任务"]);
 
 /**
  * Mirrors task-nest.ts's `ALLOWED_TRANSITIONS` graph -- kept in lockstep with
@@ -41,7 +42,8 @@ const ALLOWED_TRANSITIONS: Readonly<Record<AgentTaskStatus, ReadonlySet<AgentTas
 /**
  * Wire shape for one task-lifecycle event arriving over the data channel --
  * see useAgentConnection.ts's documented wire-shape extension for the full
- * envelope this is part of. `task_id` is the only field every variant needs;
+ * envelope this is part of. Lifecycle variants require `task_id`; session
+ * topic snapshots intentionally do not.
  * the rest are the small set of payload fields Voice Herald
  * (agent-runtime/src/voice/voice-herald.ts) already treats as meaningful, so
  * this reducer speaks the same vocabulary a human would eventually hear.
@@ -58,11 +60,15 @@ export interface AgentTaskWireEvent {
   readonly text?: unknown;
   readonly summary?: unknown;
   readonly reason?: unknown;
+  readonly tasks?: unknown;
+  readonly topics?: unknown;
 }
 
 export interface AgentTask {
   readonly id: string;
   readonly goal: string;
+  readonly topicPhrase?: string;
+  readonly topicSummary?: string;
   readonly status: AgentTaskStatus;
   /**
    * Human-readable detail for the current status: the latest progress note
@@ -102,7 +108,52 @@ function statusForEventType(type: string): AgentTaskStatus | undefined {
 }
 
 function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function readTopics(value: unknown): readonly AgentTask[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+
+  const tasks: AgentTask[] = [];
+  const ids = new Set<string>();
+  let activeCount = 0;
+  for (const [index, rawItem] of value.entries()) {
+    if (!isRecord(rawItem)) return undefined;
+    const id = readString(rawItem.id);
+    const phrase = readString(rawItem.phrase);
+    const summary = readString(rawItem.summary);
+    const status = rawItem.status;
+    if (
+      id === undefined ||
+      ids.has(id) ||
+      phrase === undefined ||
+      summary === undefined ||
+      PLACEHOLDER_PHRASES.has(phrase.toLowerCase()) ||
+      (status !== "active" && status !== "closed")
+    ) {
+      return undefined;
+    }
+    if (status === "active") activeCount += 1;
+    if (activeCount > 1) return undefined;
+    ids.add(id);
+
+    tasks.push({
+      id,
+      goal: phrase,
+      topicPhrase: phrase,
+      topicSummary: summary,
+      status: status === "active" ? "pending" : "completed",
+      detail: status === "closed" ? "已结束" : undefined,
+      updatedAt: Date.now() - index,
+    });
+  }
+  return tasks;
 }
 
 /**
@@ -125,12 +176,20 @@ function readString(value: unknown): string | undefined {
  *      different status, matching ALLOWED_TRANSITIONS above exactly (every
  *      terminal status maps to an empty allowed-set).
  *
- * An event for a task_id this reducer has never seen (task.created was lost,
- * arrived out of order, or was never sent) synthesizes a minimal task entry
- * instead of silently dropping real signal -- better to show "Untitled task"
- * than to lose a live task from the panel entirely.
+   * An event for a task_id this reducer has never seen (task.created was lost,
+   * arrived out of order, or was never sent) synthesizes a minimal task entry
+   * from whatever user-facing text is available instead of silently dropping
+   * real signal or showing a meaningless placeholder title.
  */
 export function reduceAgentTasks(state: AgentTasksState, event: AgentTaskWireEvent): AgentTasksState {
+  // Scribe's topic ledger is authoritative: a session.topics.updated event
+  // wholesale replaces the display list. Each topic carries its own status
+   // ("active" | "closed"), mapped to pending/completed for display.
+  if (event.type === "session.topics.updated") {
+    const tasks = readTopics(event.topics);
+    return tasks === undefined ? state : { tasks };
+  }
+
   const taskId = readString(event.task_id);
   const nextStatus = statusForEventType(event.type);
   if (taskId === undefined || nextStatus === undefined) {
@@ -143,7 +202,7 @@ export function reduceAgentTasks(state: AgentTasksState, event: AgentTaskWireEve
   if (existingIndex === -1) {
     const created: AgentTask = {
       id: taskId,
-      goal: readString(event.goal) ?? "Untitled task",
+      goal: readString(event.goal) ?? readString(event.text) ?? readString(event.summary) ?? readString(event.reason) ?? "正在整理话题…",
       status: nextStatus,
       detail: detailFromEvent,
       roleId: readString(event.role_id),

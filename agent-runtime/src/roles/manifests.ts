@@ -36,8 +36,8 @@ export const GENERAL_ROLE_PROMPT_PATH = resolveRolePromptPath("general.md");
 
 export const GENERAL_ROLE_MANIFEST: RoleManifest = Object.freeze({
   id: "general",
-  capabilities: ["qa", "task-clarification", "delegation"],
-  tools: ["read"],
+  capabilities: ["qa", "task-clarification", "delegation", "web-search", "web-fetch"],
+  tools: ["read", "web_search", "web_fetch"],
   promptPath: GENERAL_ROLE_PROMPT_PATH,
   modelClass: "balanced",
   thinkingLevel: "medium",
@@ -67,7 +67,7 @@ export const WEB_ROLE_PROMPT_PATH = resolveRolePromptPath("web.md");
 
 export const WEB_ROLE_MANIFEST: RoleManifest = Object.freeze({
   id: "web",
-  capabilities: ["web-search", "web-fetch"],
+  capabilities: ["web-search", "web-fetch", "天气", "气温", "预报"],
   tools: ["web_search", "web_fetch"],
   promptPath: WEB_ROLE_PROMPT_PATH,
   modelClass: "balanced",
@@ -149,6 +149,26 @@ export const MEMORY_ROLE_MANIFEST: RoleManifest = Object.freeze({
   capabilities: ["memory-curation", "preference-tracking"],
   tools: [],
   promptPath: MEMORY_ROLE_PROMPT_PATH,
+  modelClass: "fast",
+  thinkingLevel: "low",
+  lifecycle: "resident",
+});
+
+export const SCRIBE_ROLE_PROMPT_PATH = resolveRolePromptPath("scribe.md");
+
+/**
+ * Scribe: the session court stenographer. Periodically summarizes the
+ * session transcript into a display-level task ledger (see
+ * ../scribe/scribe.ts). It needs no tools -- it only ever reads what it is
+ * handed (the transcript increment + previous ledger) and returns a JSON
+ * task list. Deliberately modelClass "fast" (cheapest tier): its job is
+ * summarization, never deep reasoning.
+ */
+export const SCRIBE_ROLE_MANIFEST: RoleManifest = Object.freeze({
+  id: "scribe",
+  capabilities: ["session-summarization", "task-ledger"],
+  tools: [],
+  promptPath: SCRIBE_ROLE_PROMPT_PATH,
   modelClass: "fast",
   thinkingLevel: "low",
   lifecycle: "resident",

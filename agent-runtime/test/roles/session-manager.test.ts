@@ -287,7 +287,7 @@ describe("aggregated update broadcasting", () => {
     const unsubscribe = session.subscribe((update) => updates.push(update));
 
     sessions.get("code")!.emit(textDeltaEvent("hi"));
-    sessions.get("code")!.emit(textDeltaEvent(" there"));
+    sessions.get("code")!.emit(textDeltaEvent(" there."));
 
     await delay(60); // well past the 10ms flush interval
     unsubscribe();
@@ -297,7 +297,7 @@ describe("aggregated update broadcasting", () => {
     );
     expect(progress).toMatchObject({
       type: "task.progress",
-      payload: { text: "hi there" },
+      payload: { text: "hi there." },
       roleId: "code",
       taskId: "t1",
     });

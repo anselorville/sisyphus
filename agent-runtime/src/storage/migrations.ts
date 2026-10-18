@@ -193,6 +193,35 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    version: 4,
+    description: "create FTS5 index on memories for keyword recall",
+    up: (db) => {
+      db.exec(`
+        CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+          key, value, content='memories', content_rowid='rowid'
+        );
+
+        -- Populate from existing rows
+        INSERT INTO memories_fts(rowid, key, value)
+          SELECT rowid, key, value FROM memories;
+
+        -- Triggers to keep FTS5 in sync
+        CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+          INSERT INTO memories_fts(rowid, key, value) VALUES (new.rowid, new.key, new.value);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+          INSERT INTO memories_fts(memories_fts, rowid, key, value) VALUES('delete', old.rowid, old.key, old.value);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+          INSERT INTO memories_fts(memories_fts, rowid, key, value) VALUES('delete', old.rowid, old.key, old.value);
+          INSERT INTO memories_fts(rowid, key, value) VALUES (new.rowid, new.key, new.value);
+        END;
+      `);
+    },
+  },
 ];
 
 /** Reads the schema version currently applied to `db` (0 for a brand-new database). */

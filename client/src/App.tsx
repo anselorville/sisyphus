@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AgentHomeScreen } from "./design-system/components/AgentHomeScreen";
 import type { AgentActivityState } from "./design-system/components/AgentStatusStrip";
 import type { ElevationRequest } from "./design-system/components/ElevationDialog";
+import type { TranscriptEntry } from "./design-system/components/TranscriptPanel";
 import { useAgentConnection } from "./hooks/useAgentConnection";
 import { useAgentTasks } from "./hooks/useAgentTasks";
 import { useEcologyStatus } from "./hooks/useEcologyStatus";
@@ -9,6 +10,7 @@ import { useMicLevel } from "./hooks/useMicLevel";
 import styles from "./App.module.css";
 
 const ACTIVE_TASK_STATUSES = new Set(["assigned", "running", "blocked"]);
+let transcriptSeq = 0;
 
 /**
  * What the agent is doing right now, at a glance -- see
@@ -36,10 +38,7 @@ function App() {
   const tasksApi = useAgentTasks();
   const ecologyApi = useEcologyStatus(conn.serverAddress);
   const [elevationRequest, setElevationRequest] = useState<ElevationRequest | null>(null);
-
-  // Manual (mic-button) turn mode unless the server explicitly runs "auto"
-  // -- mirrors the hook's own default; see app/config.py TURN_MODE.
-  const manualTurnMode = conn.serverStatus?.turn_mode !== "auto";
+  const [transcriptEntries, setTranscriptEntries] = useState<TranscriptEntry[]>([]);
 
   // Fans the connection's most recent realtime event out to the task and
   // ecology reducers, plus this component's own small elevation-request
@@ -55,7 +54,18 @@ function App() {
     if (!event) return;
     tasksApi.dispatch(event);
     ecologyApi.dispatch(event);
-    if (event.type === "diplomacy.elevation.requested") {
+    if (event.type === "user.transcript" || event.type === "agent.transcript") {
+      transcriptSeq += 1;
+      setTranscriptEntries((prev) => [
+        ...prev,
+        {
+          id: transcriptSeq,
+          speaker: event.type === "user.transcript" ? "user" : "agent",
+          text: event.text,
+          timestamp: Date.now(),
+        },
+      ]);
+    } else if (event.type === "diplomacy.elevation.requested") {
       setElevationRequest({
         requestId: event.request_id,
         action: event.action ?? "an action",
@@ -84,15 +94,12 @@ function App() {
         micLevel={micLevel}
         onConnect={conn.connect}
         onDisconnect={conn.disconnect}
-        manualTurnMode={manualTurnMode}
         micOpen={conn.micOpen}
         onToggleMic={() => conn.setMicOpen(!conn.micOpen)}
         activity={activity}
         statusDetail={statusDetail}
         tasks={tasksApi.tasks}
-        onCancelTask={(taskId) => conn.sendControl({ type: "task.cancel", task_id: taskId })}
-        onSteerTask={(taskId, text) => conn.sendControl({ type: "task.steer", task_id: taskId, text })}
-        onFollowUpTask={(taskId, text) => conn.sendControl({ type: "task.follow_up", task_id: taskId, text })}
+        transcriptEntries={transcriptEntries}
         ecology={ecologyApi.ecology}
         food={ecologyApi.food}
         sidecarConnected={ecologyApi.sidecarConnected}

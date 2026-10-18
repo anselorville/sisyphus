@@ -51,6 +51,8 @@ export const REALTIME_EVENT_TYPES = [
   "tool.failed",
   "diplomacy.elevation.requested",
   "diplomacy.elevation.resolved",
+  "session.topics.updated",
+  "session.topic.changed",
   "budget.updated",
   "ecology.state.changed",
   "role.birth.requested",

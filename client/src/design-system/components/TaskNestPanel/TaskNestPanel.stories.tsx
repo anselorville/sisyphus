@@ -6,9 +6,6 @@ const meta: Meta<typeof TaskNestPanel> = {
   title: "Components/TaskNestPanel",
   component: TaskNestPanel,
   args: {
-    onCancel: () => {},
-    onSteer: () => {},
-    onFollowUp: () => {},
   },
 };
 
@@ -88,4 +85,67 @@ export const NarrowMobile: Story = {
       </div>
     ),
   ],
+};
+
+export const LongCjkNarrowMobile: Story = {
+  args: {
+    tasks: [
+      task({
+        id: "topic-long-cjk",
+        goal: "上海周末亲子出行与室内活动安排以及儿童展览预约清单",
+        topicPhrase: "上海周末亲子出行与室内活动安排以及儿童展览预约清单",
+        topicSummary: "正在比较交通、天气、展览预约和适合儿童的室内活动，并整理成一份可执行的周末计划",
+        status: "pending",
+      }),
+      task({
+        id: "topic-follow-up",
+        goal: "餐厅预订",
+        topicPhrase: "餐厅预订",
+        topicSummary: "等待确认用餐时间和人数",
+        status: "completed",
+      }),
+      task({
+        id: "topic-third",
+        goal: "路线备选",
+        topicPhrase: "路线备选",
+        topicSummary: "整理地铁和打车两种方案",
+        status: "completed",
+      }),
+    ],
+  },
+  decorators: [
+    (Story) => (
+      <div style={{ width: 390 }}>
+        <Story />
+      </div>
+    ),
+  ],
+};
+
+export const ScribeLedger: Story = {
+  args: {
+    tasks: [
+      task({
+        id: "topic-feishu",
+        goal: "飞书",
+        topicPhrase: "飞书",
+        topicSummary: "用户正在了解企业协作功能",
+        status: "pending",
+      }),
+      task({
+        id: "topic-weather",
+        goal: "天气查询",
+        topicPhrase: "天气查询",
+        topicSummary: "上海与北京的天气和空气质量",
+        status: "completed",
+      }),
+      task({
+        id: "topic-air",
+        goal: "空气质量",
+        topicPhrase: "空气质量",
+        topicSummary: "比较两地今天和明天的空气质量",
+        status: "completed",
+      }),
+    ],
+  },
 };

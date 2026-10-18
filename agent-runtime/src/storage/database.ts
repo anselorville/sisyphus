@@ -148,6 +148,13 @@ export interface DiplomacyElevationApprovalRow {
   readonly expires_at: string | null;
 }
 
+/** One FTS5 search result from `memory.search` -- includes the BM25 rank (lower = more relevant). */
+export interface MemorySearchResult {
+  readonly key: string;
+  readonly value: string;
+  readonly rank: number;
+}
+
 /** One CapabilityGateway.execute() decision to append to `diplomacy_log` -- mirrors ../tools/capability-gateway.ts's DiplomacyLogEntry field-for-field (append-only, never updated or deleted). */
 export interface DiplomacyLogInsertInput {
   readonly taskId: string;
@@ -213,6 +220,7 @@ export interface DbCommandResultMap {
     readonly pheromoneRecorded: boolean;
     readonly memoryRecorded: boolean;
   };
+  "memory.search": { readonly results: readonly MemorySearchResult[] };
   "diplomacy.log": { readonly recorded: true };
   "diplomacy.elevation-requested": { readonly recorded: true };
   "diplomacy.elevation-resolved": { readonly recorded: true };
@@ -229,6 +237,7 @@ export type DbCommand =
   | { readonly type: "task.list-active" }
   | { readonly type: "metrics.record"; readonly sample: MetricsSampleInput }
   | { readonly type: "task.assimilate"; readonly assimilation: TaskAssimilateInput }
+  | { readonly type: "memory.search"; readonly query: string; readonly limit: number }
   | { readonly type: "diplomacy.log"; readonly entry: DiplomacyLogInsertInput }
   | { readonly type: "diplomacy.elevation-requested"; readonly request: DiplomacyPendingElevationInsertInput }
   | { readonly type: "diplomacy.elevation-resolved"; readonly approval: DiplomacyElevationApprovalInsertInput }

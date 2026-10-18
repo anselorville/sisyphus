@@ -26,6 +26,7 @@
  */
 
 import type { SpeechDirective } from "./voice-herald.js";
+import { AckGenerator } from "./ack-generator.js";
 
 export interface TrafficTaskSnapshot {
   readonly taskId: string;
@@ -39,6 +40,8 @@ export interface TrafficTaskSnapshot {
    * it is safe to keep passing the same value across repeated calls.
    */
   readonly finalTranscriptAtMs?: number;
+  /** The user's original transcript, used to build a context-aware receipt ack. */
+  readonly transcript?: string;
   /**
    * The real, speakable phase/status label for the task's current state
    * (e.g. "running tests"), current as of `phaseChangedAtMs`. Must reflect
@@ -59,6 +62,8 @@ export interface TrafficCommanderOptions {
   readonly minProgressGapMs?: number;
   /** Canned receipt-ack text. Default a short, generic Chinese acknowledgement. */
   readonly receiptText?: string;
+  /** Builds a context-aware receipt ack from the user's transcript. Default: generic ack. */
+  readonly ackGenerator?: AckGenerator;
   /** Builds the spoken text for a progress utterance from the real `phase` label. Default wraps it in a short fixed template. */
   readonly formatProgress?: (phase: string) => string;
 }
@@ -72,7 +77,7 @@ interface TaskBookkeeping {
 const DEFAULT_ACK_GRACE_MS = 700;
 const DEFAULT_PROGRESS_SILENCE_MS = 3_000;
 const DEFAULT_MIN_PROGRESS_GAP_MS = 5_000;
-const DEFAULT_RECEIPT_TEXT = "好的，我在处理。";
+const DEFAULT_RECEIPT_TEXT = "嗯，我先看看。";
 
 function defaultFormatProgress(phase: string): string {
   return `还在处理：${phase}`;
@@ -83,6 +88,7 @@ export class TrafficCommander {
   private readonly progressSilenceMs: number;
   private readonly minProgressGapMs: number;
   private readonly receiptText: string;
+  private readonly ackGenerator: AckGenerator | undefined;
   private readonly formatProgress: (phase: string) => string;
   private readonly tasks = new Map<string, TaskBookkeeping>();
 
@@ -91,6 +97,7 @@ export class TrafficCommander {
     this.progressSilenceMs = options.progressSilenceMs ?? DEFAULT_PROGRESS_SILENCE_MS;
     this.minProgressGapMs = options.minProgressGapMs ?? DEFAULT_MIN_PROGRESS_GAP_MS;
     this.receiptText = options.receiptText ?? DEFAULT_RECEIPT_TEXT;
+    this.ackGenerator = options.ackGenerator;
     this.formatProgress = options.formatProgress ?? defaultFormatProgress;
   }
 
@@ -133,7 +140,10 @@ export class TrafficCommander {
     }
 
     book.ackedFinalTranscriptAtMs = snapshot.finalTranscriptAtMs;
-    return { kind: "receipt", text: this.receiptText, taskId: snapshot.taskId };
+    const text = snapshot.transcript !== undefined && this.ackGenerator
+      ? this.ackGenerator.build(snapshot.transcript)
+      : this.receiptText;
+    return { kind: "receipt", text, taskId: snapshot.taskId };
   }
 
   private evaluateProgress(

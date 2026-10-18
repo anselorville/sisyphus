@@ -83,14 +83,26 @@ describe("PiEventAdapter construction", () => {
 });
 
 describe("message_update aggregation", () => {
-  it("aggregates text deltas instead of broadcasting each token", () => {
+  it("aggregates text deltas into sentence-complete chunks instead of broadcasting each token", () => {
     const adapter = new PiEventAdapter({ flushIntervalMs: 50 });
     adapter.accept(textDelta("你"));
     adapter.accept(textDelta("好"));
+    // No sentence boundary yet: flush keeps the incomplete text buffered.
+    expect(adapter.flush()).toBeUndefined();
+    adapter.accept(textDelta("！"));
     expect(adapter.flush()).toMatchObject({
       type: "task.progress",
-      payload: { text: "你好" },
+      payload: { text: "你好！" },
     });
+  });
+
+  it("keeps a trailing half-sentence buffered across flushes", () => {
+    const adapter = new PiEventAdapter({ flushIntervalMs: 50 });
+    adapter.accept(textDelta("北京今天"));
+    expect(adapter.flush()).toBeUndefined();
+    adapter.accept(textDelta("天气晴。"));
+    expect(adapter.flush()).toMatchObject({ payload: { text: "北京今天天气晴。" } });
+    expect(adapter.flush()).toBeUndefined();
   });
 
   it("never hands a delta back from accept() -- flush() is the only broadcast path", () => {
@@ -103,11 +115,30 @@ describe("message_update aggregation", () => {
     expect(adapter.flush()).toBeUndefined();
   });
 
-  it("clears the buffer after flush(), so a second flush without new deltas is undefined", () => {
+  it("releases the sentence-incomplete tail on flushAll() (agent_end)", () => {
     const adapter = new PiEventAdapter({ flushIntervalMs: 50 });
     adapter.accept(textDelta("hi"));
-    expect(adapter.flush()).toMatchObject({ payload: { text: "hi" } });
     expect(adapter.flush()).toBeUndefined();
+    const chunks = adapter.flushAll();
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toMatchObject({ payload: { text: "hi" } });
+    expect(adapter.flushAll()).toHaveLength(0);
+  });
+
+  it("flushAll() splits an over-long sentence-final tail into speakable chunks", () => {
+    const adapter = new PiEventAdapter({ flushIntervalMs: 50 });
+    // A long tail with NO terminal punctuation (e.g. a comma-separated list
+    // the LLM never punctuated): flush() keeps it buffered, flushAll() must
+    // force-cut it into chunks instead of dumping one rejectable blob.
+    const long = "1. 巴西是南美洲最大的国家，2. 阿根廷是南美洲第二大国，3. 智利位于南美洲西海岸，" + "4. 秘鲁拥有马丘比丘遗迹，5. 哥伦比亚盛产咖啡，" + "6. 委内瑞拉石油资源丰富，7. 厄瓜多尔横跨赤道，8. 玻利维亚有高原首都";
+    adapter.accept(textDelta(long));
+    expect(adapter.flush()).toBeUndefined();
+    const chunks = adapter.flushAll();
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      const text = (chunk.payload as { text: string }).text;
+      expect(text.length).toBeLessThanOrEqual(160);
+    }
   });
 
   it("ignores non-text-delta message_update sub-events (e.g. thinking deltas)", () => {
@@ -174,9 +205,9 @@ describe("discrete event mapping", () => {
 describe("interleaving", () => {
   it("keeps buffered text pending across a discrete event mapped in between", () => {
     const adapter = new PiEventAdapter({ flushIntervalMs: 50 });
-    adapter.accept(textDelta("partial answer"));
+    adapter.accept(textDelta("partial answer."));
 
     expect(adapter.accept(toolStart())).toMatchObject({ type: "tool.started" });
-    expect(adapter.flush()).toMatchObject({ payload: { text: "partial answer" } });
+    expect(adapter.flush()).toMatchObject({ payload: { text: "partial answer." } });
   });
 });
