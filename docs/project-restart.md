@@ -8,6 +8,43 @@
 
 ---
 
+## 0. ⚠️ 下次开工的第一件事：把本地分支收敛到 `main`
+
+本次整理**刻意没有删除任何分支**（本地和远程都保留），这是用户的明确决定。
+下次把开发会话切到 `/data/git_repository/sisyphus` 后，**第一件事**是：
+
+```bash
+cd /data/git_repository/sisyphus
+
+# 1) 先确认工作区干净（应为空输出）
+git status --short
+
+# 2) 让 main 指向当前已验证的提交（当前 HEAD 是 proj-friday）
+git switch -c main            # 若已存在 main：git switch main
+
+# 3) 删除除 main 以外的所有本地分支
+git branch | grep -v -E '^\*|^  main$' | xargs -r -n1 git branch -D
+
+# 4) 删除 orca 的附属 worktree（可选，goby 已合并、无独有提交）
+git worktree remove /Users/anse10rville/orca/workspaces/sisyphus/goby
+git worktree prune
+
+# 5) 发布（远程当前仍是旧状态；本次整理未推送）
+git push -u origin main
+```
+
+注意：
+
+- 当前默认分支是 `master`（`origin/HEAD -> origin/master`）。远程分支本次
+  **未做任何改动**。如果希望 `main` 成为默认分支，需要在 GitHub 仓库设置里
+  手动切换。
+- 本次的 3 个提交目前只在本地（在 `proj-friday` 上，HEAD 已包含）。步骤 5 会
+  把它们推上去。
+- `origin/webrtc` 是翻译器时代的旧分支（10 个未合并 commit，已被 `legacy/`
+  归档取代），如无需要可以不管。
+
+---
+
 ## 1. 项目定位与演进历史
 
 这个项目**不是**实时翻译器。翻译器是已经被放弃的 Phase-1 原型，归档在
@@ -264,18 +301,33 @@ sqlite3 agent-runtime/data/agent-runtime.sqlite3 \
 
 ## 9. Git 状态
 
-整理目标：`/data/git_repository/sisyphus` 是唯一开发根目录；orca 的
-`~/orca/workspaces/sisyphus/goby` 只是附属 worktree，不应作为开发根。
+**开发根目录**：`/data/git_repository/sisyphus`（这是主仓库，`.git` 就在
+这里）。orca 的 `~/orca/workspaces/sisyphus/goby` 只是附属 worktree，不要
+把它当作开发根。
 
-分支策略（本次整理后）：
+**本次整理做了什么**：把工作区里 30+ 个未提交改动整理成 3 个提交，全部落在
+当前分支 `proj-friday`：
 
-- `master` 是主line，已快进到与当前工作一致；
-- `proj-friday` 是本次工作的来源分支；
-- 旧的 `feature/tauri-client`、`rewrite/pipecat` 已合并，可删除；
-- `origin/webrtc` 是翻译器时代的历史线，未合并且已被 `legacy/` 取代。
+| 提交 | 内容 |
+|------|------|
+| `chore(repo)` | 取消 `tests/` 忽略规则并补回 6 个被漏掉的测试文件；忽略本地运行时产物；排除含明文 key 的 `tests/validate/` |
+| `feat` | 任务执行闭环（TaskExecutor、三层确认播报、InfoHub/Scribe、媒体面 pre-synth 队列、客户端 transcript/task-nest 改版） |
+| `docs` | 本文件、README/README_CN/TODO/CONTEXT 同步，归档历史笔记 |
 
-> 远程分支删除属于不可逆操作，执行前需确认；本地与远程的具体状态见提交后的
-> `git branch -a -vv`。
+**本次刻意没做的**：没有删除任何分支、没有推送、没有动 orca 的 worktree。
+收敛分支的操作清单见本文第 0 节。
+
+当前分支拓扑（截至本文写作）：
+
+```
+proj-friday  ← 当前 HEAD，含本次 3 个提交（= 唯一需要保留的工作）
+  ├─ master            落后（proj-friday 的祖先）
+  ├─ feature/tauri-client   已合并
+  ├─ rewrite/pipecat        已合并
+  └─ anselorville/goby      已合并（orca 附属 worktree）
+origin/master              proj-friday 的祖先
+origin/webrtc              未合并，翻译器时代旧线，已被 legacy/ 取代
+```
 
 ---
 
