@@ -28,6 +28,21 @@ worker 角色（代码、网页、设备、邮件等）会在后台完成实际�
 记录了本项目重写前的归档 Phase-1 原型（一个从零实现的双向语音翻译器）
 —— 已被取代，不属于当前运行中的系统。
 
+## 当前状态（2026-10-18）
+
+产品方向是通用 **voice agent**（JARVIS），不是 `legacy/` 里的翻译原型。
+任务执行闭环已经接线并做过端到端验证：`voice.transcript.final` ->
+ReflexRouter -> TaskExecutor -> Pi session -> `task.completed`/
+`task.failed` -> assimilation（`role_fitness`），已用真实 sidecar 进程
+跑通。
+
+当前可用的在线栈（均用真实 API 调用验证）：**Zhipu GLM ASR
+（`glm-asr-2512`）+ OpenRouter TTS（`microsoft/mai-voice-2`）+ DeepSeek
+文本**。MiniMax TTS 当前不可用（账户配额耗尽），Deepgram key 无效，
+Edge TTS 返回 403，OpenRouter 没有可用的 ASR 模型。完整 provider 矩阵、
+蜂群架构状态和下一步计划见
+[`docs/project-restart.md`](docs/project-restart.md)。
+
 ## 安装
 
 需要 Python 3.11+ 和 [uv](https://docs.astral.sh/uv/)，以及 Node.js（
@@ -137,9 +152,13 @@ STT/TTS 媒体平面有三种 engine，运行的都是完全相同的 pipeline *
 
 | Engine    | STT                  | TTS                        | 能否跑树莓派? | 何时使用 |
 |-----------|----------------------|------------------------------|--------------|-------------|
-| `cloud`   | Zhipu GLM ASR（默认）/ Deepgram / AssemblyAI / OpenRouter | MiniMax（默认）/ Cartesia / Edge TTS / OpenRouter / VoxCPM2-CUDA | 可以（需要联网） | 生产环境 / 有网络时 |
+| `cloud`   | Zhipu GLM ASR（默认）/ AssemblyAI / Deepgram / OpenRouter | OpenRouter MAI-Voice-2（当前可用默认）/ Cartesia / MiniMax / Edge TTS / VoxCPM2-CUDA | 可以（需要联网） | 生产环境 / 有网络时 |
 | `offline` | `faster-whisper`（`WhisperSTTService`） | Piper（`PiperTTSService`） | **可以** —— 真正的树莓派目标平台 | 无网络、未来跑在树莓派硬件上时 |
 | `omlx`    | oMLX 服务（`/v1/audio/transcriptions`） | oMLX 服务（`/v1/audio/speech`） | **不行 —— 仅限 Apple Silicon/MLX** | 在 Mac 上快速本地开发/测试，零云端花费，零网络依赖 |
+
+provider 的可用性取决于账户和配额。截至 2026-10-18，本机确认可用的只有
+Zhipu ASR 和 OpenRouter TTS；详见 `docs/project-restart.md`。上表中的
+「默认」指代码层兜底，不代表该 provider 的账户当前一定可用。
 
 通过 `.env` 里的 `ENGINE` 选择 engine：
 
@@ -270,7 +289,9 @@ LLM。
   `client/`。
 - `agent-runtime/` —— TypeScript sidecar：协议/传输层、worker 角色与种
   姓（caste）、任务路由、生态/经济预算管理、隔离的角色执行，以及语音旁
-  白。完整设计见 `.proj-init/`，测试套件见 `agent-runtime/test/`。
+  白。`src/tasks/task-executor.ts` 是任务执行闭环：把一条转写从创建任务
+  一路驱动到 Pi session 终态，并负责确认/进度播报。完整设计见
+  `.proj-init/`，测试套件见 `agent-runtime/test/`。
 - `client/` —— React/Tauri 语音助手前端（`AgentHomeScreen` 及其子树：
   对话控制、任务巢（task nest）、生态面板、提权对话框），以及
   Settings/Model Lab/Model Provider 配置界面。
@@ -283,7 +304,14 @@ LLM。
   等待真实硬件到位后再验证。
 - 云端/本地的选择只在启动时发生一次；本阶段设计上没有对话过程中重新检
   测网络状态或自动恢复的机制。
-- 针对真实硬件（麦克风、扬声器）和真实云端/LLM 凭据的完整端到端语音对
-  话，在当前开发环境中尚未做过人工验证 —— 具体哪些内容已验证、哪些尚未
-  验证、验证方式是什么，见
-  `.proj-init/06-software-release-acceptance.md`。
+- 任务执行闭环已经用真实 sidecar 进程 + 真实 LLM 调用做过端到端验证
+  （2026-10-18），但还没有在本机用麦克风/扬声器人工跑过一次完整对话
+  （含 barge-in）。具体哪些已验证、哪些尚未验证，见
+  `docs/project-restart.md` 和 `.proj-init/06-software-release-acceptance.md`。
+- SQLite 的 `events` 表建了但从未写入：目前没有 `event.record` DB 命令，
+  所以 `scripts/query-hci-events.sh` 在任务运行时也返回空。HCI 数据目前
+  只能依赖进程日志和 `tasks`/`role_fitness`。这是 Phase A 最需要补的
+  观测缺口。
+- 蜂群治理层（Queen/Population/GeneBank/PheromoneMap）是刻意停放的：它
+  接在组合根上，但不参与路由决策；见 `CONTEXT.md` 和
+  `docs/adr/0001-*.md`。

@@ -33,6 +33,22 @@ archived Phase-1 prototype (a from-scratch bidirectional speech
 translator) this project was rebuilt from -- superseded, not part of the
 running system.
 
+## Current status (2026-10-18)
+
+The product direction is a general **voice agent** (JARVIS), not the
+translation prototype in `legacy/`. The task execution loop is wired and
+verified end-to-end: `voice.transcript.final` -> ReflexRouter ->
+TaskExecutor -> Pi session -> `task.completed`/`task.failed` ->
+assimilation (`role_fitness`), exercised against a real sidecar process.
+
+Current working online stack (verified with real API calls):
+**Zhipu GLM ASR (`glm-asr-2512`) + OpenRouter TTS
+(`microsoft/mai-voice-2`) + DeepSeek text**. MiniMax TTS is currently
+unusable (account quota exhausted), Deepgram's key is invalid, Edge TTS
+returns 403, and OpenRouter has no working ASR model. See
+[`docs/project-restart.md`](docs/project-restart.md) for the full provider
+matrix, the swarm-architecture status, and the next development steps.
+
 ## Setup
 
 Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/), plus Node.js
@@ -151,9 +167,15 @@ architecture note at the top of this file.)
 
 | Engine    | STT                  | TTS                        | Pi-portable? | When to use |
 |-----------|----------------------|------------------------------|--------------|-------------|
-| `cloud`   | Zhipu GLM ASR (default) / Deepgram / AssemblyAI / OpenRouter | MiniMax (default) / Cartesia / Edge TTS / OpenRouter / VoxCPM2-CUDA | Yes (needs internet) | Production / has internet |
+| `cloud`   | Zhipu GLM ASR (default) / AssemblyAI / Deepgram / OpenRouter | OpenRouter MAI-Voice-2 (current working default) / Cartesia / MiniMax / Edge TTS / VoxCPM2-CUDA | Yes (needs internet) | Production / has internet |
 | `offline` | `faster-whisper` (`WhisperSTTService`) | Piper (`PiperTTSService`) | **Yes** -- the real Raspberry Pi target | No internet, on the eventual Pi hardware |
 | `omlx`    | oMLX server (`/v1/audio/transcriptions`) | oMLX server (`/v1/audio/speech`) | **No -- Apple Silicon/MLX only** | Fast local dev/test on a Mac, zero cloud spend, zero network dependency |
+
+Provider availability is account- and quota-dependent. As of 2026-10-18,
+only Zhipu ASR and OpenRouter TTS are confirmed working on this machine;
+see `docs/project-restart.md`. "Default" in the table above means the
+code-level fallback, not a guarantee that the provider's account is
+currently usable.
 
 Select the engine via `ENGINE` in `.env`:
 
@@ -291,8 +313,11 @@ first-run model download needs network access.
   The real client is `client/`.
 - `agent-runtime/` - the TypeScript sidecar: protocol/transport, worker
   roles and castes, task routing, ecology/economy budget management,
-  isolated role execution, and voice narration. See `.proj-init/` for the
-  full design and `agent-runtime/test/` for its test suite.
+  isolated role execution, and voice narration. `src/tasks/task-executor.ts`
+  is the execution loop that drives a transcript from task creation through
+  the Pi session to a terminal state, with acknowledgement/progress
+  narration. See `.proj-init/` for the full design and
+  `agent-runtime/test/` for its test suite.
 - `client/` - the React/Tauri voice-agent frontend (`AgentHomeScreen` and
   its subtree: talk control, task nest, ecology panel, elevation dialog),
   plus Settings/Model Lab/Model Provider configuration screens.
@@ -306,8 +331,17 @@ first-run model download needs network access.
 - Cloud-vs-local selection happens once at startup; there's no
   mid-conversation re-checking or automatic recovery if connectivity changes
   during a call (by design, for this phase).
-- Live, end-to-end voice conversation against real hardware (microphone,
-  speaker) and real cloud/LLM credentials has not been manually verified in
-  this development environment -- see
+- The orchestration loop has been verified end-to-end with a real sidecar
+  process and a real LLM call (2026-10-18), but a full microphone/speaker
+  conversation with barge-in has not been manually observed on this
+  machine. See `docs/project-restart.md` and
   `.proj-init/06-software-release-acceptance.md` for exactly what has and
-  has not been verified, and how.
+  has not been verified.
+- The SQLite `events` table is created but never written: there is no
+  `event.record` DB command yet, so `scripts/query-hci-events.sh` returns
+  empty even while tasks run. HCI collection currently has to rely on
+  process logs and `tasks`/`role_fitness`. This is the top instrumentation
+  gap for Phase A.
+- The swarm governance layer (Queen/Population/GeneBank/PheromoneMap) is
+  intentionally parked. It is wired into the composition root but does not
+  make routing decisions; see `CONTEXT.md` and `docs/adr/0001-*.md`.

@@ -6,33 +6,31 @@
 
 ## 里程碑：从治理骨架到一次真正闭环的语音任务
 
-当前状态：`agent-runtime` 的蜂群治理层（Queen/Population/PheromoneMap/GeneBank）
-已经比"任务本身能不能被执行"更完整——本仓库目前没有任何生产代码把一个任务从
-`pending` 推到终态。下面的排序原则：先让任务真的能被执行完，再回头用真实数据喂
-治理层，最后才是需要产品决策的部分。
+当前状态（2026-10-18）：任务执行闭环已实现并通过真实验收。蜂群治理层
+（Queen/Population/PheromoneMap/GeneBank）仍然刻意停放——它接在组合根上，
+但不参与路由决策。接下来的排序原则：先补齐观测（events 表 / HCI），再用真实
+数据决定要不要唤醒治理层，最后才是需要产品决策的部分。
 
-### Phase 1 — P0（阻塞项，本里程碑主体）：任务执行编排循环
-一句语音指令要能真正走完"创建任务 → 派给角色 → Pi Session 执行 → 拿到结果 →
+### Phase 1 — P0（已完成，2026-10-18）：任务执行编排循环
+一句语音指令能真正走完"创建任务 → 派给角色 → Pi Session 执行 → 拿到结果 →
 `TaskNest.transition()` 到终态 → `task.assimilate` 被触发"这条链路。
 
-- [ ] 扩展 `agent-runtime/src/tasks/inbound-event-router.ts`：目前只处理
-      `voice.transcript.final` 一种事件类型；`ReflexRouter` 已能判出
-      steer/follow_up/cancel，但这些决策还没有派发到具体 `PiSession`
-      （`sessionManager.steer()`/`abort()`）。
-- [ ] 新增任务执行驱动：`TaskNest.create()` 之后需要真正调用
-      `PiRoleSessionManager.prompt(roleId, taskId, text)`，并在 Pi Session 产出
-      `agent_end`/工具执行失败等信号时调用 `taskNest.transition()` 落到
-      `completed`/`failed`。
-- [ ] 验收：起真实 `node dist/index.js` 子进程，发一条真实事件进去，断言
-      `task_outcome`/`role_fitness` 表里真的多了一行（不是只测 hook 被正确调用）。
+- [x] `agent-runtime/src/tasks/task-executor.ts`：`voice.transcript.final` 之后
+      真正调用 `PiRoleSessionManager.prompt(roleId, taskId, text)`；steer/
+      follow_up/cancel 分别派发到 `sessionManager.steer()`/新任务/`abort()`。
+- [x] `agent_end`/工具失败等信号驱动 `taskNest.transition()` 落到
+      `completed`/`failed`/`cancelled`，并触发 `task.assimilate`。
+- [x] 验收（已执行）：起真实 `node dist/index.js`，发一条
+      `voice.transcript.final`，观察到 `task.created → task.assigned →
+      voice.speech.enqueue × N → task.completed`，`tasks` 表新增 completed
+      行，`role_fitness` 新增 `task_outcome=1.0` 行。
 
-### Phase 2 — P1（依赖 Phase 1）：真实 pheromone/memory 信号
-`agent-runtime/src/tasks/task-assimilation.ts` 目前把这两个字段固定写 `null`。
-
-- [ ] 决定 pheromone delta 所需的 task-feature/device/network 上下文从哪一层拿
-      （`TaskRecord` 本身不携带；ReflexRouter 的能力标签匹配结果是现成候选）。
-- [ ] memory 写入必须经 `MemoryCurator` 审核后的压缩内容，不能直接把原始任务
-      文本喂进去。
+### Phase 2 — P1（部分完成）：真实 pheromone/memory 信号
+- [x] memory：`task-assimilation.ts` 已通过 `MemoryCurator.consider()` 写入
+      审核后的压缩内容（成功任务）。
+- [ ] pheromone delta 仍固定为 `null`：需要决定 task-feature/device/network
+      上下文从哪一层拿（`TaskRecord` 本身不携带；ReflexRouter 的能力标签匹配
+      结果是现成候选）。
 
 ### Phase 3 — P2：Queen 的 merge/wake 决策 + `PopulationRegistry.retire()` 触发规则
 - [ ] 纯函数规则/类型可以现在定稿（例如两个角色能力高度重叠触发 merge、休眠角色
@@ -41,8 +39,12 @@
       数据源之后再做——否则是拿假数据做真决策。
 
 ### Phase 4 — P0（非代码，发布前必须做）：真实环境验证
-- [ ] 配置真实 LLM 凭据 + 找一台有麦克风/扬声器的机器，人工跑一次完整语音对话，
-      确认 barge-in、播报延迟的主观听感（目前只验证到帧级/队列级）。
+- [x] 真实 LLM 凭据 + 真实 sidecar 进程的任务执行闭环（2026-10-18，见 Phase 1）。
+- [x] 在线 ASR/TTS provider 矩阵（2026-10-18，见 `docs/project-restart.md`）：
+      Zhipu ASR 可用；OpenRouter MAI-Voice-2 TTS 可用；MiniMax 配额耗尽、
+      Deepgram key 无效、Edge TTS 403、OpenRouter ASR 无可用模型。
+- [ ] 用麦克风/扬声器人工跑一次完整语音对话，确认 barge-in、播报延迟的主观听感
+      （目前只验证到帧级/队列级 + 文本事件注入）。
 - [ ] 在真实树莓派上跑一次 `scripts/benchmark-runtime.sh --raspberry-pi`，把
       `.proj-init/performance-baseline.md` 的 Pi 章节从"未测"填成有数据。
 
@@ -53,8 +55,9 @@
 ## 已知缺口（现状记录，非任务本身）
 
 ### `agent-runtime`（详见 `agent-runtime/README.md` 的"已知缺口"一节）
-- 没有任务执行编排循环（= Phase 1 要解决的问题）。
-- `pheromone`/`memory` 增量固定为 `null`（= Phase 2）。
+- `events` 表从未写入：没有 `event.record` DB 命令，`scripts/query-hci-events.sh`
+  永远为空。这是 Phase A 最优先的观测缺口。
+- `pheromone` 增量固定为 `null`（= Phase 2）。
 - `Queen` 的 merge/wake 决策、`PopulationRegistry.retire()` 尚无触发规则（= Phase 3）。
 - `diplomacy-persistence.ts` 广播事件的 `sequence` 是进程内自增计数器，重启后归零，
   无跨重启的持久化序号源。
@@ -64,5 +67,5 @@
 - 未针对真实树莓派硬件调优/基准测试（= Phase 4 第二项）。
 - Cloud-vs-local 引擎选择只发生在连接建立时，会话中途网络状态变化不会自动切换
   （设计如此，非缺陷）。
-- 真实语音全双工对话未做人工验证：本开发环境无麦克风/扬声器/真实 LLM 凭据
-  （= Phase 4 第一项）。
+- 真实语音全双工对话未做人工验证：本机尚未用麦克风/扬声器跑完整对话
+  （= Phase 4 最后一项）。文本事件注入 + 真实 LLM 的执行闭环已验证。
