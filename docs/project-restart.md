@@ -1,45 +1,43 @@
 # Sisyphus Project Restart
 
-**日期**：2026-10-18
+**日期**：2026-10-18（git 收敛于 2026-10-19 完成）
 **规范开发根目录**：`/data/git_repository/sisyphus`
-**当前分支**：`proj-friday`（工作区干净）；本次整理的 4 个提交都在这里，**尚未推送**到远程
+**当前分支**：`main`（= `origin/main`，工作区干净；orca 附属 worktree 已移除）
 **本文用途**：这是重新开始开发时的唯一入口文档。它记录项目现在的真实状态、
 已验证的能力、已知缺口、下一步顺序，以及哪些历史文档仍然可信。
 
 ---
 
-## 0. ⚠️ 下次开工的第一件事：把本地分支收敛到 `main`
+## 0. ✅ Git 收敛已完成（2026-10-19）
 
-本次整理**刻意没有删除任何分支**（本地和远程都保留），这是用户的明确决定。
-下次把开发会话切到 `/data/git_repository/sisyphus` 后，**第一件事**是：
+本节原先记录的是"下次开工第一件事"的收敛清单，已于 2026-10-19 执行完毕。
+**当前仓库状态：本地只有一个分支 `main`，只有一个 worktree（主仓库本身），
+`main` 已推送到 `origin/main`，工作区干净。** 以下保留为历史记录。
+
+实际执行的命令：
 
 ```bash
 cd /data/git_repository/sisyphus
 
-# 1) 先确认工作区干净（应为空输出）
-git status --short
-
-# 2) 让 main 指向当前已验证的提交（当前 HEAD 是 proj-friday）
-git switch -c main            # 若已存在 main：git switch main
-
-# 3) 删除除 main 以外的所有本地分支
-git branch | grep -v -E '^\*|^  main$' | xargs -r -n1 git branch -D
-
-# 4) 删除 orca 的附属 worktree（可选，goby 已合并、无独有提交）
-git worktree remove /Users/anse10rville/orca/workspaces/sisyphus/goby
-git worktree prune
-
-# 5) 发布（远程当前仍是旧状态；本次整理未推送）
-git push -u origin main
+git status --short            # 1) 确认为空（工作区干净）
+git switch -c main            # 2) main 指向已验证的 HEAD（0b8c683）
+git worktree remove --force /Users/anse10rville/orca/workspaces/sisyphus/goby
+git worktree prune            # 4) 移除 orca 附属 worktree
+git branch -D proj-friday master feature/tauri-client rewrite/pipecat anselorville/goby
+git push -u origin main       # 5) 发布
 ```
 
-注意：
+结果与注意：
 
-- 当前默认分支是 `master`（`origin/HEAD -> origin/master`）。远程分支本次
-  **未做任何改动**。如果希望 `main` 成为默认分支，需要在 GitHub 仓库设置里
-  手动切换。
-- 本次的 3 个提交目前只在本地（在 `proj-friday` 上，HEAD 已包含）。步骤 5 会
-  把它们推上去。
+- 本地分支只剩 `main`，跟踪 `origin/main`；被删分支全部已合并，无内容丢失。
+- orca 的 `goby` worktree 已移除（其分支早已合并、无独有提交）。移除前目录里
+  唯一的未跟踪文件 `.omo/run-continuation/ses_*.json` 已备份到
+  `/tmp/sisyphus-goby-omo-backup-*`。
+- **远程分支一个都没删**（按用户的明确决定保留）：`origin/master`（当前默认
+  分支）、`origin/proj-friday`、`origin/feature/tauri-client`、
+  `origin/rewrite/pipecat`、`origin/webrtc`。没有 force-push。
+- 若希望 `main` 成为 GitHub 默认分支，需要在仓库设置里手动切换
+  （`origin/HEAD` 目前仍指向 `origin/master`）。
 - `origin/webrtc` 是翻译器时代的旧分支（10 个未合并 commit，已被 `legacy/`
   归档取代），如无需要可以不管。
 
@@ -299,33 +297,30 @@ sqlite3 agent-runtime/data/agent-runtime.sqlite3 \
 
 ---
 
-## 9. Git 状态
+## 9. Git 状态（2026-10-19 收敛后）
 
-**开发根目录**：`/data/git_repository/sisyphus`（这是主仓库，`.git` 就在
-这里）。orca 的 `~/orca/workspaces/sisyphus/goby` 只是附属 worktree，不要
-把它当作开发根。
+**开发根目录**：`/data/git_repository/sisyphus`（主仓库，`.git` 就在这里）。
+orca 的 `~/orca/workspaces/sisyphus/goby` 已作为 worktree 移除，不再指向本仓库。
 
-**本次整理做了什么**：把工作区里 30+ 个未提交改动整理成 3 个提交，全部落在
-当前分支 `proj-friday`：
+**整理成果**：工作区里 30+ 个未提交改动被整理成 5 个提交，全部在 `main` 上：
 
 | 提交 | 内容 |
 |------|------|
 | `chore(repo)` | 取消 `tests/` 忽略规则并补回 6 个被漏掉的测试文件；忽略本地运行时产物；排除含明文 key 的 `tests/validate/` |
 | `feat` | 任务执行闭环（TaskExecutor、三层确认播报、InfoHub/Scribe、媒体面 pre-synth 队列、客户端 transcript/task-nest 改版） |
-| `docs` | 本文件、README/README_CN/TODO/CONTEXT 同步，归档历史笔记 |
+| `docs` ×3 | 本文件、README/README_CN/TODO/CONTEXT 同步，归档历史笔记；分批补写重启指南与分支收敛清单 |
 
-**本次刻意没做的**：没有删除任何分支、没有推送、没有动 orca 的 worktree。
-收敛分支的操作清单见本文第 0 节。
+**收敛动作**：删除了全部本地分支（只剩 `main`）、移除了 orca worktree、
+推送了 `main`。**远程分支一个未删、未 force-push。** 详见第 0 节。
 
 当前分支拓扑（截至本文写作）：
 
 ```
-proj-friday  ← 当前 HEAD，含本次 3 个提交（= 唯一需要保留的工作）
-  ├─ master            落后（proj-friday 的祖先）
-  ├─ feature/tauri-client   已合并
-  ├─ rewrite/pipecat        已合并
-  └─ anselorville/goby      已合并（orca 附属 worktree）
-origin/master              proj-friday 的祖先
+main         ← 当前 HEAD = origin/main = 0b8c683（工作区干净）
+origin/master              旧默认分支（origin/HEAD 仍指向它），是 main 的祖先
+origin/proj-friday         收敛前的临时整理分支，远程保留
+origin/feature/tauri-client 已合并，远程保留
+origin/rewrite/pipecat      已合并，远程保留
 origin/webrtc              未合并，翻译器时代旧线，已被 legacy/ 取代
 ```
 
