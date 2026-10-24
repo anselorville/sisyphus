@@ -94,5 +94,10 @@ describe("HCI event log", () => {
     expect(created!.source).not.toBe("pipecat");
     // Each event is logged exactly once even though one connection is attached.
     expect(new Set(events.map((e) => e.event_id)).size).toBe(events.length);
+    // The Python bridge de-duplicates sidecar events by `sequence` alone, so
+    // everything the runtime originates must carry a unique one.
+    const outbound = events.filter((e) => e.source !== "pipecat");
+    expect(outbound.length).toBeGreaterThan(1);
+    expect(new Set(outbound.map((e) => e.sequence)).size).toBe(outbound.length);
   });
 });

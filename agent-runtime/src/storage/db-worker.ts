@@ -42,7 +42,13 @@ if (isMainThread || !parentPort) {
 // after this point, e.g. inside setTimeout callbacks).
 const port = parentPort;
 
-const { dbPath, transactionDelayMs } = workerData as DbWorkerData;
+const { dbPath, transactionDelayMs, maxEventRows: maxEventRowsOption } = workerData as DbWorkerData;
+
+const DEFAULT_MAX_EVENT_ROWS = 200_000;
+const maxEventRows = maxEventRowsOption && maxEventRowsOption > 0 ? maxEventRowsOption : DEFAULT_MAX_EVENT_ROWS;
+// Prune in batches (a DELETE per insert would tax the voice path's DB writes).
+const eventPruneInterval = Math.max(1, Math.min(256, Math.floor(maxEventRows / 4)));
+let eventsInsertedSincePrune = 0;
 
 const db = new Database(dbPath);
 db.pragma("journal_mode = WAL");
@@ -187,6 +193,7 @@ const statements = {
   // rowid, not `sequence`: inbound (Python) and outbound (sidecar) events
   // number their sequences independently, so only insertion order is global.
   listEvents: db.prepare<[number], EventRow>(`SELECT * FROM events ORDER BY rowid DESC LIMIT ?`),
+  pruneEvents: db.prepare<[number]>(`DELETE FROM events WHERE rowid <= (SELECT MAX(rowid) FROM events) - ?`),
   insertMetricsSample: db.prepare<MetricsInsertBindParams>(`
     INSERT INTO runtime_metrics (
       recorded_at, event_loop_p50_ms, event_loop_p95_ms, event_loop_p99_ms,
@@ -541,6 +548,13 @@ function handleRequest(id: number, command: DbCommand): void {
               payload: event.payload,
               receivedAt: event.receivedAt,
             });
+            if (info.changes > 0) {
+              eventsInsertedSincePrune += 1;
+              if (eventsInsertedSincePrune >= eventPruneInterval) {
+                eventsInsertedSincePrune = 0;
+                statements.pruneEvents.run(maxEventRows);
+              }
+            }
             return { recorded: info.changes > 0 };
           }),
         );

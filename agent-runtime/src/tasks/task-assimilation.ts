@@ -23,12 +23,15 @@
  *     failure) -- the same metric shape ../storage/database.ts's own
  *     TaskAssimilateRoleFitnessInput doc comment and existing
  *     database.test.ts fixtures already use.
- *   - `pheromone`/`memory` are always null: a real pheromone delta needs a
- *     task-feature/device/network context, and a real memory needs
- *     MemoryCurator-approved compressed content -- neither exists on a bare
- *     TaskRecord, and neither is fabricated here. A later task that threads
- *     those signals through TaskNest can extend this module without
- *     changing its public shape.
+ *   - `pheromone` is null unless the caller supplies a PheromoneMap plus a
+ *     device/network context AND the task carries a `metadata.taskFeature`
+ *     (TaskExecutor sets it from the route decision). Then a success
+ *     reinforces / a failure penalizes the (taskFeature, role, device,
+ *     network) path in the map, and the resulting weight is persisted as one
+ *     `pheromones` row. Without a task feature there is no honest path to
+ *     key on, so none is fabricated.
+ *   - `memory` is only set when a MemoryCurator approves a successful task's
+ *     compressed summary; otherwise null.
  *   - `roleName` has no source distinct from `roleId` anywhere in this
  *     codebase (neither RoleManifest nor RoleGenome declares a `name`
  *     field) -- so this module writes `roleId` itself as the `roles.name`
@@ -52,7 +55,12 @@
  */
 
 import type { RoleGenome } from "../ecology/gene-bank.js";
-import { evaluateRoleLifecycle } from "../ecology/pheromone-map.js";
+import {
+  evaluateRoleLifecycle,
+  type PheromoneContext,
+  type PheromoneMap,
+  type PheromonePathKey,
+} from "../ecology/pheromone-map.js";
 import type { RoleExperienceTracker } from "../ecology/role-experience.js";
 import type { MemoryCurator, MemoryEvent } from "../memory/memory-curator.js";
 import type { DbCommand, DbCommandResultMap } from "../storage/database.js";
@@ -73,9 +81,21 @@ export interface TaskAssimilationOptions {
   readonly geneBank: TaskAssimilationGeneBank;
   readonly experienceTracker: RoleExperienceTracker;
   readonly memoryCurator?: MemoryCurator;
+  /** Where outcomes are reinforced/penalized, and the device/network they are attributed to. Omit to skip pheromone recording. */
+  readonly pheromone?: { readonly map: PheromoneMap; readonly context: PheromoneContext };
   readonly now?: () => Date;
   /** Called whenever the underlying task.assimilate write throws -- diagnostics only, never re-thrown. */
   readonly onError?: (error: unknown, taskId: string) => void;
+}
+
+/** Stable, unambiguous `pheromones.signal` for a path: a JSON array so no id can collide through a separator. */
+export function pheromoneSignal(path: PheromonePathKey): string {
+  return JSON.stringify([path.taskFeature, path.roleId, path.context.deviceId, path.context.networkId]);
+}
+
+function taskLatencyMs(task: TaskRecord): number | undefined {
+  const latency = Date.parse(task.updatedAt) - Date.parse(task.createdAt);
+  return Number.isFinite(latency) && latency >= 0 ? latency : undefined;
 }
 
 const RESIDENT_ROLE_STATUS = "resident";
@@ -125,6 +145,28 @@ export function createTaskAssimilationHook(options: TaskAssimilationOptions): (t
         }
       }
 
+      let pheromone: { signal: string; strength: number; decaysAt: string | null } | null = null;
+      const taskFeature = task.metadata["taskFeature"];
+      if (options.pheromone && typeof taskFeature === "string" && taskFeature.trim() !== "") {
+        try {
+          const path: PheromonePathKey = {
+            taskFeature,
+            roleId: task.roleId,
+            context: options.pheromone.context,
+          };
+          const latencyMs = taskLatencyMs(task);
+          const entry =
+            outcome === "success"
+              ? options.pheromone.map.reinforce(path, nowMs, latencyMs === undefined ? {} : { latencyMs })
+              : options.pheromone.map.penalize(path, nowMs);
+          // No expiry on the row: it is an append-only observation; time decay
+          // is applied to the in-memory map's effective weight, not to history.
+          pheromone = { signal: pheromoneSignal(path), strength: entry.weight, decaysAt: null };
+        } catch (error) {
+          onError(error, task.id);
+        }
+      }
+
       await options.db.request({
         type: "task.assimilate",
         assimilation: {
@@ -134,7 +176,7 @@ export function createTaskAssimilationHook(options: TaskAssimilationOptions): (t
           roleName: task.roleId,
           roleStatus,
           roleFitness: [{ metric: "task_outcome", value: outcome === "success" ? 1 : 0 }],
-          pheromone: null,
+          pheromone,
           memory,
           updatedAt: now().toISOString(),
         },

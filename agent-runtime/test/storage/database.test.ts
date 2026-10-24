@@ -566,6 +566,23 @@ describe("events table (event.record / event.list)", () => {
     await db.close();
   });
 
+  it("prunes the oldest rows beyond maxEventRows while keeping the newest", async () => {
+    const db = await DatabaseClient.open(nextDbPath(), { maxEventRows: 8 });
+
+    for (let i = 1; i <= 40; i += 1) {
+      await db.request({ type: "event.record", event: { ...baseEvent, eventId: `evt-${i}`, sequence: i } });
+    }
+
+    const { events } = await db.request({ type: "event.list", limit: 100 });
+    // Pruning runs in batches (every 2 inserts for a cap of 8), so up to 2 extra rows may linger.
+    expect(events.length).toBeGreaterThanOrEqual(8);
+    expect(events.length).toBeLessThanOrEqual(10);
+    expect(events[0]?.event_id).toBe("evt-40");
+    expect(events.some((e) => e.event_id === "evt-1")).toBe(false);
+
+    await db.close();
+  });
+
   it("event.list observes a write still sitting in the batch buffer", async () => {
     const db = await DatabaseClient.open(nextDbPath());
 

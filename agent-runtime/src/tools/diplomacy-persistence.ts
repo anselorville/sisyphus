@@ -44,16 +44,12 @@ export interface DiplomacyPersistenceOptions {
   /** Id generator for each broadcast event's `event_id`. Default: randomUUID(). Inject in tests for deterministic ids. */
   readonly nextEventId?: () => string;
   /**
-   * Assigns each emitted event's `sequence`. Default: a private, in-memory
-   * counter starting at 1, unique only within this process's lifetime.
-   * `diplomacy.elevation.requested`/`resolved` are the first RealtimeEvent
-   * types anything on the Node side of this codebase actually emits (every
-   * other defined type is currently only ever received, e.g.
-   * `voice.transcript.final` in ../tasks/inbound-event-router.ts) -- there is
-   * no existing cross-restart sequence source yet to build on. A later task
-   * that wants durable-across-restart sequencing for the whole outbound
-   * event bus can replace this default without touching this module's
-   * public shape.
+   * Assigns each emitted event's `sequence`. The composition root passes the
+   * process-wide EventSequencer (../protocol/sequence.ts) so these events can
+   * never collide with the task executor's or the Scribe's: the Python bridge
+   * de-duplicates sidecar events by `sequence` alone. The default -- a private
+   * in-memory counter starting at 1 -- is only for isolated tests of this
+   * module.
    */
   readonly nextSequence?: () => number;
   /** Called whenever a persistence write or broadcast throws -- diagnostics only, mirrors ../telemetry/runtime-metrics.ts's onPersistError. Never re-thrown, so a DB/broadcast failure never surfaces back through CapabilityGateway.execute(). */

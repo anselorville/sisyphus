@@ -49,8 +49,28 @@ const MAX_CHUNK_LENGTH = 150;
 // Normalizes a chunk for speech: collapses internal newlines to a comma so
 // a multi-line list ("1. 巴西\n2. 阿根廷\n...") never trips VoiceHerald's
 // 3-newline reject rule and reads naturally when spoken.
-function normalizeForSpeech(text: string): string {
-  return text.replace(/\n+/g, "，");
+/**
+ * Turns an LLM text chunk into something a TTS engine can read aloud. Models
+ * answer in Markdown by habit; spoken, `**bold**` becomes "star star bold" and
+ * a bullet becomes a stray symbol. So emphasis, headings, list markers, links
+ * and code are reduced to their words, and line breaks become spoken pauses.
+ * Chunks arrive sentence by sentence, so a lone opening `**` whose closer is
+ * in the next chunk is stripped too.
+ */
+export function normalizeForSpeech(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, "")
+    .replace(/^[ \t]*[-*+•][ \t]+/gm, "")
+    .replace(/^[ \t]*\d+[.)、][ \t]+/gm, "")
+    .replace(/\*+/g, "")
+    .replace(/\n+/g, "，")
+    .replace(/，{2,}/g, "，")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 }
 
 export class PiEventAdapter {

@@ -295,6 +295,8 @@ export interface DbWorkerData {
    * DatabaseClientOptions.testOnlyTransactionDelayMs.
    */
   readonly transactionDelayMs?: number;
+  /** Retention cap for the `events` table; the oldest rows beyond it are pruned in batches. Default: DEFAULT_MAX_EVENT_ROWS. */
+  readonly maxEventRows?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -405,6 +407,8 @@ export interface DatabaseClientOptions {
   readonly onLatencySample?: (ms: number) => void;
   /** Test-only fault injection: forwarded to the Worker as DbWorkerData.transactionDelayMs. See that field's doc comment. Never set in production. */
   readonly testOnlyTransactionDelayMs?: number;
+  /** Retention cap for the `events` table (default 200,000 rows). Partial transcripts make this log chatty, so it must not grow forever. */
+  readonly maxEventRows?: number;
 }
 
 interface PendingRequest {
@@ -431,7 +435,7 @@ export class DatabaseClient {
   private nextRequestId = 1;
   private closed = false;
 
-  private constructor(worker: Worker, options: Required<Omit<DatabaseClientOptions, "testOnlyTransactionDelayMs">>) {
+  private constructor(worker: Worker, options: Required<Omit<DatabaseClientOptions, "testOnlyTransactionDelayMs" | "maxEventRows">>) {
     this.worker = worker;
     this.maxPendingRequests = options.maxPendingRequests;
     this.requestTimeoutMs = options.requestTimeoutMs;
@@ -453,7 +457,11 @@ export class DatabaseClient {
   /** Spawns the database worker, waits for it to open SQLite and run migrations, and resolves once it reports ready. */
   static async open(dbPath: string, options: DatabaseClientOptions = {}): Promise<DatabaseClient> {
     const { url, execArgv } = resolveWorkerEntry();
-    const workerData: DbWorkerData = { dbPath, transactionDelayMs: options.testOnlyTransactionDelayMs };
+    const workerData: DbWorkerData = {
+      dbPath,
+      transactionDelayMs: options.testOnlyTransactionDelayMs,
+      maxEventRows: options.maxEventRows,
+    };
     const worker = new Worker(url, { execArgv: [...execArgv], workerData });
 
     await new Promise<void>((resolve, reject) => {

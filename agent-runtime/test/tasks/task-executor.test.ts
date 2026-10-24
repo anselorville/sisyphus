@@ -189,6 +189,7 @@ async function makeHarness(
   ackGraceMs = 50,
   fillerStartMs = 5_000,
   fillerIntervalMs = 10_000,
+  eventLog?: (event: RealtimeEvent) => void,
 ): Promise<Harness> {
   const db = await DatabaseClient.open(join(tempDir, `test-${randomUUID()}.sqlite3`));
   const registry = new RoleManifestRegistry();
@@ -215,6 +216,7 @@ async function makeHarness(
     ackGraceMs,
     fillerStartMs,
     fillerIntervalMs,
+    eventLog,
   });
   return { db, taskNest, executor, captured, session };
 }
@@ -378,6 +380,46 @@ describe("Three-level acknowledgement flow", () => {
     expect(texts).not.toContain("好的，我在处理。");
 
     await delay(100);
+    await db.close();
+  });
+
+  it("logs tool lifecycle events to the HCI event log without broadcasting them", async () => {
+    const logged: RealtimeEvent[] = [];
+    const { db, executor, captured } = await makeHarness(new SlowToolPiSession(), 30, 5_000, 10_000, (e) => logged.push(e));
+
+    await executor.onVoiceTranscript("帮我查一下天气", "conv-tool-log", "evt-tool-log");
+    await delay(150);
+
+    expect(logged.map((e) => e.type)).toEqual(["tool.started", "tool.completed"]);
+    expect(logged[0]?.payload).toMatchObject({ tool_call_id: "tool-call-1", tool_name: "web_search", args: "{}" });
+    expect(logged[1]?.payload).toMatchObject({ tool_name: "web_search", result_chars: 4 });
+    expect(typeof logged[1]?.payload["duration_ms"]).toBe("number");
+    expect(logged[1]?.payload["duration_ms"] as number).toBeGreaterThanOrEqual(60);
+    expect(logged.every((e) => e.task_id === logged[0]?.task_id && e.interaction_id === "conv-tool-log")).toBe(true);
+    expect(captured.some((e) => e.type.startsWith("tool."))).toBe(false);
+
+    await db.close();
+  });
+
+  it("clips oversized tool args and failure text in the log", async () => {
+    const logged: RealtimeEvent[] = [];
+    class HugeFailingToolSession extends TestPiSession {
+      async prompt(): Promise<void> {
+        this.emit(agentStartEvent());
+        this.emit({ type: "tool_execution_start", toolCallId: "c9", toolName: "web_fetch", args: { url: "x".repeat(5_000) } } as unknown as AgentSessionEvent);
+        this.emit({ type: "tool_execution_end", toolCallId: "c9", toolName: "web_fetch", result: "boom".repeat(500), isError: true } as unknown as AgentSessionEvent);
+        this.emit(agentEndEvent());
+      }
+    }
+    const { db, executor } = await makeHarness(new HugeFailingToolSession(), 30, 5_000, 10_000, (e) => logged.push(e));
+
+    await executor.onVoiceTranscript("帮我查一下天气", "conv-tool-clip", "evt-tool-clip");
+    await delay(100);
+
+    expect(logged.map((e) => e.type)).toEqual(["tool.started", "tool.failed"]);
+    expect((logged[0]?.payload["args"] as string).length).toBeLessThanOrEqual(301);
+    expect((logged[1]?.payload["error"] as string).length).toBeLessThanOrEqual(301);
+
     await db.close();
   });
 

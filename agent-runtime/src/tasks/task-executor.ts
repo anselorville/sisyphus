@@ -22,6 +22,7 @@ import type { TaskNest } from "./task-nest.js";
 import type { TrafficCommander } from "../voice/traffic-commander.js";
 import type { SpeechDirective, VoiceHerald } from "../voice/voice-herald.js";
 import type { InfoHub } from "../hub/info-hub.js";
+import { EventSequencer } from "../protocol/sequence.js";
 import { LongTaskFillerScheduler } from "../voice/long-task-filler-scheduler.js";
 import { ToolAckGenerator } from "../voice/tool-ack-generator.js";
 
@@ -49,6 +50,15 @@ export interface TaskExecutorOptions {
   readonly hub?: InfoHub;
   /** Called after every terminal task event -- used to poke the Scribe so a completed turn immediately triggers a topic sweep instead of waiting for the 30s timer. */
   readonly onTerminal?: () => void;
+  /**
+   * Record-only sink for events that are part of the HCI log but are not
+   * broadcast to the media plane -- today the `tool.started/completed/failed`
+   * lifecycle of every tool call. Receives a bounded summary (tool name, a
+   * clipped args string, duration, result size), never raw tool results.
+   */
+  readonly eventLog?: (event: RealtimeEvent) => void;
+  /** Assigns each emitted event's `sequence`. Default: this executor's own EventSequencer; production passes the process-wide one (see ../protocol/sequence.ts). */
+  readonly nextSequence?: () => number;
   readonly ackGraceMs?: number;
   readonly toolAckGenerator?: ToolAckGenerator;
   readonly fillerStartMs?: number;
@@ -65,12 +75,13 @@ export class TaskExecutor {
   private readonly roleRegistry: RoleManifestRegistry;
   private readonly db: TaskAssimilationDb | undefined;
   private readonly hub: InfoHub | undefined;
+  private readonly eventLog: ((event: RealtimeEvent) => void) | undefined;
   private readonly onTerminal: (() => void) | undefined;
   private readonly ackGraceMs: number;
   private readonly toolAckGenerator: ToolAckGenerator;
   private readonly fillerStartMs: number;
   private readonly fillerIntervalMs: number;
-  private sequence = 0;
+  private readonly nextSequence: () => number;
   private activeTask: ActiveTaskInfo | undefined;
   private activeFillerScheduler: LongTaskFillerScheduler | undefined;
   private readonly pendingQueue: Array<{ text: string; interactionId: string; sourceEventId?: string }> = [];
@@ -86,6 +97,9 @@ export class TaskExecutor {
     this.db = options.db;
     this.hub = options.hub;
     this.onTerminal = options.onTerminal;
+    this.eventLog = options.eventLog;
+    const ownSequencer = new EventSequencer();
+    this.nextSequence = options.nextSequence ?? ((): number => ownSequencer.next());
     this.ackGraceMs = options.ackGraceMs ?? DEFAULT_ACK_GRACE_MS;
     this.toolAckGenerator = options.toolAckGenerator ?? new ToolAckGenerator();
     this.fillerStartMs = options.fillerStartMs ?? DEFAULT_FILLER_START_MS;
@@ -143,7 +157,9 @@ export class TaskExecutor {
     const task = await this.taskNest.create({
       goal: text,
       interactionId,
-      metadata: sourceEventId ? { sourceEventId } : {},
+      // taskFeature feeds the pheromone map at assimilation: the matched
+      // capability when routing found one, else the route kind itself.
+      metadata: { taskFeature: decision.matchedCapability ?? decision.kind, ...(sourceEventId ? { sourceEventId } : {}) },
     });
     console.log(`[task-executor] created task ${task.id}, assigning...`);
     this.server.broadcast(this.buildEvent("task.created", task.id, interactionId, { goal: task.goal }));
@@ -253,8 +269,13 @@ export class TaskExecutor {
       if (!manifest) throw new Error(`TaskExecutor: unknown role "${roleId}"`);
 
       const session = await this.sessionManager.ensure(manifest);
+      const toolStartedAtMs = new Map<string, number>();
       unsubscribe = session.subscribe((update: RoleSessionUpdate) => {
         if (update.taskId !== undefined && update.taskId !== taskId) return;
+
+        if (update.type === "tool.started" || update.type === "tool.completed" || update.type === "tool.failed") {
+          this.logToolEvent(update, taskId, interactionId, toolStartedAtMs);
+        }
 
         // Accumulate text delta for summary construction. Progress text is
         // already speech-normalized (newlines collapsed) by PiEventAdapter.
@@ -405,6 +426,37 @@ export class TaskExecutor {
     this.onTerminal?.();
   }
 
+  /** Records a bounded summary of a tool lifecycle update into the HCI event log (never broadcast). */
+  private logToolEvent(
+    update: RoleSessionUpdate,
+    taskId: string,
+    interactionId: string,
+    startedAtMs: Map<string, number>,
+  ): void {
+    if (!this.eventLog) return;
+    const toolName = readString(update.payload["tool_name"]) ?? "tool";
+    const toolCallId = readString(update.payload["tool_call_id"]) ?? toolName;
+    const payload: Record<string, unknown> = { tool_call_id: toolCallId, tool_name: toolName };
+    if (update.type === "tool.started") {
+      startedAtMs.set(toolCallId, Date.now());
+      payload["args"] = clipForLog(update.payload["args"]);
+    } else {
+      const startedAt = startedAtMs.get(toolCallId);
+      startedAtMs.delete(toolCallId);
+      if (startedAt !== undefined) payload["duration_ms"] = Date.now() - startedAt;
+      if (update.type === "tool.failed") {
+        payload["error"] = clipForLog(update.payload["result"]);
+      } else {
+        payload["result_chars"] = stringifyForLog(update.payload["result"]).length;
+      }
+    }
+    try {
+      this.eventLog(this.buildEvent(update.type, taskId, interactionId, payload));
+    } catch {
+      // The HCI log is best-effort; it must never disturb task execution.
+    }
+  }
+
   private deliverSpeech(directive: SpeechDirective, taskId: string, interactionId: string): boolean {
     console.log(`[task-executor] SPEECH kind=${directive.kind} "${directive.text.slice(0, 60)}"`);
     const event = this.buildEvent("voice.speech.enqueue", taskId, interactionId, {
@@ -425,10 +477,9 @@ export class TaskExecutor {
     interactionId: string,
     payload: Record<string, unknown>,
   ): RealtimeEvent {
-    this.sequence += 1;
     return {
       event_id: randomUUID(),
-      sequence: this.sequence,
+      sequence: this.nextSequence(),
       interaction_id: interactionId,
       task_id: taskId,
       source: "swarm",
@@ -464,4 +515,22 @@ export class TaskExecutor {
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() !== "" ? value : undefined;
+}
+
+const TOOL_LOG_TEXT_LIMIT = 300;
+
+function stringifyForLog(value: unknown): string {
+  if (value === undefined) return "";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch {
+    return String(value);
+  }
+}
+
+/** Bounds tool args / error text so the HCI log never stores whole fetched pages. */
+function clipForLog(value: unknown): string {
+  const text = stringifyForLog(value);
+  return text.length > TOOL_LOG_TEXT_LIMIT ? `${text.slice(0, TOOL_LOG_TEXT_LIMIT)}…` : text;
 }

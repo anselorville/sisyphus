@@ -52,6 +52,7 @@ import { RuntimeWebSocketServer } from "./transport/websocket-server.js";
 import { RuntimeMetrics } from "./telemetry/runtime-metrics.js";
 import { DatabaseClient } from "./storage/database.js";
 import { EventRecorder } from "./storage/event-recorder.js";
+import { EventSequencer } from "./protocol/sequence.js";
 import { TaskNest, type TaskRecord } from "./tasks/task-nest.js";
 import { createInboundEventRouter } from "./tasks/inbound-event-router.js";
 import { createTaskAssimilationHook } from "./tasks/task-assimilation.js";
@@ -104,11 +105,6 @@ const ALL_ROLE_MANIFESTS = [
   SCRIBE_ROLE_MANIFEST,
 ];
 
-let nextSequenceValue = 0;
-function nextSequence(): number {
-  nextSequenceValue += 1;
-  return nextSequenceValue;
-}
 
 /** Assigned inside createAgentRuntime() once Scribe exists; see onConnectionClose. */
 let resetSessionForNewConnection: () => void = () => {};
@@ -224,6 +220,11 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     // from the runtime -- is logged to the `events` table for HCI analysis
     // (scripts/query-hci-events.sh). Fire-and-forget; see ./storage/event-recorder.ts.
     const eventRecorder = new EventRecorder({ db, now: options.now });
+    // One sequence source for every event this process originates: the Python
+    // bridge de-duplicates by `sequence` alone, so per-module counters collide
+    // (and restart at 1). See ./protocol/sequence.ts.
+    const eventSequencer = new EventSequencer();
+    const nextSequence = (): number => eventSequencer.next();
 
     const server = new RuntimeWebSocketServer({
       port: runtimeConfig.port,
@@ -260,7 +261,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     // diplomacy-officer.ts's own doc comment for this stage. Elevation
     // persistence + broadcast is real (see ./tools/diplomacy-persistence.ts).
     const diplomacyOfficer = new DiplomacyOfficer();
-    const diplomacyPersistence = createDiplomacyPersistenceHooks({ db, broadcast: (event) => server.broadcast(event) });
+    const diplomacyPersistence = createDiplomacyPersistenceHooks({ db, broadcast: (event) => server.broadcast(event), nextSequence });
     const capabilityGateway = new CapabilityGateway({ officer: diplomacyOfficer, ...diplomacyPersistence });
 
     // 6. PiRoleSessionManager. Building the default provider does no I/O and
@@ -283,12 +284,21 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     // close the "task ends -> assimilate" gap named in README.md's roadmap
     // item 3 -- see ./tasks/task-assimilation.ts.
     const geneBank = new GeneBank();
+    // Hoisted for the same reason as geneBank: assimilation reinforces/penalizes
+    // the per-(task feature, role, device, network) path when a task ends.
+    const pheromoneMap = new PheromoneMap();
     const roleExperienceTracker = new RoleExperienceTracker();
     const memoryCurator = new MemoryCurator();
     const taskNest = new TaskNest({
       db,
       now: options.now,
-      onTerminalTransition: createTaskAssimilationHook({ db, geneBank, experienceTracker: roleExperienceTracker, memoryCurator }),
+      onTerminalTransition: createTaskAssimilationHook({
+        db,
+        geneBank,
+        experienceTracker: roleExperienceTracker,
+        memoryCurator,
+        pheromone: { map: pheromoneMap, context: { deviceId: runtimeConfig.deviceId, networkId: runtimeConfig.networkId } },
+      }),
     });
     // routeInboundEvent is assigned after the routing/voice layer is built
     // (step 8 below) so TaskExecutor has all its dependencies. The forward
@@ -325,6 +335,8 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
       db,
       hub: infoHub,
       onTerminal: () => pokeScribe(),
+      eventLog: (event) => eventRecorder.record(event),
+      nextSequence,
     });
 
     const scribeBoard = new TranscriptBoard();
@@ -388,7 +400,6 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     const population = new PopulationRegistry();
     const queen = new Queen();
     const roleIncubator = new RoleIncubator();
-    const pheromoneMap = new PheromoneMap();
 
     // 11. RpcChamber -- constructing it never spawns a process; only
     // spawn() does, and nothing at startup calls it. capacity is driven by

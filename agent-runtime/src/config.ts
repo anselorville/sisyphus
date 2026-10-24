@@ -7,6 +7,7 @@
  * of the codebase can trust `config` without re-validating it.
  */
 
+import { hostname } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import type { RoleModelClassRouting, RoleModelRef } from "./roles/types.js";
@@ -49,6 +50,10 @@ export interface AgentRuntimeConfig {
    * change.
    */
   readonly modelClassRouting: RoleModelClassRouting;
+  /** Device this runtime is on; pheromone paths are keyed per device (../ecology/pheromone-map.ts). Default: the machine's hostname. */
+  readonly deviceId: string;
+  /** Network label for pheromone paths (e.g. "home-wifi", "office"), set via AGENT_RUNTIME_NETWORK_ID; the runtime cannot reliably detect it itself. Default "default". */
+  readonly networkId: string;
 }
 
 function readPositiveInt(name: string, fallback: number): number {
@@ -114,6 +119,8 @@ export const config: AgentRuntimeConfig = Object.freeze({
   dbPath: readString("AGENT_RUNTIME_DB_PATH", DEFAULT_DB_PATH),
   apiBudgetDailyLimitUsd: readNonNegativeNumber("AGENT_RUNTIME_API_BUDGET_DAILY_LIMIT_USD", 20),
   apiBudgetVoiceReserveUsd: readNonNegativeNumber("AGENT_RUNTIME_API_BUDGET_VOICE_RESERVE_USD", 2),
+  deviceId: readString("AGENT_RUNTIME_DEVICE_ID", hostname()),
+  networkId: readString("AGENT_RUNTIME_NETWORK_ID", "default"),
   modelClassRouting: Object.freeze({
     fast: parseModelRef("AGENT_RUNTIME_MODEL_FAST", DEEPSEEK_FLASH),
     balanced: parseModelRef("AGENT_RUNTIME_MODEL_BALANCED", DEEPSEEK_PRO),
