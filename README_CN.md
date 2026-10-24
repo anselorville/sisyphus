@@ -30,7 +30,7 @@ worker 角色（代码、网页、设备、邮件等）会在后台完成实际�
 
 ## 当前状态（2026-10-18）
 
-产品方向是通用 **voice agent**（JARVIS），不是 `legacy/` 里的翻译原型。
+产品方向是通用 **voice agent**（Marcus），不是 `legacy/` 里的翻译原型。
 任务执行闭环已经接线并做过端到端验证：`voice.transcript.final` ->
 ReflexRouter -> TaskExecutor -> Pi session -> `task.completed`/
 `task.failed` -> assimilation（`role_fitness`），已用真实 sidecar 进程

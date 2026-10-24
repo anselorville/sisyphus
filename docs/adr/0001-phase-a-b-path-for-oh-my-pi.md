@@ -8,7 +8,7 @@
 
 ## 背景
 
-用户希望将 pi-agent 从 coding-agent 演化为 general-agent（JARVIS——钢铁侠的 AI 助手），覆盖日常交流（web search、通信）和技术课题的 deep research。用户认为 oh-my-pi（Pi 的完整 fork，22.8k star，MIT）是实现这一演化的杠杆，因为 oh-my-pi 添加了 LSP、DAP、浏览器自动化、子 agent、记忆、插件市场等 harness 功能。
+用户希望将 pi-agent 从 coding-agent 演化为 general-agent（Marcus），覆盖日常交流（web search、通信）和技术课题的 deep research。用户认为 oh-my-pi（Pi 的完整 fork，22.8k star，MIT）是实现这一演化的杠杆，因为 oh-my-pi 添加了 LSP、DAP、浏览器自动化、子 agent、记忆、插件市场等 harness 功能。
 
 调研发现：
 
@@ -25,14 +25,14 @@
 
 采用 Phase A/B 路径：
 
-**Phase A（当前）**：用上游 `@earendil-works/pi-coding-agent` 补全编排循环，基于场景选择性释放角色（general + web 先行），接入 Traffic Commander 语音反馈，跑起来，收集 HCI 数据。蜂群治理层休眠但保留。所有角色统一使用 deepseek-v4-flash。oh-my-pi 暂不引入。
+**Phase A（当前）**：用上游 `@earendil-works/pi-coding-agent` 补全编排循环，基于场景选择性释放角色（general + web 先行），接入 Traffic Commander 语音反馈，跑起来，收集 HCI 数据。蜂群治理层休眠但保留。所有角色统一使用 deepseek-flash。oh-my-pi 暂不引入。
 
 **Phase B（有 HCI 数据后）**：用真实数据评估 oh-my-pi 的哪些能力（子 agent、记忆、插件市场）是真正需要的。如果需要，规划 Bun 迁移——有数据支撑的投资决策。
 
 ## 理由
 
 1. **速度**：补全编排循环是小而明确的任务（TODO Phase 1 P0），不涉及运行时迁移。媒体平面已在运行（cloud engine, zhipu STT + minimax TTS），sidecar 已连接。缺的只是把 LLM 接进语音链路。
-2. **质量**：上游 pi-coding-agent 已集成，LLM 会话层已完成，无需重写。所有角色统一使用 deepseek-v4-flash（降低延迟，简化路由）。
+2. **质量**：上游 pi-coding-agent 已集成，LLM 会话层已完成，无需重写。所有角色统一使用 deepseek-flash（降低延迟，简化路由）。
 3. **角色委派**：7 个角色是场景引擎，不是负担。general 作为入口，ReflexRouter 委派给 specialized roles（web/code/mail 等）。Phase A 先释放 general + web。
 4. **延迟管理**：Traffic Commander 已实现（首次确认 700ms、进度播报 ≥5s），是掩盖 agent 长任务耗时的关键。只需接入执行循环。
 5. **蜂群治理可顶用**：角色委派机制（ReflexRouter）和 Memory Curator 角色已存在、已测试，可以先提供 oh-my-pi 的子 agent/记忆能力的子集。

@@ -42,7 +42,7 @@ export interface AgentRuntimeConfig {
    * AGENT_RUNTIME_MODEL_FAST/BALANCED/DEEP ("<provider>:<modelId>", e.g.
    * "anthropic:claude-opus-4-5"). Defaults route every tier to whichever
    * DeepSeek model this environment already authenticates
-   * (DEEPSEEK_API_KEY) -- the cheaper deepseek-v4-flash for "fast", the
+   * (DEEPSEEK_API_KEY) -- the cheaper deepseek-flash for "fast", the
    * fuller deepseek-v4-pro for "balanced"/"deep" -- so roles differentiate
    * by cost tier out of the box with zero extra config, and an operator
    * with other providers configured can repoint any tier without a code
@@ -103,7 +103,7 @@ function parseModelRef(name: string, fallback: RoleModelRef): RoleModelRef {
 
 const DEFAULT_DB_PATH = fileURLToPath(new URL("../data/agent-runtime.sqlite3", import.meta.url));
 
-const DEEPSEEK_FLASH: RoleModelRef = { provider: "deepseek", modelId: "deepseek-v4-flash" };
+const DEEPSEEK_FLASH: RoleModelRef = { provider: "deepseek", modelId: "deepseek-flash" };
 const DEEPSEEK_PRO: RoleModelRef = { provider: "deepseek", modelId: "deepseek-v4-pro" };
 
 export const config: AgentRuntimeConfig = Object.freeze({

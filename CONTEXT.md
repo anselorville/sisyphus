@@ -2,7 +2,7 @@
 
 ## 产品愿景
 
-**JARVIS**：目标产品原型——一个通用个人语音助手，不是 coding-agent。命名源自钢铁侠的 AI 助手。覆盖日常交流（web search、通信）和技术课题的 deep research。用户身份：算法架构师。
+**Marcus**（中文译名：马库斯）：目标产品原型——一个通用个人语音助手，不是 coding-agent。覆盖日常交流（web search、通信）和技术课题的 deep research。用户身份：算法架构师。
 
 **general-agent**：进化目标——pi-agent 从 coding-agent 演化为通用 agent。当前 pi-agent 的默认工具是代码编辑工具（bash、edit、write、grep、find、ls），但 SDK 支持任意工具（`createAgentSession({ tools })`）。让 pi-agent 成为 general-agent 的关键是**工具面和系统提示词**，不是运行时。
 
@@ -14,7 +14,7 @@
 
 **pi-agent**：`@earendil-works/pi-coding-agent` 的 SDK 入口（`createAgentSession`）。当前版本 0.82.0，Node 兼容。层级：`pi-ai`（LLM 访问层）→ `pi-agent-core`（agent 循环：工具调用+状态管理）→ `pi-coding-agent`（组合产品：CLI + SDK）。
 
-**模型选择**：所有角色统一使用 deepseek-v4-flash（不分 fast/balanced/deep tier）。通过 `AGENT_RUNTIME_MODEL_FAST`、`AGENT_RUNTIME_MODEL_BALANCED`、`AGENT_RUNTIME_MODEL_DEEP` 三个环境变量均设为 `deepseek:deepseek-v4-flash` 实现。
+**模型选择**：所有角色统一使用 deepseek-flash（不分 fast/balanced/deep tier）。通过 `AGENT_RUNTIME_MODEL_FAST`、`AGENT_RUNTIME_MODEL_BALANCED`、`AGENT_RUNTIME_MODEL_DEEP` 三个环境变量均设为 `deepseek:deepseek-flash` 实现。
 
 **oh-my-pi / omp**：Pi 的完整 fork（`can1357/oh-my-pi`，22.8k star，MIT）。有自己的 npm scope `@oh-my-pi/*`、CLI `omp`、版本线 17.x。Bun-only 运行时（≥1.3.14）。添加了 LSP、DAP、浏览器自动化、子 agent、记忆、插件市场等 harness 功能。**不是插件，是 fork**。SDK 面变了：`modelRuntime`/`resourceLoader` 被移除，换成 `authStorage`/`ModelRegistry`/`Settings`。
 
@@ -28,7 +28,7 @@
 
 **HCI 事件持久化**：SQLite `events` 表建了但没有任何 `event.record` 写入路径，`scripts/query-hci-events.sh` 永远为空。HCI 数据目前只能靠进程日志和 `tasks`/`role_fitness`。这是 Phase A 最优先要补的观测缺口。
 
-**harness**：用户术语，指 agent 的工具/编排层。"完善的 harness" = 完整的工具 + 编排能力。oh-my-pi 的 harness 包括 LSP、DAP、浏览器、子 agent、记忆、插件市场。对 JARVIS 相关的子集：子 agent 委派、跨会话记忆、插件市场。
+**harness**：用户术语，指 agent 的工具/编排层。"完善的 harness" = 完整的工具 + 编排能力。oh-my-pi 的 harness 包括 LSP、DAP、浏览器、子 agent、记忆、插件市场。对 Marcus 相关的子集：子 agent 委派、跨会话记忆、插件市场。
 
 **顶层编排能力**：协调多个工具/能力的结构化能力。蜂群治理（Queen/Population/GeneBank）是一种形式；oh-my-pi 的子 agent 系统是另一种。当前阶段：单 pi-agent + 扩展工具面即可，编排能力后续再议。
 

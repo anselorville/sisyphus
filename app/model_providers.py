@@ -92,12 +92,13 @@ CARTESIA_DEFAULT_MODEL = "sonic-3.5"
 DEEPGRAM_DEFAULT_MODEL = "nova-3-general"
 ASSEMBLYAI_DEFAULT_MODEL = "universal-3-5-pro"
 # DeepSeek first-party API (app/openrouter_services.py `build_deepseek_llm`).
-# Canonical model ids per the live GET /models catalog (verified 2026-07-19:
-# exactly ["deepseek-v4-flash", "deepseek-v4-pro"]; the older
-# "deepseek-chat" name still resolves as a legacy alias but is not listed).
-# flash first: it's the real-time-translation choice.
-DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash"
-DEEPSEEK_TEXT_MODELS: tuple[str, ...] = ("deepseek-v4-flash", "deepseek-v4-pro")
+# Canonical model ids per the live GET /models catalog (verified 2026-10-24:
+# exactly ["deepseek-flash", "deepseek-v4-pro"]; the older names
+# "deepseek-v4-flash" and "deepseek-chat" still resolve as legacy aliases but
+# are not listed).
+# flash first: it's the low-latency voice choice.
+DEEPSEEK_DEFAULT_MODEL = "deepseek-flash"
+DEEPSEEK_TEXT_MODELS: tuple[str, ...] = ("deepseek-flash", "deepseek-v4-pro")
 # MiniMax T2A WebSocket TTS (app/minimax_tts_services.py). "speech-2.8-hd"
 # is the capability-manifest model verified live; turbo is its faster
 # sibling, selectable but unverified from this account.

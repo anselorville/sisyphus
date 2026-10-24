@@ -50,7 +50,7 @@ git push -u origin main       # 5) 发布
 
 当前产品目标：
 
-> **JARVIS** —— 一个通用个人语音助手（general voice agent），不是
+> **Marcus** —— 一个通用个人语音助手（general voice agent），不是
 > coding-agent。覆盖日常交流、web search、通信，以及技术课题的 deep
 > research。
 
@@ -91,7 +91,7 @@ SQLite: tasks / role_fitness / memories / diplomacy_* / events(未写入)
   `tests/realtime/test_media_pipeline.py::test_media_pipeline_contains_no_business_llm`）。
 - **sidecar 是大脑**：路由、角色、工具、语音旁白、任务终态与经验沉淀。
 - **媒体平面在 sidecar 失联时仍能维持完整 STT/TTS**。
-- 所有角色统一使用 `deepseek-v4-flash`（`.env` 的
+- 所有角色统一使用 `deepseek-flash`（`.env` 的
   `AGENT_RUNTIME_MODEL_FAST/BALANCED/DEEP` 三项都指向它）。
 
 ---
@@ -133,6 +133,19 @@ task.created → task.assigned(general)
 
 ## 4. 在线 ASR / TTS provider 验证矩阵
 
+> **2026-10-24 复验**（真实调用）：
+> - Zhipu ASR + OpenRouter TTS 闭环通过：TTS 7.0s 音频 / 总耗时 8.6s，ASR 回喂逐字还原基准句，耗时 0.61s。
+> - DeepSeek `deepseek-flash` 返回正常。
+> - **MiniMax 配额已恢复**：`speech-2.8-hd` 真实合成返回 `status_code 0` 与音频数据（此前为 2056）。中文 TTS 现有 OpenRouter 与 MiniMax 两个可选项。
+> - Deepgram 仍 `401`（key 无效）；AssemblyAI、Cartesia、OpenRouter 的 key 有效（200）。
+> - Edge TTS 仍 `403`；VoxCPM2（LAN `192.168.2.128:8765`）仍不可达。
+> - 三套测试 161 / 603 / 27 全部通过，sidecar `tsc --noEmit` 通过。
+>
+> - **LLM 模型改名为 `deepseek-flash`**：DeepSeek 官方 `GET /models` 现在只列出 `deepseek-flash` 与 `deepseek-v4-pro`，旧名 `deepseek-v4-flash` 仅作为别名还能调用。sidecar 的模型目录来自 pi-ai，0.82.0 只认旧名，所以把 `@earendil-works/pi-ai` 与 `pi-coding-agent` 同步升到 **0.86.0**（首个收录 `deepseek-flash` 的版本）。升级后 sidecar 类型检查、603 项测试通过，真实 LLM 端到端（说话→任务→`task.completed`，`role_fitness` 落库）通过。
+> - 端口 8765 目前被一个无关的 `python -m http.server` 占用；起完整栈前先停掉它，否则 sidecar 会起不来。
+>
+> 下表其余内容保留 2026-10-18 的原始验证记录。
+
 验证方法：直接调用项目自己的 `app/model_lab_preview.py` provider 构造器（不是
 mock），用 macOS `say` 生成一段已知中文语音作为基准，并把 TTS 输出回喂 ASR
 做可懂度闭环。
@@ -154,7 +167,7 @@ mock），用 macOS `say` 生成一段已知中文语音作为基准，并把 TT
 |---|---|---|
 | **OpenRouter `microsoft/mai-voice-2`** | ✅ **可用（推荐）** | 中文合成后回喂 Zhipu ASR，逐字还原基准句；6.4s 音频，总耗时 ~4.4s |
 | Cartesia `sonic-3.5` | ⚠️ 可用但仅适合英文 | 英文合成正常（2.5s 音频，~4.3s）；中文回喂 ASR 得到 `你好，Kindergarten怎么样？…Young Jiu Shou.`，因为 builder 把 `language` 硬编码为 `EN`，中文发音错误 |
-| MiniMax `speech-2.8-hd` | ❌ 不可用 | WebSocket 返回 `status_code 2056`：“已达到 Token Plan 用量上限，请升级或购买积分” |
+| MiniMax `speech-2.8-hd` | ✅ 可用（2026-10-24 复验） | 10-18 曾返回 `status_code 2056`（Token Plan 用量上限）；10-24 真实合成返回 `status_code 0` 与音频 |
 | Edge TTS | ❌ 不可用 | Microsoft 端点返回 403（`Invalid response status`） |
 | VoxCPM2-CUDA（LAN） | ❌ 当前不可达 | `http://192.168.2.128:8765` 连接失败（服务未启动/不在线） |
 
@@ -162,7 +175,7 @@ mock），用 macOS `say` 生成一段已知中文语音作为基准，并把 TT
 
 | Provider / model | 状态 | 证据 |
 |---|---|---|
-| DeepSeek `deepseek-v4-flash` | ✅ 可用 | 见 `docs/llm-auth-verification.md`；本次端到端测试中真实返回了中文回答 |
+| DeepSeek `deepseek-flash` | ✅ 可用 | 见 `docs/llm-auth-verification.md`；本次端到端测试中真实返回了中文回答 |
 
 ### 结论
 
@@ -171,12 +184,12 @@ mock），用 macOS `say` 生成一段已知中文语音作为基准，并把 TT
 ```
 ASR: Zhipu GLM glm-asr-2512
 TTS: OpenRouter microsoft/mai-voice-2
-LLM: DeepSeek deepseek-v4-flash
+LLM: DeepSeek deepseek-flash
 ```
 
 `model_providers.json`（运行时本地配置，已被 gitignore）已切换到这套组合。
-MiniMax 配额恢复后可以切回（它的流式延迟更低），但中文 TTS 目前必须用
-OpenRouter。
+MiniMax 配额已于 10-24 恢复，可以切回（它的流式延迟更低，但未做中文可懂度闭环回喂验证）；
+默认仍用已做闭环验证的 OpenRouter。
 
 ---
 

@@ -4,7 +4,7 @@ import { resolveRoleModel, UnresolvedRoleModelError, type ModelCatalog } from ".
 import type { RoleModelClassRouting } from "../../src/roles/types.js";
 
 const ROUTING: RoleModelClassRouting = {
-  fast: { provider: "deepseek", modelId: "deepseek-v4-flash" },
+  fast: { provider: "deepseek", modelId: "deepseek-flash" },
   balanced: { provider: "deepseek", modelId: "deepseek-v4-pro" },
   deep: { provider: "anthropic", modelId: "claude-opus-4-5" },
 };
@@ -20,16 +20,16 @@ function fakeCatalog(available: Record<string, string[]>): ModelCatalog {
 
 describe("resolveRoleModel", () => {
   it("resolves a tier to the model its routing names, once the catalog confirms it's available", async () => {
-    const catalog = fakeCatalog({ deepseek: ["deepseek-v4-flash", "deepseek-v4-pro"] });
+    const catalog = fakeCatalog({ deepseek: ["deepseek-flash", "deepseek-v4-pro"] });
 
     const model = await resolveRoleModel(catalog, "device", "fast", ROUTING);
 
-    expect(model.id).toBe("deepseek-v4-flash");
+    expect(model.id).toBe("deepseek-flash");
   });
 
   it("resolves a different tier to a different model, so two roles on different tiers never collapse onto the same model", async () => {
     const catalog = fakeCatalog({
-      deepseek: ["deepseek-v4-flash", "deepseek-v4-pro"],
+      deepseek: ["deepseek-flash", "deepseek-v4-pro"],
       anthropic: ["claude-opus-4-5"],
     });
 
@@ -40,13 +40,13 @@ describe("resolveRoleModel", () => {
   });
 
   it("throws UnresolvedRoleModelError when the routed model id isn't in the catalog's available list", async () => {
-    const catalog = fakeCatalog({ deepseek: ["deepseek-v4-flash"] });
+    const catalog = fakeCatalog({ deepseek: ["deepseek-flash"] });
 
     await expect(resolveRoleModel(catalog, "code", "balanced", ROUTING)).rejects.toThrow(UnresolvedRoleModelError);
   });
 
   it("throws UnresolvedRoleModelError when the routed provider has no configured auth at all", async () => {
-    const catalog = fakeCatalog({ deepseek: ["deepseek-v4-flash", "deepseek-v4-pro"] });
+    const catalog = fakeCatalog({ deepseek: ["deepseek-flash", "deepseek-v4-pro"] });
 
     await expect(resolveRoleModel(catalog, "code", "deep", ROUTING)).rejects.toThrow(UnresolvedRoleModelError);
   });

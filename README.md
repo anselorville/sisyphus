@@ -35,7 +35,7 @@ running system.
 
 ## Current status (2026-10-18)
 
-The product direction is a general **voice agent** (JARVIS), not the
+The product direction is a general **voice agent** (Marcus), not the
 translation prototype in `legacy/`. The task execution loop is wired and
 verified end-to-end: `voice.transcript.final` -> ReflexRouter ->
 TaskExecutor -> Pi session -> `task.completed`/`task.failed` ->

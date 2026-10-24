@@ -486,7 +486,7 @@ describe("createPiRpcProcessSpawner -- model routing (Roadmap #1)", () => {
   }
 
   const ROUTING: RoleModelClassRouting = {
-    fast: { provider: "deepseek", modelId: "deepseek-v4-flash" },
+    fast: { provider: "deepseek", modelId: "deepseek-flash" },
     balanced: { provider: "deepseek", modelId: "deepseek-v4-pro" },
     deep: { provider: "anthropic", modelId: "claude-opus-4-5" },
   };
@@ -494,14 +494,14 @@ describe("createPiRpcProcessSpawner -- model routing (Roadmap #1)", () => {
   it("resolves the genome's own modelPolicy.preferredClass, not a fixed anthropic/default, and passes it to the spawned process", async () => {
     spawnMock.mockReset();
     spawnMock.mockReturnValue(new FakeRpcChildProcess());
-    const catalog = fakeCatalog({ deepseek: ["deepseek-v4-flash"] });
+    const catalog = fakeCatalog({ deepseek: ["deepseek-flash"] });
 
     const spawner = createPiRpcProcessSpawner({ modelRouting: ROUTING, modelCatalog: catalog, command: "pi" });
     await spawner(genome("web-scout", { modelPolicy: { preferredClass: "fast", thinkingLevel: "low" } }));
 
     expect(spawnMock).toHaveBeenCalledWith(
       "pi",
-      ["--mode", "rpc", "--no-session", "--provider", "deepseek", "--model", "deepseek-v4-flash"],
+      ["--mode", "rpc", "--no-session", "--provider", "deepseek", "--model", "deepseek-flash"],
       expect.objectContaining({ stdio: ["pipe", "pipe", "pipe"] }),
     );
   });
@@ -509,14 +509,14 @@ describe("createPiRpcProcessSpawner -- model routing (Roadmap #1)", () => {
   it("resolves two genomes on different tiers to different models, so they never collapse onto the same fixed default", async () => {
     spawnMock.mockReset();
     spawnMock.mockReturnValue(new FakeRpcChildProcess());
-    const catalog = fakeCatalog({ deepseek: ["deepseek-v4-flash"], anthropic: ["claude-opus-4-5"] });
+    const catalog = fakeCatalog({ deepseek: ["deepseek-flash"], anthropic: ["claude-opus-4-5"] });
     const spawner = createPiRpcProcessSpawner({ modelRouting: ROUTING, modelCatalog: catalog });
 
     await spawner(genome("fast-role", { modelPolicy: { preferredClass: "fast", thinkingLevel: "low" } }));
     await spawner(genome("deep-role", { modelPolicy: { preferredClass: "deep", thinkingLevel: "high" } }));
 
     const models = spawnMock.mock.calls.map((call) => (call[1] as string[])[6]);
-    expect(models).toEqual(["deepseek-v4-flash", "claude-opus-4-5"]);
+    expect(models).toEqual(["deepseek-flash", "claude-opus-4-5"]);
   });
 
   it("throws UnresolvedRoleModelError instead of spawning when the genome's tier routes to an unavailable model -- never silently falls back to a different model", async () => {

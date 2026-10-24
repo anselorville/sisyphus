@@ -56,7 +56,7 @@ import type { ModelCatalog } from "../../src/roles/model-routing.js";
 import type { RoleManifest, RoleModelClassRouting } from "../../src/roles/types.js";
 
 const ROUTING: RoleModelClassRouting = {
-  fast: { provider: "deepseek", modelId: "deepseek-v4-flash" },
+  fast: { provider: "deepseek", modelId: "deepseek-flash" },
   balanced: { provider: "deepseek", modelId: "deepseek-v4-pro" },
   deep: { provider: "anthropic", modelId: "claude-opus-4-5" },
 };
@@ -89,7 +89,7 @@ afterEach(() => {
 describe("createDefaultPiSessionProvider", () => {
   it("resolves the role's modelClass through modelRouting and passes the concrete model to createAgentSession", async () => {
     mocks.createAgentSession.mockResolvedValue({ session: { fake: "session" } });
-    const modelRuntime = fakeCatalog({ deepseek: ["deepseek-v4-flash", "deepseek-v4-pro"] });
+    const modelRuntime = fakeCatalog({ deepseek: ["deepseek-flash", "deepseek-v4-pro"] });
 
     const provider = createDefaultPiSessionProvider({
       modelRuntime: modelRuntime as never,
@@ -100,12 +100,12 @@ describe("createDefaultPiSessionProvider", () => {
 
     expect(mocks.createAgentSession).toHaveBeenCalledTimes(1);
     const call = mocks.createAgentSession.mock.calls[0]?.[0] as { model?: unknown };
-    expect(call.model).toEqual({ id: "deepseek-v4-flash", provider: "deepseek", name: "deepseek-v4-flash" });
+    expect(call.model).toEqual({ id: "deepseek-flash", provider: "deepseek", name: "deepseek-flash" });
   });
 
   it("routes a different role's tier to a different model", async () => {
     mocks.createAgentSession.mockResolvedValue({ session: { fake: "session" } });
-    const modelRuntime = fakeCatalog({ deepseek: ["deepseek-v4-flash", "deepseek-v4-pro"] });
+    const modelRuntime = fakeCatalog({ deepseek: ["deepseek-flash", "deepseek-v4-pro"] });
 
     const provider = createDefaultPiSessionProvider({
       modelRuntime: modelRuntime as never,
@@ -119,7 +119,7 @@ describe("createDefaultPiSessionProvider", () => {
   });
 
   it("rejects, and never calls createAgentSession, when the role's routed model isn't available", async () => {
-    const modelRuntime = fakeCatalog({ deepseek: ["deepseek-v4-flash"] });
+    const modelRuntime = fakeCatalog({ deepseek: ["deepseek-flash"] });
 
     const provider = createDefaultPiSessionProvider({
       modelRuntime: modelRuntime as never,
@@ -133,7 +133,7 @@ describe("createDefaultPiSessionProvider", () => {
   it("builds the ModelRuntime lazily, once, and reuses it across every role", async () => {
     mocks.createAgentSession.mockResolvedValue({ session: { fake: "session" } });
     mocks.modelRuntimeCreate.mockResolvedValue(
-      fakeCatalog({ deepseek: ["deepseek-v4-flash", "deepseek-v4-pro"] }),
+      fakeCatalog({ deepseek: ["deepseek-flash", "deepseek-v4-pro"] }),
     );
 
     const provider = createDefaultPiSessionProvider({ modelRouting: ROUTING });
@@ -150,7 +150,7 @@ describe("createDefaultPiSessionProvider", () => {
   it("defaults modelRouting to config.modelClassRouting when none is injected", async () => {
     mocks.createAgentSession.mockResolvedValue({ session: { fake: "session" } });
     mocks.modelRuntimeCreate.mockResolvedValue(
-      fakeCatalog({ deepseek: ["deepseek-v4-flash", "deepseek-v4-pro"] }),
+      fakeCatalog({ deepseek: ["deepseek-flash", "deepseek-v4-pro"] }),
     );
 
     const provider = createDefaultPiSessionProvider();
@@ -158,6 +158,6 @@ describe("createDefaultPiSessionProvider", () => {
     await provider(manifest({ id: "device", modelClass: "fast" }));
 
     const call = mocks.createAgentSession.mock.calls[0]?.[0] as { model?: unknown };
-    expect(call.model).toEqual({ id: "deepseek-v4-flash", provider: "deepseek", name: "deepseek-v4-flash" });
+    expect(call.model).toEqual({ id: "deepseek-flash", provider: "deepseek", name: "deepseek-flash" });
   });
 });

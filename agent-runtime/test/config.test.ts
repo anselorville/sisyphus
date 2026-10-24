@@ -4,9 +4,9 @@ import { parseModelRefValue } from "../src/config.js";
 
 describe("parseModelRefValue", () => {
   it("splits '<provider>:<modelId>' on the first colon", () => {
-    expect(parseModelRefValue("AGENT_RUNTIME_MODEL_FAST", "deepseek:deepseek-v4-flash")).toEqual({
+    expect(parseModelRefValue("AGENT_RUNTIME_MODEL_FAST", "deepseek:deepseek-flash")).toEqual({
       provider: "deepseek",
-      modelId: "deepseek-v4-flash",
+      modelId: "deepseek-flash",
     });
   });
 
@@ -18,11 +18,11 @@ describe("parseModelRefValue", () => {
   });
 
   it("rejects a value with no colon", () => {
-    expect(() => parseModelRefValue("AGENT_RUNTIME_MODEL_FAST", "deepseek-v4-flash")).toThrow(RangeError);
+    expect(() => parseModelRefValue("AGENT_RUNTIME_MODEL_FAST", "deepseek-flash")).toThrow(RangeError);
   });
 
   it("rejects a value with nothing before the colon", () => {
-    expect(() => parseModelRefValue("AGENT_RUNTIME_MODEL_FAST", ":deepseek-v4-flash")).toThrow(RangeError);
+    expect(() => parseModelRefValue("AGENT_RUNTIME_MODEL_FAST", ":deepseek-flash")).toThrow(RangeError);
   });
 
   it("rejects a value with nothing after the colon", () => {

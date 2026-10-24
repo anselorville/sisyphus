@@ -93,7 +93,7 @@ class EchoPiSession extends TestPiSession {
     this.promptedTexts.push(text);
     this.emit(agentStartEvent());
     await delay(10);
-    this.emit(textDeltaEvent("你好，我是JARVIS语音助手。"));
+    this.emit(textDeltaEvent("你好，我是Marcus语音助手。"));
     await delay(10);
     this.emit(agentEndEvent());
   }
@@ -256,11 +256,11 @@ describe("Scenario: basic voice loop", () => {
     expect(eventsOfType(captured, "task.assigned")[0]?.payload["role_id"]).toBe("general");
 
     const texts = speechTexts(captured);
-    expect(texts).toContain("你好，我是JARVIS语音助手。");
+    expect(texts).toContain("你好，我是Marcus语音助手。");
 
     const completed = eventsOfType(captured, "task.completed");
     expect(completed).toHaveLength(1);
-    expect(completed[0]?.payload["summary"]).toBe("你好，我是JARVIS语音助手。");
+    expect(completed[0]?.payload["summary"]).toBe("你好，我是Marcus语音助手。");
 
     await db.close();
   });
