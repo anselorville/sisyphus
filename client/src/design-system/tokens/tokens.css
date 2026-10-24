@@ -1,5 +1,5 @@
 /*
- * Sisyphus Translator design tokens.
+ * Marcus design tokens.
  * Warm & friendly, light-mode-first, dark reserved.
  * Color scale numbered 50-900; semantic aliases layer on top so components
  * consume --ds-color-{role} (theme-able) rather than raw scale steps.

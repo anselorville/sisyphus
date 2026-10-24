@@ -2,6 +2,8 @@ import os
 import unittest
 from unittest.mock import patch
 
+from pipecat.transcriptions.language import Language
+
 import app.providers.speech as speech
 from app.config import load_settings
 from app.model_providers import CARTESIA_DEFAULT_MODEL, CloudCapabilityConfig, CloudProviderConfig
@@ -30,6 +32,23 @@ class CartesiaProviderTests(unittest.TestCase):
         self.assertEqual(type(service).__name__, "CartesiaTTSService")
         self.assertEqual(service._settings.model, CARTESIA_DEFAULT_MODEL)
         self.assertEqual(service._settings.voice, RELEASE_CARTESIA_VOICE_ID)
+
+    def test_cartesia_speaks_chinese_by_default_and_honours_an_override(self) -> None:
+        cloud = CloudProviderConfig(
+            speech=CloudCapabilityConfig(provider="cartesia", model=CARTESIA_DEFAULT_MODEL)
+        )
+        with patch.dict(os.environ, {"CARTESIA_LANGUAGE": ""}, clear=False):
+            default = speech._build_cloud_tts(self._settings(), cloud)
+        with patch.dict(os.environ, {"CARTESIA_LANGUAGE": "en"}, clear=False):
+            english = speech._build_cloud_tts(self._settings(), cloud)
+
+        self.assertEqual(default._settings.language, Language.ZH)
+        self.assertEqual(english._settings.language, Language.EN)
+
+    def test_an_unknown_cartesia_language_fails_loudly(self) -> None:
+        with patch.dict(os.environ, {"CARTESIA_LANGUAGE": "klingon"}, clear=False):
+            with self.assertRaises(RuntimeError):
+                speech.cartesia_language()
 
     def test_voxcpm2_uses_configured_voice_design_not_generic_model_lab_voice(self) -> None:
         settings = self._settings()

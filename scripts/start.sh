@@ -5,6 +5,7 @@
 #
 #   scripts/start.sh          # stop old instances, start sidecar + backend + frontend
 #   scripts/start.sh stop     # just stop everything, start nothing
+#   START_NO_LOG_WINDOWS=1 scripts/start.sh   # don't open Terminal log-tail windows
 #
 # Startup order (sidecar first, per the agent-runtime integration spec):
 #   1. Check Node meets agent-runtime/package.json's engines.node requirement.
@@ -155,8 +156,21 @@ else
 fi
 
 # --- Step 2: build (if needed) and start the sidecar ------------------------
-if [[ "$NODE_OK" -eq 1 && ! -f "$SIDECAR_ENTRY" ]]; then
-  echo "==> Building agent-runtime sidecar (dist/ missing -- it's gitignored)..."
+# dist/ is gitignored, so it is missing on a fresh checkout -- and it silently
+# goes STALE whenever the TypeScript sources change (the old build keeps
+# answering and "fixes don't take effect", see docs/lessons-learned.md). So
+# rebuild when dist is missing OR any source / dependency manifest is newer.
+sidecar_needs_build() {
+  [[ ! -f "$SIDECAR_ENTRY" ]] && return 0
+  local newer
+  newer="$(find "$REPO_ROOT/agent-runtime/src" "$REPO_ROOT/agent-runtime/package.json" \
+    "$REPO_ROOT/agent-runtime/package-lock.json" "$REPO_ROOT/agent-runtime/tsconfig.json" \
+    -type f -newer "$SIDECAR_ENTRY" -print -quit 2>/dev/null || true)"
+  [[ -n "$newer" ]]
+}
+
+if [[ "$NODE_OK" -eq 1 ]] && sidecar_needs_build; then
+  echo "==> Building agent-runtime sidecar (dist/ missing or older than its sources)..."
   if ! npm --prefix "$REPO_ROOT/agent-runtime" run build; then
     echo "==> WARNING: agent-runtime build failed -- skipping the sidecar (backend/frontend still start)."
     NODE_OK=0
@@ -232,8 +246,8 @@ fi
 echo ""
 echo "    Open http://localhost:${FRONTEND_PORT} and press the power switch to connect."
 
-# --- Open log-tail windows (macOS Terminal) ---
-if command -v osascript &>/dev/null && [[ "$(uname)" == "Darwin" ]]; then
+# --- Open log-tail windows (macOS Terminal); set START_NO_LOG_WINDOWS=1 to skip ---
+if [[ -z "${START_NO_LOG_WINDOWS:-}" ]] && command -v osascript &>/dev/null && [[ "$(uname)" == "Darwin" ]]; then
   echo ""
   echo "==> Opening log-tail windows..."
   if [[ "$SIDECAR_OK" -eq 1 ]]; then

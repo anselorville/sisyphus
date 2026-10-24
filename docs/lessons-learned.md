@@ -57,3 +57,50 @@
 - `agent-runtime/src/roles/pi-event-adapter.ts` — 句子感知切分（本次修复对象之一）
 - `agent-runtime/src/tasks/task-executor.ts` — emitTerminal 去重（本次修复对象之二）
 - `scripts/start.sh` — 官方启停脚本（内置端口级 kill）
+
+---
+
+## 2026-10-25：只验证到文字层，语音输出其实从未工作
+
+### 症状
+
+文档写"任务执行闭环已验证"，日志里每一句回复都有 `AGENT -> TTS: ...`，但用一个
+真正走 WebRTC 的客户端收听，回传音轨是 427 帧**纯数字静音**。
+
+### 排查
+
+1. 写 `scripts/voice-smoke.py`，用 aiortc 当浏览器，把合成语音推进麦克风音轨，
+   统计回传音轨的 RMS：峰值恒为 0。
+2. 后端日志里有被忽略的告警：
+   `[pre-synth] TTS failed for seq N: range() arg 3 must not be zero`。
+3. 单独构造 TTS 服务并调用 `run_tts`，复现同一个 `ValueError`。
+
+### 根因
+
+`PreSynthQueueProcessor` 对一个只构造、从未在管线里 `setup/start` 的 pipecat TTS 服务
+直接调 `run_tts`。服务的输出采样率在 `start()` 里才确定，此时为 0，HTTP 类服务算分块
+大小时除零。`model_lab_preview` 走的是 `run_test`（真管线），所以预览一直正常，
+掩盖了这个问题。
+
+### 同一次测试顺带暴露的
+
+- 自动模式下 `VADProcessor` 只发 `VADUser*` 帧，但打断、语义缓冲、事件发布都在等
+  `UserStarted/StoppedSpeakingFrame`——自动模式下**打断从未生效**。
+- 打断只清了待播队列，没发 `InterruptionFrame`，传输层缓冲里的声音照放约 17 秒。
+- Python 桥只按 `sequence` 去重 sidecar 事件，而 sidecar 里三个模块各有一个从 1 开始的
+  计数器：撞号的真实事件被当成重复丢掉，sidecar 重启后序号归零也一样。
+- 回复里的 Markdown（`**加粗**`）原样送进 TTS。
+- 默认 TTS（OpenRouter）一句话合成 ~9 s，MiniMax 只要 0.4–0.7 s。
+
+### 规则
+
+1. **"验证过"必须说明验证到哪一层。** 文字事件注入证明不了有声音；声称语音链路可用，
+   至少要有一个客户端收到过非静音的回传音频。
+2. **组件在测试里能跑，不代表在生产装配里能跑。** 预览用的是管线，生产直接调服务，
+   两条路径对"服务是否已启动"的要求不同。凡是把 pipecat 服务当普通对象用的地方都要警惕。
+3. **去重键必须全局唯一。** 任何"按某字段去重"的接收端，都要求发送端所有来源共用
+   一个分配器，并且重启后不回退。
+4. **被吞掉的告警是线索。** `logger.warning` 里的 `TTS failed` 一直在日志里，只是
+   没有人听过实际声音。
+5. **取消要立即返回。** 打断路径上不要 `await` 一个可能还在等网络的拆除；pipecat 的
+   `WorkerRunner.run()` 会吞掉传给它的取消，用 `asyncio.wait` 而不是 `await task`。

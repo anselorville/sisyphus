@@ -1,6 +1,6 @@
 # Sisyphus Project Restart
 
-**日期**：2026-10-18（git 收敛于 2026-10-19 完成）
+**日期**：2026-10-18 初版；2026-10-24/25 复验并补完开发缺口（见第 3、4、6 节）
 **规范开发根目录**：`/data/git_repository/sisyphus`
 **当前分支**：`main`（= `origin/main`，工作区干净；orca 附属 worktree 已移除）
 **本文用途**：这是重新开始开发时的唯一入口文档。它记录项目现在的真实状态、
@@ -96,14 +96,14 @@ SQLite: tasks / role_fitness / memories / diplomacy_* / events(HCI 事件日志)
 
 ---
 
-## 3. 已验证状态（2026-10-18）
+## 3. 已验证状态（2026-10-25 复验）
 
 ### 3.1 测试与构建
 
 | 范围 | 命令 | 结果 |
 |------|------|------|
-| Python 媒体平面 | `uv run pytest tests/ -q --ignore=tests/performance` | **161 passed** |
-| agent-runtime sidecar | `cd agent-runtime && npm test` | **603 passed / 45 files** |
+| Python 媒体平面 | `uv run pytest tests/ -q --ignore=tests/performance` | **180 passed** |
+| agent-runtime sidecar | `cd agent-runtime && npm test` | **637 passed / 50 files** |
 | client | `cd client && npm test` | **27 passed / 3 files** |
 | sidecar 类型检查 + 构建 | `cd agent-runtime && npm run check && npm run build` | **通过** |
 | client 类型检查 | `cd client && npx tsc --noEmit` | **通过** |
@@ -129,6 +129,33 @@ task.created → task.assigned(general)
 
 这证明 Phase 1 的“说话 → 任务 → Pi Session → 终态 → assimilation”链路是真的通了。
 
+### 3.3 全链路语音冒烟测试（真实后端 + 真实 provider）
+
+`scripts/voice-smoke.py` 用 aiortc 扮演浏览器：和真实客户端一样 POST `/api/offer`、
+推一路麦克风音轨、开 `transcript` 数据通道，把一句合成的中文语音当作用户说话，
+然后收听回复。它走的是完整真链路：VAD → STT → sidecar → LLM → TTS → 音频回传。
+
+```bash
+scripts/start.sh                                   # 先起栈
+uv run python scripts/voice-smoke.py               # 默认说一句中文问候
+uv run python scripts/voice-smoke.py --barge-in    # 回复开始后插话
+```
+
+2026-10-25 实测（Zhipu ASR + MiniMax TTS + DeepSeek `deepseek-flash`）：
+
+| 指标 | 结果 |
+|---|---|
+| 单句"请用一句话介绍你自己" | 转写正确；Marcus 自称 Marcus；收到约 11 秒回复语音 |
+| 说完 → 第一句回复文字 | 约 1.5–1.9 s |
+| 说完 → 听到第一段回复音频 | 约 2.2–2.8 s |
+| sidecar 侧"说完 → 首句语音入队"（`--latency`） | 0.8–1.9 s |
+| 打断（`--barge-in`） | 回复音频在插话后约 0.5 s 内停止，随后回答新问题 |
+
+这个测试能证明链路活着、能把真实回合写进 HCI 日志；**它不能评判听感**（语气、节奏、
+误触发），那仍需要真人对着麦克风说。
+
+这次冒烟测试一次性暴露并修复了四个只在真实音频链路上才会出现的缺陷，见第 6 节。
+
 ---
 
 ## 4. 在线 ASR / TTS provider 验证矩阵
@@ -139,12 +166,10 @@ task.created → task.assigned(general)
 > - **MiniMax 配额已恢复**：`speech-2.8-hd` 真实合成返回 `status_code 0` 与音频数据（此前为 2056）。中文 TTS 现有 OpenRouter 与 MiniMax 两个可选项。
 > - Deepgram 仍 `401`（key 无效）；AssemblyAI、Cartesia、OpenRouter 的 key 有效（200）。
 > - Edge TTS 仍 `403`；VoxCPM2（LAN `192.168.2.128:8765`）仍不可达。
-> - 三套测试 161 / 603 / 27 全部通过，sidecar `tsc --noEmit` 通过。
->
 > - **LLM 模型改名为 `deepseek-flash`**：DeepSeek 官方 `GET /models` 现在只列出 `deepseek-flash` 与 `deepseek-v4-pro`，旧名 `deepseek-v4-flash` 仅作为别名还能调用。sidecar 的模型目录来自 pi-ai，0.82.0 只认旧名，所以把 `@earendil-works/pi-ai` 与 `pi-coding-agent` 同步升到 **0.86.0**（首个收录 `deepseek-flash` 的版本）。升级后 sidecar 类型检查、603 项测试通过，真实 LLM 端到端（说话→任务→`task.completed`，`role_fitness` 落库）通过。
-> - 端口 8765 目前被一个无关的 `python -m http.server` 占用；起完整栈前先停掉它，否则 sidecar 会起不来。
+> - 起完整栈前确认 8765（sidecar）、7860（后端）、1420（前端）没有被别的进程占用，否则 sidecar 会起不来。
 >
-> 下表其余内容保留 2026-10-18 的原始验证记录。
+> 下表以 2026-10-25 的复验为准，未复验的行保留 2026-10-18 的记录。
 
 验证方法：直接调用项目自己的 `app/model_lab_preview.py` provider 构造器（不是
 mock），用 macOS `say` 生成一段已知中文语音作为基准，并把 TTS 输出回喂 ASR
@@ -157,7 +182,7 @@ mock），用 macOS `say` 生成一段已知中文语音作为基准，并把 TT
 | Provider / model | 状态 | 证据 |
 |---|---|---|
 | **Zhipu GLM ASR `glm-asr-2512`** | ✅ **可用（推荐）** | 中文基准句逐字正确：`你好，今天天气怎么样？我们现在开始测试语音助手。`；英文片段也正确；耗时 0.56–0.77s |
-| AssemblyAI `universal-3-5-pro` | ✅ 可用（REST 验证） | 官方 REST 接口对中文/英文都逐字正确。⚠️ 项目内 `preview_transcription` 会在流式服务返回前就关闭管线，导致截断（`Hello.` / 空），这是测试夹具限制，不是 provider 故障 |
+| AssemblyAI `universal-3-5-pro` | ⚠️ 可用，英文佳、中文有瑕疵 | 预览夹具修复后（等待流式 final 并合并多段）：英文逐字正确；中文整体正确，但开头的"你好"被写成拼音 `Ni hao.`。流式延迟约 7–9 s（含 1.5 s 收敛窗口）。中文场景仍推荐 Zhipu |
 | Deepgram `nova-3-general` | ❌ 不可用 | 官方 REST 返回 `Invalid credentials`；现有 key 无效 |
 | OpenRouter `qwen/qwen3-asr-flash-2026-02-10` | ❌ 不可用 | 调用返回 404；OpenRouter 当前模型列表里没有任何 ASR 模型 |
 
@@ -165,9 +190,9 @@ mock），用 macOS `say` 生成一段已知中文语音作为基准，并把 TT
 
 | Provider / model | 状态 | 证据 |
 |---|---|---|
-| **OpenRouter `microsoft/mai-voice-2`** | ✅ **可用（推荐）** | 中文合成后回喂 Zhipu ASR，逐字还原基准句；6.4s 音频，总耗时 ~4.4s |
-| Cartesia `sonic-3.5` | ⚠️ 可用但仅适合英文 | 英文合成正常（2.5s 音频，~4.3s）；中文回喂 ASR 得到 `你好，Kindergarten怎么样？…Young Jiu Shou.`，因为 builder 把 `language` 硬编码为 `EN`，中文发音错误 |
-| MiniMax `speech-2.8-hd` | ✅ 可用（2026-10-24 复验） | 10-18 曾返回 `status_code 2056`（Token Plan 用量上限）；10-24 真实合成返回 `status_code 0` 与音频 |
+| OpenRouter `microsoft/mai-voice-2` | ⚠️ 可用但慢 | 中文回喂逐字正确；但**不是流式**，一句话合成要 ~9 s（2026-10-25 实测 3.5 s 音频耗时 9.0 s），不适合做语音助手默认 |
+| Cartesia `sonic-3.5` | ⚠️ 可用但慢 | 语言现在可配（`CARTESIA_LANGUAGE`，默认 `zh`）；中文回喂逐字正确，英文也正确。但一句话合成 ~6.2 s，延迟不理想 |
+| **MiniMax `speech-2.8-hd`** | ✅ **可用（推荐）** | 10-18 曾因配额返回 `2056`，10-24 已恢复。一句话合成 **0.4–0.7 s**；中文回喂 ASR 可懂（`您好，今天天气怎么样？…`），英文逐字正确 |
 | Edge TTS | ❌ 不可用 | Microsoft 端点返回 403（`Invalid response status`） |
 | VoxCPM2-CUDA（LAN） | ❌ 当前不可达 | `http://192.168.2.128:8765` 连接失败（服务未启动/不在线） |
 
@@ -179,17 +204,17 @@ mock），用 macOS `say` 生成一段已知中文语音作为基准，并把 TT
 
 ### 结论
 
-当前**唯一完整可用**的在线组合：
+当前推荐的在线组合：
 
 ```
-ASR: Zhipu GLM glm-asr-2512
-TTS: OpenRouter microsoft/mai-voice-2
+ASR: Zhipu GLM glm-asr-2512       （批量，~0.6–0.8 s）
+TTS: MiniMax speech-2.8-hd        （流式，一句 0.4–0.7 s）
 LLM: DeepSeek deepseek-flash
 ```
 
-`model_providers.json`（运行时本地配置，已被 gitignore）已切换到这套组合。
-MiniMax 配额已于 10-24 恢复，可以切回（它的流式延迟更低，但未做中文可懂度闭环回喂验证）；
-默认仍用已做闭环验证的 OpenRouter。
+选 MiniMax 做 TTS 的依据是延迟：同一句话 MiniMax 0.4–0.7 s、Cartesia ~6.2 s、OpenRouter
+~9 s。代码里的默认值本来就是 MiniMax + Zhipu（`app/model_providers.py`），
+`model_providers.json`（本地配置，已被 gitignore）现已与之一致。
 
 ---
 
@@ -233,67 +258,95 @@ asyncio.run(main())
 PY
 ```
 
+### 全链路语音冒烟测试
+
+```bash
+START_NO_LOG_WINDOWS=1 scripts/start.sh            # 不弹 Terminal 日志窗口
+uv run python scripts/voice-smoke.py               # 见 3.3；--barge-in 测打断
+```
+
 ### 查看 HCI / 任务数据
 
 ```bash
-scripts/query-hci-events.sh --summary   # 入站+出站事件；延迟/打断统计见已知缺口 1
+scripts/query-hci-events.sh --summary   # 事件类型分布、打断次数、任务终态、转写样例
+scripts/query-hci-events.sh --latency   # 每轮"说完 → 首句语音入队"延迟与汇总
 sqlite3 agent-runtime/data/agent-runtime.sqlite3 \
   "SELECT id,status,role_id,goal FROM tasks ORDER BY created_at DESC LIMIT 5;"
 ```
 
 ---
 
-## 6. 已知缺口（按优先级）
+## 6. 缺口：已修复的与仍然开放的
 
-1. **媒体面只发 `voice.transcript.final`（P0 观测缺口）**
-   2026-10-25 起，经过 WebSocket 的每个事件（Pipecat 入站 + sidecar 出站）都由
-   `EventRecorder`（`agent-runtime/src/storage/event-recorder.ts`）经 `event.record`
-   写入 `events` 表，一次事件一行（按 `event_id` 幂等，不按连接重复写），
-   `scripts/query-hci-events.sh` 已可查。
-   但 Python 媒体面（`app/realtime/`）目前只构造 `voice.transcript.final`，不发
-   `voice.user.started/stopped`、`voice.speech.cancel`、`voice.transcript.partial`，
-   所以表里算不出端到端延迟，`--summary` 的打断占比恒为 0；延迟仍看
-   `grep voice_latency /tmp/sisyphus-backend.log`。工具调用级事件也没落库。
-   修复方向：在 Pipecat 侧把 VAD 的 user started/stopped、打断取消、partial 转写
-   通过 `event_bridge` 发出（`voice.speech.cancel` 在 `queueing.py` 里已按控制事件处理）。
+### 6.1 2026-10-24/25 修复的（均有测试）
 
-2. **真实麦克风/扬声器对话未人工验证（P0）**
-   文本事件注入 + 真实 LLM 的执行闭环已验证；但 barge-in、播报延迟的主观听感
-   还没有在真实音频链路上人工跑过。
+这些缺陷之前文档里都没有，是做全链路语音冒烟测试时才暴露的——此前所有"验证"
+都停在文字层，没有真正听过一次回复：
 
-3. **流式 ASR 的预览夹具会截断结果（P1）**
-   `preview_transcription` 对 Deepgram/AssemblyAI 这类 WebSocket 流式服务会在
-   结果返回前关闭管线。要么给预览加“等待 final”窗口，要么在文档/UI 里明确它
-   只适合 batch ASR。
+1. **线上语音输出从未工作。** `PreSynthQueueProcessor` 直接对一个从未启动过的
+   TTS 服务调 `run_tts`，采样率为 0，OpenRouter 报
+   `range() arg 3 must not be zero`，每一句回复都静默失败。
+   现用 `StandaloneTTS`（`app/realtime/standalone_tts.py`）用一次性小管线驱动服务。
+2. **自动模式下打断从未生效。** `VADProcessor` 只发 `VADUserStarted/Stopped`，
+   而打断逻辑和语义缓冲等待的是 `UserStarted/StoppedSpeakingFrame`，自动模式下
+   没有任何东西产生它们。现由 `VadTurnFramesProcessor` 补发。
+3. **打断只清了待播队列，传输层缓冲里的声音照放。** 现在打断时向下游发
+   `InterruptionFrame`，实测回复音频在插话后约 0.5 s 内停止。
+4. **sidecar 事件序号互相冲突。** Python 桥只按 `sequence` 去重，而任务执行器、
+   外交模块、Scribe 各有一个从 1 开始的独立计数器，撞号的真实事件（包括语音播报）
+   会被当成重复丢掉；sidecar 重启后序号归零，同样被旧记录吞掉。现用进程级
+   `EventSequencer`（`agent-runtime/src/protocol/sequence.ts`，按时钟播种，
+   重启后天然更大）。
+5. **回复里的 Markdown 会被念出来**（`**加粗**` 读成"星星"）。现在送 TTS 前剥掉
+   强调、标题、列表、链接、代码。
+6. **TTS 默认选错。** OpenRouter 合成一句要 ~9 s，改为 MiniMax（0.4–0.7 s）。
 
-4. **`pheromone` 增量仍为 `null`（P1）**
-   memory 已接 MemoryCurator；pheromone 还缺 task-feature/device/network 上下文。
+同批完成的重启文档 P0/P1 项：
 
-5. **蜂群治理未参与决策（P2，刻意停放）**
-   Queen merge/wake、PopulationRegistry.retire() 还没有触发规则。等 Phase 1/2
-   的真实 fitness/pheromone 数据再启用。
+- HCI 事件日志完整：媒体面补发 `voice.user.started/stopped`、`voice.transcript.partial`、
+  `voice.speech.cancel`；工具调用生命周期（名称、截断后的参数、耗时、结果大小）落
+  `events` 表；`--latency` 能按轮算延迟，`--summary` 能数打断；表有 20 万行保留上限。
+- 流式 ASR 预览夹具会等 final、合并多段，不再截断。
+- Cartesia 语言可配（`CARTESIA_LANGUAGE`，默认 `zh`），不再写死英文。
+- `scripts/start.sh` 在 `dist/` 比源码旧时自动重建，不再静默跑旧代码。
+- `pheromone` 增量不再恒为 `null`：任务带 `taskFeature`，按（任务特征、角色、设备、
+  网络）路径强化/惩罚并落 `pheromones` 表（设备 `AGENT_RUNTIME_DEVICE_ID`，默认主机名；
+  网络 `AGENT_RUNTIME_NETWORK_ID`，默认 `default`）。
+- 所有面向用户的角色提示词、页面标题改为以 Marcus 自称。
 
-6. **树莓派硬件未调优/基准（P2）**
-   `.proj-init/performance-baseline.md` 的 Pi 章节仍是“未测”。
+### 6.2 仍然开放的
 
-7. **`diplomacy-persistence.ts` 的 `sequence` 重启归零（P2）**
-   进程内自增，没有跨重启的持久化序号源。
-
-8. **设备控制器仍是占位（P3）**
-   邮件之外的可注入接口未接具体系统（systemd/launchd/IoT 网关尚未决策）。
+1. **真人麦克风/扬声器对话未人工验证（P0，只能由人做）。**
+   冒烟测试用的是合成语音，证明了链路，但证明不了听感：语气与节奏、嘈杂环境下的
+   VAD 误触发、真实口音的识别率、免提下的回声。请对着麦克风跑几轮，把观察记进
+   `docs/hci-observations.md`。
+2. **句中停顿会把一句话切成两个回合（P1，需要真人声音调参）。**
+   合成语音"你好，请用一句话介绍你自己"在逗号处停顿，Zhipu 是整段批量识别，VAD
+   一停就出结果，于是产生两个任务、Marcus 答两遍。语义缓冲的 flush 超时是 0.5 s，
+   VAD 停顿时长还没有按真人语速调过；调大会增加每一轮的等待，需要用真实数据权衡。
+3. **首句回复延迟 ~2.2–2.8 s（P1）。** 构成：VAD 停顿 + Zhipu 批量转写 ~0.6 s +
+   路由与首句确认 + MiniMax 首包。已无明显浪费，进一步降低需要流式 ASR（但 AssemblyAI
+   中文有瑕疵，Deepgram key 失效）。
+4. **蜂群治理未参与决策（P2，刻意停放）。** Queen merge/wake、
+   `PopulationRegistry.retire()` 仍无触发规则；等真实 fitness/pheromone 数据积累后再启用。
+5. **树莓派硬件未调优/基准（P2，需要硬件）。** `.proj-init/performance-baseline.md`
+   的 Pi 章节仍是"未测"。
+6. **设备控制器仍是占位（P3）。** 邮件之外的可注入接口未接具体系统
+   （systemd/launchd/IoT 网关尚未决策）。
+7. **外部依赖状态：** Deepgram key 无效（401）；Edge TTS 返回 403；局域网 VoxCPM2
+   不在线。以上都不影响推荐组合。
 
 ---
 
 ## 7. 下一步（建议顺序）
 
-1. ~~补 `event.record`~~ 已完成（2026-10-25）。下一步是让媒体面补发 `voice.user.started/stopped` 与 `voice.speech.cancel`，见已知缺口 1。
-2. **用真实麦克风/扬声器跑一次完整对话**，记录延迟、打断、错误路由到
-   `docs/hci-observations.md`。
-3. 修流式 ASR 预览夹具（或明确标注限制），避免以后误判 provider 故障。
-4. 收集一周 HCI 数据后，再决定：
+1. **真人对话几轮**（见 6.2-1、6.2-2），记录进 `docs/hci-observations.md`，据此调
+   VAD 停顿与语义缓冲超时。
+2. 收集一周 HCI 数据（`scripts/query-hci-events.sh`）后，再决定：
    - 是否唤醒蜂群治理（Queen/Population）；
    - 是否引入 oh-my-pi 的子 agent / 记忆 / 插件市场（见 ADR-001）。
-5. 树莓派基准测试（有硬件时）。
+3. 有树莓派硬件时做基准测试。
+4. 决定设备控制器要接哪个具体系统。
 
 ---
 
@@ -316,6 +369,9 @@ sqlite3 agent-runtime/data/agent-runtime.sqlite3 \
 ---
 
 ## 9. Git 状态（2026-10-19 收敛后）
+
+> 2026-10-25 起 `main` 已在此基础上继续前进（改名 Marcus、`deepseek-flash`、事件日志、
+> 语音链路修复等），分支拓扑仍是下面这样；以 `git log` 为准。
 
 **开发根目录**：`/data/git_repository/sisyphus`（主仓库，`.git` 就在这里）。
 orca 的 `~/orca/workspaces/sisyphus/goby` 已作为 worktree 移除，不再指向本仓库。

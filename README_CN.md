@@ -308,10 +308,10 @@ LLM。
   （2026-10-18），但还没有在本机用麦克风/扬声器人工跑过一次完整对话
   （含 barge-in）。具体哪些已验证、哪些尚未验证，见
   `docs/project-restart.md` 和 `.proj-init/06-software-release-acceptance.md`。
-- 经过 WebSocket 的每个事件（Pipecat 入站、sidecar 出站）都写入 SQLite
-  `events` 表，可用 `scripts/query-hci-events.sh` 查询。媒体面目前只发
-  `voice.transcript.final`，所以延迟和打断占比还不能从这张表算出，暂时看
-  日志里的 `voice_latency`。这是 Phase A 最需要补的观测缺口。
+- 经过 WebSocket 的每个事件（Pipecat 入站、sidecar 出站）以及每次工具调用的
+  生命周期都写入 SQLite `events` 表，`scripts/query-hci-events.sh --latency` /
+  `--summary` 可算出每轮延迟和打断次数。`scripts/voice-smoke.py` 用合成语音驱动
+  整条真实链路；还没有真人对着麦克风完整聊过，这是 Phase A 剩下最大的缺口。
 - 蜂群治理层（Queen/Population/GeneBank/PheromoneMap）是刻意停放的：它
   接在组合根上，但不参与路由决策；见 `CONTEXT.md` 和
   `docs/adr/0001-*.md`。

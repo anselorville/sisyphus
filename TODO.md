@@ -55,15 +55,11 @@
 ## 已知缺口（现状记录，非任务本身）
 
 ### `agent-runtime`（详见 `agent-runtime/README.md` 的"已知缺口"一节）
-- 媒体面只发 `voice.transcript.final`：不发 `voice.user.started/stopped`、
-  `voice.speech.cancel`、`voice.transcript.partial`，所以 `events` 表里算不出
-  端到端延迟和打断占比（`scripts/query-hci-events.sh --summary` 的打断统计恒为 0）。
-  这是 Phase A 最优先的观测缺口。
-- 工具调用级事件没有落 `events` 表，幻觉工具调用只能靠 `diplomacy_log` 间接查。
-- `pheromone` 增量固定为 `null`（= Phase 2）。
+- 没有真人用麦克风/扬声器跑过完整对话。合成语音冒烟测试（`scripts/voice-smoke.py`）
+  证明了链路和打断，但语气节奏、嘈杂环境下的 VAD 误触发、真实口音识别率只能真人测。
+  这是 Phase A 最优先的缺口。
+- 句中停顿会把一句话切成两个回合（VAD 停顿时长与语义缓冲 0.5 s 超时未按真人语速调过）。
 - `Queen` 的 merge/wake 决策、`PopulationRegistry.retire()` 尚无触发规则（= Phase 3）。
-- `diplomacy-persistence.ts` 广播事件的 `sequence` 是进程内自增计数器，重启后归零，
-  无跨重启的持久化序号源。
 - 邮件之外的设备控制器仍是可注入的接口占位，未接入具体系统（= Phase 5）。
 
 ### 媒体面/产品整体（详见根目录 `README.md` 的"Known gaps"一节）

@@ -338,11 +338,11 @@ first-run model download needs network access.
   `.proj-init/06-software-release-acceptance.md` for exactly what has and
   has not been verified.
 - Every event crossing the WebSocket (inbound from Pipecat, outbound from
-  the sidecar) is stored in the SQLite `events` table and can be read with
-  `scripts/query-hci-events.sh`. The media plane currently emits only
-  `voice.transcript.final`, so latency and barge-in rates cannot yet be
-  derived from that table; use the `voice_latency` log lines for now. This
-  is the top instrumentation gap for Phase A.
+  the sidecar) and every tool call's lifecycle is stored in the SQLite
+  `events` table, and `scripts/query-hci-events.sh --latency` / `--summary`
+  derive per-turn latency and barge-in counts from it. `scripts/voice-smoke.py`
+  drives the whole live chain with a synthetic voice; nobody has yet held a
+  real microphone conversation, which is the top remaining gap for Phase A.
 - The swarm governance layer (Queen/Population/GeneBank/PheromoneMap) is
   intentionally parked. It is wired into the composition root but does not
   make routing decisions; see `CONTEXT.md` and `docs/adr/0001-*.md`.

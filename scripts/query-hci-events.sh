@@ -85,25 +85,59 @@ elif [[ -n "$TASK_ID" ]]; then
 fi
 
 # --- 模式: latency（延迟指标汇总） ---
+# 每个 voice.user.stopped 配对"下一个 user.stopped 之前的第一条 voice.speech.enqueue"，
+# 差值即 sidecar 视角的"说完 → Marcus 开口前的最后一站"（含转写、路由、LLM 首句，
+# 不含 TTS 合成与播放）。received_at 均为 sidecar 时钟，故可直接相减。
+# 配对按全局插入顺序（rowid），不依赖 interaction_id（媒体面事件没有它）。
 if [[ "$MODE" == "latency" ]]; then
+  PAIRS_SQL="
+    WITH stops AS (
+      SELECT rowid AS rid, received_at AS stop_at,
+             COALESCE((SELECT MIN(n.rowid) FROM events n
+                       WHERE n.rowid > s.rowid AND n.type = 'voice.user.stopped'), 9223372036854775807) AS next_stop
+      FROM events s WHERE s.type = 'voice.user.stopped'
+    ),
+    paired AS (
+      SELECT stops.rid, stops.stop_at,
+             (SELECT e.received_at FROM events e
+              WHERE e.rowid > stops.rid AND e.rowid < stops.next_stop AND e.type = 'voice.speech.enqueue'
+              ORDER BY e.rowid LIMIT 1) AS speech_at
+      FROM stops
+    ),
+    turns AS (
+      SELECT rid, stop_at, speech_at,
+             CAST(ROUND((julianday(speech_at) - julianday(stop_at)) * 86400000) AS INTEGER) AS latency_ms
+      FROM paired WHERE speech_at IS NOT NULL
+    )"
+  echo "=== 说完 → 首句语音入队 延迟（最近 ${N} 轮）==="
   sqlite3 -header -column "$DB_PATH" "
-    SELECT
-      strftime('%Y-%m-%d %H:%M:%S', received_at) AS received_at,
-      sequence,
-      type,
-      interaction_id,
-      task_id
-    FROM events
-    ${FILTERS}
-    ORDER BY rowid DESC
-    LIMIT ${N};
+    ${PAIRS_SQL}
+    SELECT strftime('%m-%d %H:%M:%S', stop_at) AS user_stopped, latency_ms
+    FROM turns ORDER BY rid DESC LIMIT ${N};
   "
   echo
-  echo "-- 延迟体感线索 --"
-  echo "在应用日志中搜索 voice_latency（Pipecat 观测）:"
-  echo "  grep voice_latency /tmp/sisyphus-backend.log"
+  echo "=== 汇总 ==="
+  sqlite3 -header -column "$DB_PATH" "
+    ${PAIRS_SQL}
+    , recent AS (SELECT latency_ms FROM turns ORDER BY rid DESC LIMIT ${N}),
+    ordered AS (SELECT latency_ms FROM recent ORDER BY latency_ms)
+    SELECT COUNT(*) AS turns,
+           MIN(latency_ms) AS min_ms,
+           CAST(ROUND(AVG(latency_ms)) AS INTEGER) AS avg_ms,
+           (SELECT latency_ms FROM ordered LIMIT 1 OFFSET (SELECT COUNT(*) FROM ordered) / 2) AS median_ms,
+           MAX(latency_ms) AS max_ms
+    FROM recent;
+  "
+  echo
+  echo "未得到回应的用户发言（user.stopped 之后没有语音入队）:"
+  sqlite3 "$DB_PATH" "
+    ${PAIRS_SQL}
+    SELECT COUNT(*) FROM paired WHERE speech_at IS NULL;
+  "
+  echo
+  echo "-- 补充 --"
+  echo "端到端听感延迟还要加上 TTS 首包与播放，来自日志: grep voice_latency /tmp/sisyphus-backend.log"
   echo "关注: user_to_bot_seconds（说话结束→首次 bot 语音）、first_bot_speech_seconds。"
-  echo "事件侧对照: voice.user.started/stopped 与 voice.speech.enqueue 之间的时间差即为端到端延迟。"
   exit 0
 fi
 
@@ -124,12 +158,12 @@ if [[ "$MODE" == "summary" ]]; then
     ORDER BY count DESC;
   "
   echo
-  echo "=== 打断（voice.speech.cancel）占比 ==="
+  echo "=== 打断（voice.speech.cancel，reason=barge_in）占比 ==="
   sqlite3 "$DB_PATH" "
     SELECT
-      printf('cancel 事件: %d / 总语音事件 %d',
-        (SELECT COUNT(*) FROM events WHERE type='voice.speech.cancel' ${FILTERS:+AND ${FILTERS#WHERE }}),
-        (SELECT COUNT(*) FROM events WHERE type LIKE 'voice.%' ${FILTERS:+AND ${FILTERS#WHERE }}));
+      printf('打断 %d 次 / 用户发言 %d 次',
+        (SELECT COUNT(*) FROM events WHERE type='voice.speech.cancel'),
+        (SELECT COUNT(*) FROM events WHERE type='voice.user.started'));
   "
   echo
   echo "=== 任务终态分布 ==="

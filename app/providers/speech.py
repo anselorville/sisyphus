@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.tts_service import TTSService
 from pipecat.transcriptions.language import Language
@@ -21,7 +23,21 @@ from .transcription import _uses_omlx, select_engine
 
 
 CARTESIA_DEFAULT_VOICE = "47c38ca4-5f35-497b-b1a3-415245fb35e1"
-CARTESIA_DEFAULT_LANGUAGE = Language.EN
+# Marcus talks Chinese by default; a wrong locale makes Cartesia mispronounce
+# everything (an `EN` locale turned a Chinese sentence into gibberish). Override
+# with CARTESIA_LANGUAGE (any pipecat `Language` code, e.g. "en", "zh", "ja").
+CARTESIA_DEFAULT_LANGUAGE = Language.ZH
+
+
+def cartesia_language() -> Language:
+    raw = os.environ.get("CARTESIA_LANGUAGE", "").strip()
+    if not raw:
+        return CARTESIA_DEFAULT_LANGUAGE
+    try:
+        return Language(raw.lower())
+    except ValueError as exc:
+        raise RuntimeError(f"CARTESIA_LANGUAGE={raw!r} is not a supported language code.") from exc
+
 _OPENROUTER_TTS_DEFAULT_VOICE = {"microsoft/mai-voice-2": "en-US-Harper:MAI-Voice-2"}
 
 
@@ -93,7 +109,7 @@ def _build_cloud_tts(settings: Settings, cloud: CloudProviderConfig) -> TTSServi
         settings=CartesiaTTSService.Settings(
             model=cloud.speech.model or CARTESIA_DEFAULT_MODEL,
             voice=voice or CARTESIA_DEFAULT_VOICE,
-            language=CARTESIA_DEFAULT_LANGUAGE,
+            language=cartesia_language(),
             **overrides,
         ),
     )

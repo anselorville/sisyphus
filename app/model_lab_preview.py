@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import time
 import wave
 from typing import Any
 
 from pipecat.frames.frames import (
+    EndFrame,
+    Frame,
     InputAudioRawFrame,
     TTSAudioRawFrame,
     TTSSpeakFrame,
@@ -15,7 +18,12 @@ from pipecat.frames.frames import (
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
+from pipecat.pipeline.pipeline import Pipeline
+from pipecat.pipeline.worker import PipelineWorker
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.services.stt_service import SegmentedSTTService
 from pipecat.tests.utils import run_test
+from pipecat.workers.runner import WorkerRunner
 
 from app.config import Settings
 from app.providers import build_stt, build_tts
@@ -81,19 +89,71 @@ def _pcm_chunks_from_wav(wav_bytes: bytes, *, chunk_ms: int = 100) -> tuple[list
     return chunks, sample_rate, num_channels
 
 
+# How long a streaming STT (Deepgram, AssemblyAI, ...) may take to return its
+# first final transcript after the last audio chunk. Batch providers return as
+# soon as the utterance ends, so this only bounds the worst case.
+STREAMING_FINAL_TIMEOUT_SECONDS = 10.0
+# Streaming STT emits one final per detected turn, so one clip can yield several.
+# After the first, keep collecting until the service has been quiet this long.
+STREAMING_SETTLE_SECONDS = 1.5
+
+
+class _TranscriptionCollector(FrameProcessor):
+    """Collects every final transcript and signals each arrival."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.parts: list[str] = []
+        self.arrived = asyncio.Event()
+
+    @property
+    def text(self) -> str:
+        return " ".join(part.strip() for part in self.parts if part.strip())
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+        if isinstance(frame, TranscriptionFrame):
+            self.parts.append(frame.text)
+            self.arrived.set()
+        await self.push_frame(frame, direction)
+
+
 async def preview_transcription(
     *, adapter_id: str, values: dict[str, Any], audio_wav_bytes: bytes, settings: Settings
 ) -> tuple[str, dict[str, int]]:
     if adapter_id not in {"cloud:transcription", "omlx:nemotron_asr", "omlx:qwen3_asr"}:
         raise PreviewError(f"Unknown or unsupported transcription adapter id: {adapter_id!r}")
     chunks, sample_rate, num_channels = _pcm_chunks_from_wav(audio_wav_bytes)
-    frames = [VADUserStartedSpeakingFrame()]
+    frames: list[Frame] = [VADUserStartedSpeakingFrame()]
     frames.extend(
         InputAudioRawFrame(audio=chunk, sample_rate=sample_rate, num_channels=num_channels)
         for chunk in chunks
     )
     frames.append(VADUserStoppedSpeakingFrame())
     start_time = time.monotonic()
-    down, _up = await run_test(build_stt(settings), frames_to_send=frames)
-    transcript = next((frame.text for frame in down if isinstance(frame, TranscriptionFrame)), "")
-    return transcript, {"total_ms": round((time.monotonic() - start_time) * 1000)}
+    stt = build_stt(settings)
+    sink = _TranscriptionCollector()
+    worker = PipelineWorker(Pipeline([stt, sink]), cancel_on_idle_timeout=False)
+    # Segmented (batch) STT answers once per utterance; only streaming services
+    # need the settle window to gather their remaining finals.
+    settle_seconds = 0.0 if isinstance(stt, SegmentedSTTService) else STREAMING_SETTLE_SECONDS
+
+    async def drive() -> None:
+        await asyncio.sleep(0.01)
+        for frame in frames:
+            await worker.queue_frame(frame)
+        # Do not end the pipeline until the STT has answered: closing it first
+        # truncates or drops the result of streaming (WebSocket) providers.
+        try:
+            await asyncio.wait_for(sink.arrived.wait(), STREAMING_FINAL_TIMEOUT_SECONDS)
+            while settle_seconds:
+                sink.arrived.clear()
+                await asyncio.wait_for(sink.arrived.wait(), settle_seconds)
+        except asyncio.TimeoutError:
+            pass
+        await worker.queue_frame(EndFrame())
+
+    runner = WorkerRunner(handle_sigint=False)
+    await runner.add_workers(worker)
+    await asyncio.gather(runner.run(), drive())
+    return sink.text, {"total_ms": round((time.monotonic() - start_time) * 1000)}
