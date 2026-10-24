@@ -101,6 +101,8 @@ chain (VAD, STT, sidecar, LLM, TTS, audio back) with real providers:
 ```bash
 uv run python scripts/voice-smoke.py              # say a Chinese greeting, listen to the reply
 uv run python scripts/voice-smoke.py --barge-in   # interrupt the reply and check it stops
+uv run python scripts/voice-smoke.py --suite      # greeting, mid-sentence pause, web lookup, barge-in
+uv run python scripts/doctor.py --live            # is this machine ready? (keys, ports, provider probes)
 scripts/query-hci-events.sh --latency             # per-turn latency from the event log
 ```
 

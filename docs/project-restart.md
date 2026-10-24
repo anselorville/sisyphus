@@ -139,6 +139,7 @@ task.created → task.assigned(general)
 scripts/start.sh                                   # 先起栈
 uv run python scripts/voice-smoke.py               # 默认说一句中文问候
 uv run python scripts/voice-smoke.py --barge-in    # 回复开始后插话
+uv run python scripts/voice-smoke.py --suite       # 回归场景套件，带通过/失败判定
 ```
 
 2026-10-25 实测（Zhipu ASR + MiniMax TTS + DeepSeek `deepseek-flash`）：
@@ -258,11 +259,18 @@ asyncio.run(main())
 PY
 ```
 
+### 新环境自检
+
+```bash
+uv run python scripts/doctor.py            # 工具链、构建是否过期、所选 provider 的密钥、端口
+uv run python scripts/doctor.py --live     # 再加免费的联网探测（DeepSeek 模型列表、MiniMax 握手）
+```
+
 ### 全链路语音冒烟测试
 
 ```bash
 START_NO_LOG_WINDOWS=1 scripts/start.sh            # 不弹 Terminal 日志窗口
-uv run python scripts/voice-smoke.py               # 见 3.3；--barge-in 测打断
+uv run python scripts/voice-smoke.py --suite       # 见 3.3：问候 / 句中停顿 / 联网查询 / 打断
 ```
 
 ### 查看 HCI / 任务数据
@@ -300,6 +308,15 @@ sqlite3 agent-runtime/data/agent-runtime.sqlite3 \
 5. **回复里的 Markdown 会被念出来**（`**加粗**` 读成"星星"）。现在送 TTS 前剥掉
    强调、标题、列表、链接、代码。
 6. **TTS 默认选错。** OpenRouter 合成一句要 ~9 s，改为 MiniMax（0.4–0.7 s）。
+7. **一句话在逗号处被切成两个回合，Marcus 答两遍。** 根因不是合成语音的假象：
+   pipecat 1.4 的 VAD 默认 `stop_secs=0.2`，而真人逗号停顿通常 0.3 s 以上；语义缓冲
+   只看两段文字到达的间隔（0.5 s），第二段还要等说完加转写耗时，几乎永远合不上。
+   现在语义缓冲跟踪 `UserStarted/StoppedSpeakingFrame`：用户重新开口就保持缓冲、
+   取消刷新计时，停下后再等正在转写的那一段（1.2 s）。单段发言的延迟不变
+   （实测首句音频仍是 2.4–2.6 s）。
+8. **语音回答太长。** 查个天气念了近 50 秒（数据来源、生活指数、预警全念）。
+   面向用户的角色提示词加了"Speaking style"：先给结论、最多三句、细节等追问；
+   同一场景现在 13.5 s，并以"要我看看明后两天怎么样吗？"收尾。
 
 同批完成的重启文档 P0/P1 项：
 
@@ -320,33 +337,34 @@ sqlite3 agent-runtime/data/agent-runtime.sqlite3 \
    冒烟测试用的是合成语音，证明了链路，但证明不了听感：语气与节奏、嘈杂环境下的
    VAD 误触发、真实口音的识别率、免提下的回声。请对着麦克风跑几轮，把观察记进
    `docs/hci-observations.md`。
-2. **句中停顿会把一句话切成两个回合（P1，需要真人声音调参）。**
-   合成语音"你好，请用一句话介绍你自己"在逗号处停顿，Zhipu 是整段批量识别，VAD
-   一停就出结果，于是产生两个任务、Marcus 答两遍。语义缓冲的 flush 超时是 0.5 s，
-   VAD 停顿时长还没有按真人语速调过；调大会增加每一轮的等待，需要用真实数据权衡。
-3. **首句回复延迟 ~2.2–2.8 s（P1）。** 构成：VAD 停顿 + Zhipu 批量转写 ~0.6 s +
+2. **首句回复延迟 ~2.2–2.8 s（P1）。** 构成：VAD 停顿 + Zhipu 批量转写 ~0.6 s +
    路由与首句确认 + MiniMax 首包。已无明显浪费，进一步降低需要流式 ASR（但 AssemblyAI
    中文有瑕疵，Deepgram key 失效）。
-4. **蜂群治理未参与决策（P2，刻意停放）。** Queen merge/wake、
+3. **蜂群治理未参与决策（P2，刻意停放）。** Queen merge/wake、
    `PopulationRegistry.retire()` 仍无触发规则；等真实 fitness/pheromone 数据积累后再启用。
-5. **树莓派硬件未调优/基准（P2，需要硬件）。** `.proj-init/performance-baseline.md`
+4. **树莓派硬件未调优/基准（P2，需要硬件）。** `.proj-init/performance-baseline.md`
    的 Pi 章节仍是"未测"。
-6. **设备控制器仍是占位（P3）。** 邮件之外的可注入接口未接具体系统
-   （systemd/launchd/IoT 网关尚未决策）。
-7. **外部依赖状态：** Deepgram key 无效（401）；Edge TTS 返回 403；局域网 VoxCPM2
+5. **设备与邮件角色尚未接到 LLM（P3，需要决策）。** 比此前文档写的更彻底：
+   `device_status`/`service_action`（设备）和 `mail_*`（邮件，`AgentlyMailClient` 已实现并有
+   测试）都只存在于 `agent-runtime/src/tools/`，从未注册成 Pi 会话的自定义工具，目前只有
+   `web_search`/`web_fetch` 注册了（`src/index.ts` 的 `customTools`）。所以这两个角色现在
+   即使被路由到，也没有可调用的工具。设备侧还缺真实的 `DeviceStatusProvider` /
+   `ServiceController`。要接哪些、能否让邮件发送自动执行，是产品决策，见第 7 节。
+6. **外部依赖状态：** Deepgram key 无效（401）；Edge TTS 返回 403；局域网 VoxCPM2
    不在线。以上都不影响推荐组合。
 
 ---
 
 ## 7. 下一步（建议顺序）
 
-1. **真人对话几轮**（见 6.2-1、6.2-2），记录进 `docs/hci-observations.md`，据此调
-   VAD 停顿与语义缓冲超时。
+1. **真人对话几轮**（见 6.2-1），记录进 `docs/hci-observations.md`，重点看误触发、
+   口音识别、免提回声。可先跑 `uv run python scripts/voice-smoke.py --suite` 确认链路没坏。
 2. 收集一周 HCI 数据（`scripts/query-hci-events.sh`）后，再决定：
    - 是否唤醒蜂群治理（Queen/Population）；
    - 是否引入 oh-my-pi 的子 agent / 记忆 / 插件市场（见 ADR-001）。
 3. 有树莓派硬件时做基准测试。
-4. 决定设备控制器要接哪个具体系统。
+4. 决定设备与邮件角色怎么接（见 6.2-5）：至少先把只读的 `mail_search`/`mail_read` 注册成工具；
+   设备侧决定控制对象（Marcus 自己的服务？launchd/systemd？）。
 
 ---
 

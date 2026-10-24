@@ -16,6 +16,7 @@ alive and to put real turns into the HCI event log
     uv run python scripts/voice-smoke.py --text "今天几号?" --voice Tingting
     uv run python scripts/voice-smoke.py --wav my-question.wav
     uv run python scripts/voice-smoke.py --barge-in   # interrupt the reply
+    uv run python scripts/voice-smoke.py --suite      # the regression scenarios below
 
 Exit status is 0 only when the user's speech was transcribed, the agent
 answered with a task result, and audio came back.
@@ -286,6 +287,48 @@ class Session:
         }
 
 
+SUITE_TIMEOUT_S = 70.0
+
+
+def _checks_for(name: str, result: dict) -> list[str]:
+    """Return the reasons a suite scenario failed (empty when it passed)."""
+    problems: list[str] = []
+    if not result["ok"]:
+        problems.append("no transcript / task result / reply audio")
+    if name == "pause-in-sentence" and len(result["user_transcripts"]) != 1:
+        problems.append(f"one sentence became {len(result['user_transcripts'])} turns: {result['user_transcripts']}")
+    if name == "tool-query" and result["reply_audio_seconds"] > 30:
+        problems.append(f"spoken answer too long for voice ({result['reply_audio_seconds']}s of audio)")
+    if name == "barge-in":
+        segments = result["reply_audio_segments_s"]
+        sent = result["barge_in_sent_at_s"]
+        if sent is None:
+            problems.append("the reply never started, so nothing was interrupted")
+        elif segments and segments[0][1] - sent > 2.5:
+            problems.append(f"reply kept playing {segments[0][1] - sent:.1f}s after the interruption")
+    first_audio = result["speech_end_to_first_reply_audio_s"]
+    if first_audio is not None and name != "barge-in" and first_audio > 6.0:
+        problems.append(f"first reply audio took {first_audio}s")
+    return problems
+
+
+# name, what the scripted user says, interrupt the reply?
+SUITE: list[tuple[str, str, bool]] = [
+    ("greeting", "你好", False),
+    ("pause-in-sentence", "你好，请用一句话介绍你自己", False),
+    ("tool-query", "帮我查一下今天上海的天气", False),
+    ("barge-in", "请详细介绍一下你自己能做什么", True),
+]
+
+
+async def run_scenario(args: argparse.Namespace, manual_turns: bool, text: str, barge_in: bool, wav: Path | None) -> dict:
+    scenario_args = argparse.Namespace(**{**vars(args), "barge_in": barge_in, "timeout": args.timeout})
+    with tempfile.TemporaryDirectory() as tmp:
+        source = wav or synthesize(text, args.voice, Path(tmp))
+        pcm = load_pcm(source)
+        return await Session(scenario_args, pcm).run(manual_turns)
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--server", default="http://localhost:7860", help="backend base URL")
@@ -297,6 +340,7 @@ async def main() -> int:
     parser.add_argument("--tail", type=float, default=3.0, help="seconds of quiet after the reply audio that end the call")
     parser.add_argument("--audio-timeout", type=float, default=40.0, help="max seconds to wait for the spoken reply to finish")
     parser.add_argument("--barge-in", action="store_true", help="talk over the reply once it starts")
+    parser.add_argument("--suite", action="store_true", help="run the regression scenarios and report pass/fail")
     args = parser.parse_args()
 
     async with httpx.AsyncClient(timeout=10) as client:
@@ -308,14 +352,26 @@ async def main() -> int:
     manual_turns = status.get("turn_mode") == "manual"
     print(f"backend: stt={status.get('stt_provider')} tts={status.get('tts_provider')} turn_mode={status.get('turn_mode')}")
 
-    with tempfile.TemporaryDirectory() as tmp:
-        wav = args.wav or synthesize(args.text, args.voice, Path(tmp))
-        pcm = load_pcm(wav)
-        print(f"utterance: {len(pcm) / SAMPLE_RATE:.1f}s of audio")
-        result = await Session(args, pcm).run(manual_turns)
+    if not args.suite:
+        result = await run_scenario(args, manual_turns, args.text, args.barge_in, args.wav)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["ok"] else 1
 
-    print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0 if result["ok"] else 1
+    args.audio_timeout = max(args.audio_timeout, SUITE_TIMEOUT_S)
+    failures = 0
+    for name, text, barge_in in SUITE:
+        result = await run_scenario(args, manual_turns, text, barge_in, None)
+        problems = _checks_for(name, result)
+        failures += bool(problems)
+        first = result["speech_end_to_first_reply_audio_s"]
+        print(
+            f"{'PASS' if not problems else 'FAIL'}  {name:<18} turns={len(result['user_transcripts'])} "
+            f"first_audio={first}s reply_audio={result['reply_audio_seconds']}s"
+        )
+        for problem in problems:
+            print(f"      - {problem}")
+    print(f"\n{len(SUITE) - failures}/{len(SUITE)} scenarios passed")
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

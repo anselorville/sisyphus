@@ -22,6 +22,16 @@ _SENTENCE_END_RE = re.compile(r"[。！？!?]+")
 # directly inside the user-perceived user-stop -> bot-speech latency budget.
 SEMANTIC_BUFFER_FLUSH_TIMEOUT_SECONDS = 0.5
 
+# After the user stops speaking, the segment that just ended is still being
+# transcribed (a batch STT such as Zhipu takes ~0.6s), so a buffered fragment
+# must wait this much longer for it before being released. It only applies when
+# text was already buffered; a normal single-segment turn never waits for it.
+SEMANTIC_BUFFER_SEGMENT_WAIT_SECONDS = 1.2
+
+# Upper bound on holding a buffered fragment while the user is (apparently)
+# still speaking, in case the matching stop frame is lost.
+SEMANTIC_BUFFER_MAX_HOLD_SECONDS = 10.0
+
 
 class SemanticBufferProcessor(FrameProcessor):
     """Buffers STT transcription fragments until a sentence boundary is reached,
@@ -47,6 +57,14 @@ class SemanticBufferProcessor(FrameProcessor):
        the pipeline never stalls (handles unpunctuated speech or a long trailing
        pause)
 
+    Mid-sentence pauses: the VAD ends a segment at any pause longer than its
+    `stop_secs` (0.2s by default), so a natural comma pause splits one sentence
+    into two segments, and the first one's transcript arrives while the user
+    has already started the second. The buffer therefore tracks
+    UserStarted/StoppedSpeakingFrame: while the user is speaking again, a
+    buffered fragment is held (no flush timer); once they stop it waits for
+    the segment still being transcribed. Single-segment turns are unaffected.
+
     Position in pipeline: AFTER `original_tap` (so the UI immediately shows
     raw transcription fragments for real-time feedback) but BEFORE
     `user_aggregator` (so the LLM only ever sees complete sentences).
@@ -55,11 +73,16 @@ class SemanticBufferProcessor(FrameProcessor):
     def __init__(
         self,
         flush_timeout: float = SEMANTIC_BUFFER_FLUSH_TIMEOUT_SECONDS,
+        segment_wait: float = SEMANTIC_BUFFER_SEGMENT_WAIT_SECONDS,
+        max_hold: float = SEMANTIC_BUFFER_MAX_HOLD_SECONDS,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self._buffer: str = ""
         self._flush_timeout = flush_timeout
+        self._segment_wait = segment_wait
+        self._max_hold = max_hold
+        self._user_speaking = False
         self._flush_task: "asyncio.Task[None] | None" = None
         self._last_user_id: str = ""
         self._last_timestamp: str = ""
@@ -92,9 +115,19 @@ class SemanticBufferProcessor(FrameProcessor):
                 pass
         self._flush_task = None
 
-    async def _schedule_flush(self, direction: FrameDirection) -> None:
+    @staticmethod
+    def _join(buffered: str, text: str) -> str:
+        """Concatenate two transcript fragments, spacing only where words would fuse."""
+        if buffered and text and buffered[-1].isascii() and buffered[-1].isalnum() and text[0].isascii() and text[0].isalnum():
+            return f"{buffered} {text}"
+        return buffered + text
+
+    def _start_flush_timer(self, direction: FrameDirection, timeout: float | None = None) -> None:
+        self._flush_task = asyncio.ensure_future(self._schedule_flush(direction, timeout))
+
+    async def _schedule_flush(self, direction: FrameDirection, timeout: float | None = None) -> None:
         try:
-            await asyncio.sleep(self._flush_timeout)
+            await asyncio.sleep(self._flush_timeout if timeout is None else timeout)
             if self._buffer:
                 logger.debug(
                     f"{self}: Force-flushing incomplete buffer [{self._buffer}]"
@@ -128,7 +161,7 @@ class SemanticBufferProcessor(FrameProcessor):
 
             self._last_user_id = frame.user_id
             self._last_timestamp = frame.timestamp
-            self._buffer = (self._buffer + text) if self._buffer else text
+            self._buffer = self._join(self._buffer, text) if self._buffer else text
 
             complete, remainder = self._split_at_last_sentence_end(self._buffer)
             if complete:
@@ -138,14 +171,27 @@ class SemanticBufferProcessor(FrameProcessor):
                     direction,
                 )
                 if remainder:
-                    self._flush_task = asyncio.ensure_future(self._schedule_flush(direction))
+                    self._start_flush_timer(direction, self._max_hold if self._user_speaking else None)
             else:
-                self._flush_task = asyncio.ensure_future(self._schedule_flush(direction))
+                # Still speaking: the rest of the sentence is on its way, hold.
+                self._start_flush_timer(direction, self._max_hold if self._user_speaking else None)
+            return
+
+        if isinstance(frame, UserStartedSpeakingFrame):
+            self._user_speaking = True
+            if self._buffer:
+                await self._cancel_flush_timer()
+                self._start_flush_timer(direction, self._max_hold)
+            await self.push_frame(frame, direction)
             return
 
         if isinstance(frame, UserStoppedSpeakingFrame):
-            await self._cancel_flush_timer()
-            await self._flush_buffer(direction)
+            self._user_speaking = False
+            if self._buffer:
+                # The segment that just ended is still being transcribed; give
+                # it the chance to join the held fragment before releasing it.
+                await self._cancel_flush_timer()
+                self._start_flush_timer(direction, self._flush_timeout + self._segment_wait)
             await self.push_frame(frame, direction)
             return
 

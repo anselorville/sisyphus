@@ -28,5 +28,12 @@ describe("user-facing role prompts", () => {
       expect(prompt).toContain("## Identity");
       expect(prompt).toContain("**Marcus**");
     });
+
+    it(`${manifest.id}: is told its words are read aloud, so it must be brief`, () => {
+      const prompt = readFileSync(manifest.promptPath, "utf8");
+
+      expect(prompt).toContain("## Speaking style");
+      expect(prompt).toContain("read aloud");
+    });
   }
 });

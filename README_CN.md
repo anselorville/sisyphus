@@ -92,6 +92,8 @@ LLM、TTS、音频回传，全部用真实 provider）：
 ```bash
 uv run python scripts/voice-smoke.py              # 说一句中文问候，收听回复
 uv run python scripts/voice-smoke.py --barge-in   # 插话，验证回复会被掐断
+uv run python scripts/voice-smoke.py --suite      # 问候、句中停顿、联网查询、打断四个场景
+uv run python scripts/doctor.py --live            # 这台机器准备好了吗？（密钥、端口、provider 探测）
 scripts/query-hci-events.sh --latency             # 从事件日志看每轮延迟
 ```
 
