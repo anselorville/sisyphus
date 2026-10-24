@@ -55,8 +55,11 @@
 ## 已知缺口（现状记录，非任务本身）
 
 ### `agent-runtime`（详见 `agent-runtime/README.md` 的"已知缺口"一节）
-- `events` 表从未写入：没有 `event.record` DB 命令，`scripts/query-hci-events.sh`
-  永远为空。这是 Phase A 最优先的观测缺口。
+- 媒体面只发 `voice.transcript.final`：不发 `voice.user.started/stopped`、
+  `voice.speech.cancel`、`voice.transcript.partial`，所以 `events` 表里算不出
+  端到端延迟和打断占比（`scripts/query-hci-events.sh --summary` 的打断统计恒为 0）。
+  这是 Phase A 最优先的观测缺口。
+- 工具调用级事件没有落 `events` 表，幻觉工具调用只能靠 `diplomacy_log` 间接查。
 - `pheromone` 增量固定为 `null`（= Phase 2）。
 - `Queen` 的 merge/wake 决策、`PopulationRegistry.retire()` 尚无触发规则（= Phase 3）。
 - `diplomacy-persistence.ts` 广播事件的 `sequence` 是进程内自增计数器，重启后归零，

@@ -22,6 +22,12 @@
  * on reconnect) is still ack'd -- Python needs to know the bytes arrived --
  * but the injected `onInboundEvent` handler (the Task Nest, in later
  * wiring) fires at most once per unique event_id.
+ *
+ * `onEventObserved` is the observation seam (HCI event log): it fires once per
+ * unique inbound event and once per `broadcast()`/`sendTo()` call -- never once
+ * per connection -- and never blocks or fails the transport. Outbound events
+ * are observed when handed to the transport, before the bounded queue may
+ * coalesce or evict them, so the log shows what the runtime decided to say.
  */
 
 import type { IncomingMessage } from "node:http";
@@ -74,7 +80,12 @@ export interface RuntimeWebSocketServerOptions {
   /** Invoked at most once per unique inbound `event_id` on a given connection -- the seam later wiring uses to feed the Task Nest. */
   readonly onInboundEvent?: (event: RealtimeEvent, connectionId: string) => void | Promise<void>;
   readonly onConnectionClose?: (connectionId: string) => void;
+  /** Observation seam for event logging; see the module doc comment. A throw here is swallowed -- observing must never affect delivery. */
+  readonly onEventObserved?: (event: RealtimeEvent, direction: EventDirection) => void;
 }
+
+/** Which way an observed event crossed the transport boundary. */
+export type EventDirection = "inbound" | "outbound";
 
 const DEFAULT_OUTBOUND_QUEUE_CAPACITY = 1024;
 
@@ -86,6 +97,7 @@ export class RuntimeWebSocketServer {
     | ((event: RealtimeEvent, connectionId: string) => void | Promise<void>)
     | undefined;
   private readonly onConnectionClose: ((connectionId: string) => void) | undefined;
+  private readonly onEventObserved: ((event: RealtimeEvent, direction: EventDirection) => void) | undefined;
   private readonly connections = new Map<string, ConnectionState>();
   private wss: WebSocketServer | undefined;
   private nextConnectionId = 1;
@@ -97,6 +109,7 @@ export class RuntimeWebSocketServer {
     this.maxTrackedInboundEventIds = options.maxTrackedInboundEventIds ?? DEFAULT_MAX_TRACKED_INBOUND_EVENT_IDS;
     this.onInboundEvent = options.onInboundEvent;
     this.onConnectionClose = options.onConnectionClose;
+    this.onEventObserved = options.onEventObserved;
   }
 
   /** Starts listening on 127.0.0.1. Idempotent -- a second call while already started is a no-op. */
@@ -158,6 +171,7 @@ export class RuntimeWebSocketServer {
     if (this.closed) {
       throw new RuntimeWebSocketServerClosedError();
     }
+    this.observe(event, "outbound");
     for (const state of this.connections.values()) {
       this.enqueueForConnection(state, event);
     }
@@ -172,6 +186,7 @@ export class RuntimeWebSocketServer {
     if (!state) {
       return false;
     }
+    this.observe(event, "outbound");
     this.enqueueForConnection(state, event);
     return true;
   }
@@ -251,6 +266,7 @@ export class RuntimeWebSocketServer {
     const isDuplicate = state.seenInboundEventIds.has(event.event_id);
     if (!isDuplicate) {
       this.rememberInboundEventId(state, event.event_id);
+      this.observe(event, "inbound");
       try {
         await this.onInboundEvent?.(event, connectionId);
       } catch {
@@ -261,6 +277,14 @@ export class RuntimeWebSocketServer {
 
     state.lastAckedSequence = Math.max(state.lastAckedSequence, event.sequence);
     this.sendAck(state, event.sequence, isDuplicate);
+  }
+
+  private observe(event: RealtimeEvent, direction: EventDirection): void {
+    try {
+      this.onEventObserved?.(event, direction);
+    } catch {
+      // Observation is best-effort; see the module doc comment.
+    }
   }
 
   private sendAck(state: ConnectionState, sequence: number, duplicate: boolean): void {

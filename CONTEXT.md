@@ -26,7 +26,7 @@
 
 ## 关键缺口
 
-**HCI 事件持久化**：SQLite `events` 表建了但没有任何 `event.record` 写入路径，`scripts/query-hci-events.sh` 永远为空。HCI 数据目前只能靠进程日志和 `tasks`/`role_fitness`。这是 Phase A 最优先要补的观测缺口。
+**HCI 事件持久化**：经过 WebSocket 传输的每个事件（Pipecat 入站、sidecar 出站）都由 `EventRecorder` 通过 `event.record` 写入 SQLite `events` 表，`scripts/query-hci-events.sh` 可查。尚缺两块：媒体面目前只发 `voice.transcript.final`，不发 `voice.user.started/stopped`、`voice.speech.cancel`，所以延迟和打断指标仍要靠 `voice_latency` 日志；工具调用级事件也没有落库。这是 Phase A 接下来的观测缺口。
 
 **harness**：用户术语，指 agent 的工具/编排层。"完善的 harness" = 完整的工具 + 编排能力。oh-my-pi 的 harness 包括 LSP、DAP、浏览器、子 agent、记忆、插件市场。对 Marcus 相关的子集：子 agent 委派、跨会话记忆、插件市场。
 
@@ -42,7 +42,7 @@
 
 **HCI problem**：人机交互过程中的所有问题维度——延迟体感、打断/barge-in 失灵、错误路由、幻觉工具调用、转写错误等。用户希望收集所有维度。载体：transcript + sidecar 事件（SQLite events 表）+ 人工观察，写入 running log。
 
-**注意**：events 表当前没有写入路径（见"关键缺口"）。在补上 `event.record` 之前，HCI 只能靠 `/tmp/sisyphus-*.log` 和 `tasks`/`role_fitness` 表。
+**注意**：`events` 表只含经过 WebSocket 的事件（见"关键缺口"）；延迟和打断指标需要媒体面补发 `voice.user.*` / `voice.speech.cancel` 之后才能从表里算出，在此之前仍看 `/tmp/sisyphus-*.log` 的 `voice_latency`。
 
 ## 决策路径
 

@@ -498,3 +498,83 @@ describe("diplomacy.* -- CapabilityGateway persistence (Roadmap #2)", () => {
     await db.close();
   });
 });
+
+describe("events table (event.record / event.list)", () => {
+  const baseEvent = {
+    eventId: "evt-1",
+    sequence: 1,
+    interactionId: "interaction-1",
+    taskId: null,
+    source: "pipecat",
+    type: "voice.transcript.final",
+    timestamp: "2026-01-01T00:00:00.000Z",
+    payload: JSON.stringify({ text: "hello" }),
+    receivedAt: "2026-01-01T00:00:01.000Z",
+  };
+
+  it("persists an event and reads it back in wire-shaped columns", async () => {
+    const db = await DatabaseClient.open(nextDbPath());
+
+    await expect(db.request({ type: "event.record", event: baseEvent })).resolves.toEqual({ recorded: true });
+
+    const { events } = await db.request({ type: "event.list", limit: 10 });
+    expect(events).toEqual([
+      {
+        event_id: "evt-1",
+        sequence: 1,
+        interaction_id: "interaction-1",
+        task_id: null,
+        source: "pipecat",
+        type: "voice.transcript.final",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        payload: JSON.stringify({ text: "hello" }),
+        received_at: "2026-01-01T00:00:01.000Z",
+      },
+    ]);
+
+    await db.close();
+  });
+
+  it("is idempotent on event_id: a second record of the same event keeps the first row and reports recorded=false", async () => {
+    const db = await DatabaseClient.open(nextDbPath());
+
+    await db.request({ type: "event.record", event: baseEvent });
+    const second = await db.request({
+      type: "event.record",
+      event: { ...baseEvent, payload: JSON.stringify({ text: "changed" }) },
+    });
+
+    expect(second).toEqual({ recorded: false });
+    const { events } = await db.request({ type: "event.list", limit: 10 });
+    expect(events).toHaveLength(1);
+    expect(events[0]?.payload).toBe(JSON.stringify({ text: "hello" }));
+
+    await db.close();
+  });
+
+  it("lists newest first by insertion order even when inbound and outbound sequences interleave", async () => {
+    const db = await DatabaseClient.open(nextDbPath());
+
+    // Python numbers its events 1, 2; the sidecar numbers its own 1, 2 -- only insertion order is global.
+    await db.request({ type: "event.record", event: { ...baseEvent, eventId: "in-1", sequence: 1 } });
+    await db.request({ type: "event.record", event: { ...baseEvent, eventId: "out-1", sequence: 1, source: "system", type: "task.created" } });
+    await db.request({ type: "event.record", event: { ...baseEvent, eventId: "in-2", sequence: 2 } });
+
+    const { events } = await db.request({ type: "event.list", limit: 2 });
+    expect(events.map((e) => e.event_id)).toEqual(["in-2", "out-1"]);
+
+    await db.close();
+  });
+
+  it("event.list observes a write still sitting in the batch buffer", async () => {
+    const db = await DatabaseClient.open(nextDbPath());
+
+    const write = db.request({ type: "event.record", event: baseEvent });
+    const { events } = await db.request({ type: "event.list", limit: 10 });
+    expect(events).toHaveLength(1);
+
+    await write;
+    await db.close();
+  });
+});
+

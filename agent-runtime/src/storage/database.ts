@@ -56,6 +56,33 @@ export interface TaskUpdateStatusInput {
   readonly updatedAt: string;
 }
 
+/** An `events` row exactly as stored (snake_case columns, `payload` still the JSON string), mirroring the wire-level RealtimeEvent envelope plus `received_at`. */
+export interface EventRow {
+  readonly event_id: string;
+  readonly sequence: number;
+  readonly interaction_id: string | null;
+  readonly task_id: string | null;
+  readonly source: string;
+  readonly type: string;
+  readonly timestamp: string;
+  readonly payload: string;
+  readonly received_at: string;
+}
+
+export interface EventInsertInput {
+  readonly eventId: string;
+  readonly sequence: number;
+  readonly interactionId: string | null;
+  readonly taskId: string | null;
+  readonly source: string;
+  readonly type: string;
+  readonly timestamp: string;
+  /** Already-serialized JSON of the event's `payload`. */
+  readonly payload: string;
+  /** When this process observed the event (inbound: received; outbound: handed to the transport). */
+  readonly receivedAt: string;
+}
+
 export interface MetricsSampleInput {
   readonly recordedAt: string;
   readonly eventLoopP50Ms: number;
@@ -193,11 +220,13 @@ export interface DiplomacyElevationApprovalInsertInput {
 // ---------------------------------------------------------------------------
 //
 // This is deliberately narrower than the full table set migrations.ts
-// creates: `events` and `budgets` exist per the schema spec so later work
-// can build on them, but no command here reads or writes them yet. `tasks`
-// (TaskNest) and `runtime_metrics` (RuntimeMetrics) were the first two
-// tables with an actual caller and a test behind them, per this task's own
-// "write a failing test first, then minimal implementation" rule.
+// creates: `budgets` exists per the schema spec so later work can build on
+// it, but no command here reads or writes it yet. `tasks` (TaskNest) and
+// `runtime_metrics` (RuntimeMetrics) were the first two tables with an
+// actual caller and a test behind them, per this task's own "write a failing
+// test first, then minimal implementation" rule. `events` gained its writer
+// (`event.record`, fed by ../storage/event-recorder.ts) and a reader
+// (`event.list`) afterwards, so HCI data stops depending on process logs.
 // `task.assimilate` (see ../inspection/inspector.ts, ../memory/memory-
 // curator.ts, ../ecology/pheromone-map.ts) is the first command to also
 // touch `roles`, `role_fitness`, `pheromones`, and `memories` -- all four,
@@ -214,6 +243,9 @@ export interface DbCommandResultMap {
   "task.get": { readonly task: TaskRow | undefined };
   "task.list-active": { readonly tasks: readonly TaskRow[] };
   "metrics.record": { readonly recorded: true };
+  /** `recorded` is false when an event with the same `event_id` was already stored (the insert is idempotent). */
+  "event.record": { readonly recorded: boolean };
+  "event.list": { readonly events: readonly EventRow[] };
   "task.assimilate": {
     readonly task: TaskRow | undefined;
     readonly roleFitnessRecorded: number;
@@ -236,6 +268,9 @@ export type DbCommand =
   | { readonly type: "task.get"; readonly id: string }
   | { readonly type: "task.list-active" }
   | { readonly type: "metrics.record"; readonly sample: MetricsSampleInput }
+  | { readonly type: "event.record"; readonly event: EventInsertInput }
+  /** Most recent events first (insertion order), capped at `limit`. */
+  | { readonly type: "event.list"; readonly limit: number }
   | { readonly type: "task.assimilate"; readonly assimilation: TaskAssimilateInput }
   | { readonly type: "memory.search"; readonly query: string; readonly limit: number }
   | { readonly type: "diplomacy.log"; readonly entry: DiplomacyLogInsertInput }

@@ -73,6 +73,9 @@ if ! [[ "$N" =~ ^[0-9]+$ ]] || [[ "$N" -lt 1 ]]; then
   exit 1
 fi
 
+# 注意: events 表里入站（Pipecat）与出站（sidecar）事件的 sequence 各自独立计数，
+# 只有插入顺序（rowid）是全局有序的，所以所有"最近 N 条"都按 rowid 排序。
+
 # --- 过滤条件 ---
 FILTERS=""
 if [[ -n "$INTERACTION_ID" ]]; then
@@ -92,7 +95,7 @@ if [[ "$MODE" == "latency" ]]; then
       task_id
     FROM events
     ${FILTERS}
-    ORDER BY sequence DESC
+    ORDER BY rowid DESC
     LIMIT ${N};
   "
   echo
@@ -114,7 +117,7 @@ if [[ "$MODE" == "summary" ]]; then
     FROM (
       SELECT * FROM events
       ${FILTERS}
-      ORDER BY sequence DESC
+      ORDER BY rowid DESC
       LIMIT ${N}
     )
     GROUP BY type
@@ -144,8 +147,8 @@ if [[ "$MODE" == "summary" ]]; then
       json_extract(payload, '$.text') AS transcript
     FROM events
     WHERE type = 'voice.transcript.final'
-    ${FILTERS}
-    ORDER BY sequence DESC
+    ${FILTERS:+AND ${FILTERS#WHERE }}
+    ORDER BY rowid DESC
     LIMIT 5;
   "
   echo
@@ -173,7 +176,7 @@ if [[ "$OUTPUT_MODE" == "csv" ]]; then
       json_extract(payload, '$.text') AS transcript_text
     FROM events
     ${FILTERS}
-    ORDER BY sequence DESC
+    ORDER BY rowid DESC
     LIMIT ${N};
   "
 else
@@ -192,7 +195,7 @@ else
         1, 48) AS detail
     FROM events
     ${FILTERS}
-    ORDER BY sequence DESC
+    ORDER BY rowid DESC
     LIMIT ${N};
   "
 fi

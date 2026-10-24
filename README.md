@@ -337,11 +337,12 @@ first-run model download needs network access.
   machine. See `docs/project-restart.md` and
   `.proj-init/06-software-release-acceptance.md` for exactly what has and
   has not been verified.
-- The SQLite `events` table is created but never written: there is no
-  `event.record` DB command yet, so `scripts/query-hci-events.sh` returns
-  empty even while tasks run. HCI collection currently has to rely on
-  process logs and `tasks`/`role_fitness`. This is the top instrumentation
-  gap for Phase A.
+- Every event crossing the WebSocket (inbound from Pipecat, outbound from
+  the sidecar) is stored in the SQLite `events` table and can be read with
+  `scripts/query-hci-events.sh`. The media plane currently emits only
+  `voice.transcript.final`, so latency and barge-in rates cannot yet be
+  derived from that table; use the `voice_latency` log lines for now. This
+  is the top instrumentation gap for Phase A.
 - The swarm governance layer (Queen/Population/GeneBank/PheromoneMap) is
   intentionally parked. It is wired into the composition root but does not
   make routing decisions; see `CONTEXT.md` and `docs/adr/0001-*.md`.

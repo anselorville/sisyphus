@@ -82,7 +82,7 @@ TypeScript agent-runtime sidecar (agent-runtime/)
   TaskExecutor → ReflexRouter → Pi Session → LLM/工具 → 语音旁白
         │
         ▼
-SQLite: tasks / role_fitness / memories / diplomacy_* / events(未写入)
+SQLite: tasks / role_fitness / memories / diplomacy_* / events(HCI 事件日志)
 ```
 
 关键点：
@@ -236,7 +236,7 @@ PY
 ### 查看 HCI / 任务数据
 
 ```bash
-scripts/query-hci-events.sh --summary   # ⚠️ events 表目前为空，见已知缺口
+scripts/query-hci-events.sh --summary   # 入站+出站事件；延迟/打断统计见已知缺口 1
 sqlite3 agent-runtime/data/agent-runtime.sqlite3 \
   "SELECT id,status,role_id,goal FROM tasks ORDER BY created_at DESC LIMIT 5;"
 ```
@@ -245,12 +245,17 @@ sqlite3 agent-runtime/data/agent-runtime.sqlite3 \
 
 ## 6. 已知缺口（按优先级）
 
-1. **`events` 表从未写入（P0 观测缺口）**
-   `agent-runtime/src/storage/database.ts` 的注释明确写着：`events` 表“为后续
-   工作预留，目前没有任何命令读写它”。结果是 `scripts/query-hci-events.sh`
-   永远为空，HCI 数据只能靠进程日志 + `tasks`/`role_fitness`。
-   修复方向：新增 `event.record` DB 命令，并在 `RuntimeWebSocketServer` 的
-   入站/广播两个 seam 上落库（一次事件一行，不要按连接重复写）。
+1. **媒体面只发 `voice.transcript.final`（P0 观测缺口）**
+   2026-10-25 起，经过 WebSocket 的每个事件（Pipecat 入站 + sidecar 出站）都由
+   `EventRecorder`（`agent-runtime/src/storage/event-recorder.ts`）经 `event.record`
+   写入 `events` 表，一次事件一行（按 `event_id` 幂等，不按连接重复写），
+   `scripts/query-hci-events.sh` 已可查。
+   但 Python 媒体面（`app/realtime/`）目前只构造 `voice.transcript.final`，不发
+   `voice.user.started/stopped`、`voice.speech.cancel`、`voice.transcript.partial`，
+   所以表里算不出端到端延迟，`--summary` 的打断占比恒为 0；延迟仍看
+   `grep voice_latency /tmp/sisyphus-backend.log`。工具调用级事件也没落库。
+   修复方向：在 Pipecat 侧把 VAD 的 user started/stopped、打断取消、partial 转写
+   通过 `event_bridge` 发出（`voice.speech.cancel` 在 `queueing.py` 里已按控制事件处理）。
 
 2. **真实麦克风/扬声器对话未人工验证（P0）**
    文本事件注入 + 真实 LLM 的执行闭环已验证；但 barge-in、播报延迟的主观听感
@@ -281,7 +286,7 @@ sqlite3 agent-runtime/data/agent-runtime.sqlite3 \
 
 ## 7. 下一步（建议顺序）
 
-1. **补 `event.record`**，让 `scripts/query-hci-events.sh` 真正可用。
+1. ~~补 `event.record`~~ 已完成（2026-10-25）。下一步是让媒体面补发 `voice.user.started/stopped` 与 `voice.speech.cancel`，见已知缺口 1。
 2. **用真实麦克风/扬声器跑一次完整对话**，记录延迟、打断、错误路由到
    `docs/hci-observations.md`。
 3. 修流式 ASR 预览夹具（或明确标注限制），避免以后误判 provider 故障。

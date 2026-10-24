@@ -51,6 +51,7 @@ import { randomUUID } from "node:crypto";
 import { RuntimeWebSocketServer } from "./transport/websocket-server.js";
 import { RuntimeMetrics } from "./telemetry/runtime-metrics.js";
 import { DatabaseClient } from "./storage/database.js";
+import { EventRecorder } from "./storage/event-recorder.js";
 import { TaskNest, type TaskRecord } from "./tasks/task-nest.js";
 import { createInboundEventRouter } from "./tasks/inbound-event-router.js";
 import { createTaskAssimilationHook } from "./tasks/task-assimilation.js";
@@ -219,8 +220,14 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     let acceptingInboundWork = true;
     let routeInboundEvent: (event: RealtimeEvent, connectionId: string) => Promise<void> = async () => {};
 
+    // Every event crossing the transport -- inbound from Pipecat and outbound
+    // from the runtime -- is logged to the `events` table for HCI analysis
+    // (scripts/query-hci-events.sh). Fire-and-forget; see ./storage/event-recorder.ts.
+    const eventRecorder = new EventRecorder({ db, now: options.now });
+
     const server = new RuntimeWebSocketServer({
       port: runtimeConfig.port,
+      onEventObserved: (event) => eventRecorder.record(event),
       onInboundEvent: (event, connectionId) => {
         if (!acceptingInboundWork) {
           return;

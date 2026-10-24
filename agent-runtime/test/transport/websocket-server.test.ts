@@ -257,3 +257,74 @@ describe("close path", () => {
     await expect(server.start()).rejects.toThrow(RuntimeWebSocketServerClosedError);
   });
 });
+
+describe("onEventObserved", () => {
+  it("fires once per unique inbound event and not for a duplicate resend", async () => {
+    const observed: Array<[string, string]> = [];
+    const server = await startServer({ onEventObserved: (event, direction) => observed.push([event.event_id, direction]) });
+    const client = trackClient(await connectClient(server.address!.port));
+
+    const event = makeEvent({ type: "voice.transcript.final", source: "pipecat" });
+    const acks = once(client, "message");
+    client.send(encodeEvent(event));
+    await acks;
+    const dupAck = once(client, "message");
+    client.send(encodeEvent(event));
+    await dupAck;
+
+    expect(observed).toEqual([[event.event_id, "inbound"]]);
+  });
+
+  it("fires once per broadcast regardless of how many clients are connected", async () => {
+    const observed: Array<[string, string]> = [];
+    const server = await startServer({ onEventObserved: (event, direction) => observed.push([event.event_id, direction]) });
+    trackClient(await connectClient(server.address!.port));
+    trackClient(await connectClient(server.address!.port));
+    await vi.waitFor(() => expect(server.connectionCount).toBe(2));
+
+    const event = makeEvent({ type: "task.created" });
+    server.broadcast(event);
+
+    expect(observed).toEqual([[event.event_id, "outbound"]]);
+  });
+
+  it("observes sendTo for a known connection but not for an unknown one", async () => {
+    const observed: string[] = [];
+    const server = await startServer({ onEventObserved: (event) => observed.push(event.event_id) });
+    trackClient(await connectClient(server.address!.port));
+    await vi.waitFor(() => expect(server.connectionCount).toBe(1));
+
+    const sent = makeEvent({ type: "task.created" });
+    const lost = makeEvent({ type: "task.created" });
+    expect(server.sendTo(server.connectionIds[0]!, sent)).toBe(true);
+    expect(server.sendTo("conn-missing", lost)).toBe(false);
+
+    expect(observed).toEqual([sent.event_id]);
+  });
+
+  it("never lets a throwing observer break delivery or the inbound handler", async () => {
+    const received: string[] = [];
+    const server = await startServer({
+      onEventObserved: () => {
+        throw new Error("observer exploded");
+      },
+      onInboundEvent: (event) => {
+        received.push(event.event_id);
+      },
+    });
+    const client = trackClient(await connectClient(server.address!.port));
+    await vi.waitFor(() => expect(server.connectionCount).toBe(1));
+
+    const outbound = makeEvent({ type: "task.created" });
+    const delivered = once(client, "message");
+    expect(() => server.broadcast(outbound)).not.toThrow();
+    expect(decodeEvent(String(await delivered)).event_id).toBe(outbound.event_id);
+
+    const inbound = makeEvent({ type: "voice.transcript.final", source: "pipecat" });
+    const ack = once(client, "message");
+    client.send(encodeEvent(inbound));
+    await ack;
+    expect(received).toEqual([inbound.event_id]);
+  });
+});
+

@@ -25,6 +25,7 @@ import type {
   DiplomacyElevationApprovalRow,
   DiplomacyLogRow,
   DiplomacyPendingElevationRow,
+  EventRow,
   MemorySearchResult,
   TaskAssimilateInput,
   TaskRow,
@@ -72,6 +73,18 @@ interface TaskUpdateStatusBindParams {
   readonly status: string;
   readonly roleId: string | null;
   readonly updatedAt: string;
+}
+
+interface EventInsertBindParams {
+  readonly eventId: string;
+  readonly sequence: number;
+  readonly interactionId: string | null;
+  readonly taskId: string | null;
+  readonly source: string;
+  readonly type: string;
+  readonly timestamp: string;
+  readonly payload: string;
+  readonly receivedAt: string;
 }
 
 interface MetricsInsertBindParams {
@@ -164,6 +177,16 @@ const statements = {
   listActiveTasks: db.prepare<[], TaskRow>(
     `SELECT * FROM tasks WHERE status NOT IN ('completed', 'failed', 'cancelled')`,
   ),
+  // OR IGNORE: the same event_id can legitimately arrive twice (Python
+  // resending after a dropped ack, then reconnecting on a new connection whose
+  // dedup set is empty); the first observation wins.
+  insertEvent: db.prepare<EventInsertBindParams>(`
+    INSERT OR IGNORE INTO events (event_id, sequence, interaction_id, task_id, source, type, timestamp, payload, received_at)
+    VALUES (@eventId, @sequence, @interactionId, @taskId, @source, @type, @timestamp, @payload, @receivedAt)
+  `),
+  // rowid, not `sequence`: inbound (Python) and outbound (sidecar) events
+  // number their sequences independently, so only insertion order is global.
+  listEvents: db.prepare<[number], EventRow>(`SELECT * FROM events ORDER BY rowid DESC LIMIT ?`),
   insertMetricsSample: db.prepare<MetricsInsertBindParams>(`
     INSERT INTO runtime_metrics (
       recorded_at, event_loop_p50_ms, event_loop_p95_ms, event_loop_p99_ms,
@@ -436,6 +459,12 @@ function handleRequest(id: number, command: DbCommand): void {
         postResponse(id, true, { tasks });
         return;
       }
+      case "event.list": {
+        flushIfPending();
+        const events = statements.listEvents.all(command.limit);
+        postResponse(id, true, { events });
+        return;
+      }
       case "diplomacy.log.list": {
         flushIfPending();
         const entries = statements.listDiplomacyLog.all();
@@ -493,6 +522,26 @@ function handleRequest(id: number, command: DbCommand): void {
               updatedAt: update.updatedAt,
             });
             return { task: statements.getTask.get(update.id) };
+          }),
+        );
+        return;
+      }
+      case "event.record": {
+        const { event } = command;
+        enqueueWrite(
+          makeWriteEntry(id, () => {
+            const info = statements.insertEvent.run({
+              eventId: event.eventId,
+              sequence: event.sequence,
+              interactionId: event.interactionId,
+              taskId: event.taskId,
+              source: event.source,
+              type: event.type,
+              timestamp: event.timestamp,
+              payload: event.payload,
+              receivedAt: event.receivedAt,
+            });
+            return { recorded: info.changes > 0 };
           }),
         );
         return;
