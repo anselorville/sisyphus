@@ -41,11 +41,12 @@ verified end-to-end: `voice.transcript.final` -> ReflexRouter ->
 TaskExecutor -> Pi session -> `task.completed`/`task.failed` ->
 assimilation (`role_fitness`), exercised against a real sidecar process.
 
-Current working online stack (verified with real API calls):
-**Zhipu GLM ASR (`glm-asr-2512`) + OpenRouter TTS
-(`microsoft/mai-voice-2`) + DeepSeek text**. MiniMax TTS is currently
-unusable (account quota exhausted), Deepgram's key is invalid, Edge TTS
-returns 403, and OpenRouter has no working ASR model. See
+Recommended online stack (verified with real API calls):
+**Zhipu GLM ASR (`glm-asr-2512`) + MiniMax TTS (`speech-2.8-hd`) +
+DeepSeek text (`deepseek-flash`)**. MiniMax synthesizes a sentence in
+0.4-0.7 s; OpenRouter (~9 s) and Cartesia (~6 s) work but are too slow for
+conversation. Deepgram's key is invalid, Edge TTS returns 403, and
+OpenRouter has no working ASR model. See
 [`docs/project-restart.md`](docs/project-restart.md) for the full provider
 matrix, the swarm-architecture status, and the next development steps.
 
@@ -94,9 +95,19 @@ scripts/start.sh stop     # equivalent to scripts/stop.sh -- stop everything, st
 scripts/stop.sh           # stop everything
 ```
 
-It builds the sidecar (`agent-runtime/dist/`) if missing, logs each
-process to `/tmp/sisyphus-{sidecar,backend,frontend}.log`, and opens
-log-tail Terminal windows on macOS. See the scripts' own header comments
+Once the stack is up, a scripted voice conversation checks the whole live
+chain (VAD, STT, sidecar, LLM, TTS, audio back) with real providers:
+
+```bash
+uv run python scripts/voice-smoke.py              # say a Chinese greeting, listen to the reply
+uv run python scripts/voice-smoke.py --barge-in   # interrupt the reply and check it stops
+scripts/query-hci-events.sh --latency             # per-turn latency from the event log
+```
+
+It builds the sidecar (`agent-runtime/dist/`) when it is missing or older
+than its sources, logs each process to
+`/tmp/sisyphus-{sidecar,backend,frontend}.log`, and opens log-tail Terminal
+windows on macOS (set `START_NO_LOG_WINDOWS=1` to skip them). See the scripts' own header comments
 for port resolution (`.env`'s `WEBRTC_PORT`/`AGENT_RUNTIME_PORT`) and exact
 behavior.
 
@@ -167,13 +178,13 @@ architecture note at the top of this file.)
 
 | Engine    | STT                  | TTS                        | Pi-portable? | When to use |
 |-----------|----------------------|------------------------------|--------------|-------------|
-| `cloud`   | Zhipu GLM ASR (default) / AssemblyAI / Deepgram / OpenRouter | OpenRouter MAI-Voice-2 (current working default) / Cartesia / MiniMax / Edge TTS / VoxCPM2-CUDA | Yes (needs internet) | Production / has internet |
+| `cloud`   | Zhipu GLM ASR (default) / AssemblyAI / Deepgram / OpenRouter | MiniMax (default) / Cartesia / OpenRouter MAI-Voice-2 / Edge TTS / VoxCPM2-CUDA | Yes (needs internet) | Production / has internet |
 | `offline` | `faster-whisper` (`WhisperSTTService`) | Piper (`PiperTTSService`) | **Yes** -- the real Raspberry Pi target | No internet, on the eventual Pi hardware |
 | `omlx`    | oMLX server (`/v1/audio/transcriptions`) | oMLX server (`/v1/audio/speech`) | **No -- Apple Silicon/MLX only** | Fast local dev/test on a Mac, zero cloud spend, zero network dependency |
 
-Provider availability is account- and quota-dependent. As of 2026-10-18,
-only Zhipu ASR and OpenRouter TTS are confirmed working on this machine;
-see `docs/project-restart.md`. "Default" in the table above means the
+Provider availability is account- and quota-dependent. Zhipu ASR and
+MiniMax TTS (recommended) are confirmed working on this machine, OpenRouter
+and Cartesia TTS work but are slow; see `docs/project-restart.md`. "Default" in the table above means the
 code-level fallback, not a guarantee that the provider's account is
 currently usable.
 

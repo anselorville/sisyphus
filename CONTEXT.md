@@ -22,7 +22,7 @@
 
 **任务执行编排循环：已完成并验证。** `TaskExecutor`（`agent-runtime/src/tasks/task-executor.ts`）接管 `voice.transcript.final`：ReflexRouter 决策 → `sessionManager.prompt()` → Pi session 回答 → `voice.speech.enqueue` → `task.completed`/`failed`/`cancelled` → `task.assimilate`。已用真实 sidecar 进程 + 真实 LLM 调用跑通：`tasks` 表出现 completed 行，`role_fitness` 出现 `task_outcome=1.0`。steer/follow-up/cancel 也已派发到 session manager。
 
-**在线 provider 可用性：** 当前可用栈是 Zhipu GLM ASR（`glm-asr-2512`）+ OpenRouter TTS（`microsoft/mai-voice-2`）+ DeepSeek 文本。MiniMax TTS 账户配额耗尽（status 2056）、Deepgram key 无效、Edge TTS 403、OpenRouter 没有可用 ASR 模型。完整矩阵见 `docs/project-restart.md`。
+**在线 provider 可用性：** 当前推荐栈是 Zhipu GLM ASR（`glm-asr-2512`）+ MiniMax TTS（`speech-2.8-hd`，一句 0.4–0.7 s）+ DeepSeek 文本（`deepseek-flash`）。OpenRouter TTS（~9 s/句）和 Cartesia（~6 s/句）可用但太慢；Deepgram key 无效、Edge TTS 403、OpenRouter 没有可用 ASR 模型。完整矩阵见 `docs/project-restart.md`。
 
 ## 关键缺口
 

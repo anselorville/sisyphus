@@ -40,11 +40,13 @@
 
 ### Phase 4 — P0（非代码，发布前必须做）：真实环境验证
 - [x] 真实 LLM 凭据 + 真实 sidecar 进程的任务执行闭环（2026-10-18，见 Phase 1）。
-- [x] 在线 ASR/TTS provider 矩阵（2026-10-18，见 `docs/project-restart.md`）：
-      Zhipu ASR 可用；OpenRouter MAI-Voice-2 TTS 可用；MiniMax 配额耗尽、
+- [x] 在线 ASR/TTS provider 矩阵（2026-10-25 复验，见 `docs/project-restart.md`）：
+      Zhipu ASR + MiniMax TTS 为推荐组合；OpenRouter/Cartesia TTS 可用但慢；
       Deepgram key 无效、Edge TTS 403、OpenRouter ASR 无可用模型。
-- [ ] 用麦克风/扬声器人工跑一次完整语音对话，确认 barge-in、播报延迟的主观听感
-      （目前只验证到帧级/队列级 + 文本事件注入）。
+- [x] 全链路语音冒烟测试（`scripts/voice-smoke.py`，合成语音 + 真实 provider），
+      含打断：回复音频在插话后约 0.5 s 内停止。
+- [ ] 用麦克风/扬声器人工跑一次完整语音对话，确认播报延迟、打断、误触发的主观听感
+      （冒烟测试用合成语音，只能证明链路）。
 - [ ] 在真实树莓派上跑一次 `scripts/benchmark-runtime.sh --raspberry-pi`，把
       `.proj-init/performance-baseline.md` 的 Pi 章节从"未测"填成有数据。
 

@@ -36,10 +36,11 @@ ReflexRouter -> TaskExecutor -> Pi session -> `task.completed`/
 `task.failed` -> assimilation（`role_fitness`），已用真实 sidecar 进程
 跑通。
 
-当前可用的在线栈（均用真实 API 调用验证）：**Zhipu GLM ASR
-（`glm-asr-2512`）+ OpenRouter TTS（`microsoft/mai-voice-2`）+ DeepSeek
-文本**。MiniMax TTS 当前不可用（账户配额耗尽），Deepgram key 无效，
-Edge TTS 返回 403，OpenRouter 没有可用的 ASR 模型。完整 provider 矩阵、
+推荐的在线栈（均用真实 API 调用验证）：**Zhipu GLM ASR
+（`glm-asr-2512`）+ MiniMax TTS（`speech-2.8-hd`）+ DeepSeek 文本
+（`deepseek-flash`）**。MiniMax 一句话合成 0.4–0.7 s；OpenRouter（~9 s）和
+Cartesia（~6 s）可用但太慢。Deepgram key 无效，Edge TTS 返回 403，
+OpenRouter 没有可用的 ASR 模型。完整 provider 矩阵、
 蜂群架构状态和下一步计划见
 [`docs/project-restart.md`](docs/project-restart.md)。
 
@@ -85,9 +86,19 @@ scripts/start.sh stop     # 等效于 scripts/stop.sh —— 只停止,不启动
 scripts/stop.sh           # 停止全部服务
 ```
 
-如果 sidecar 缺少构建产物（`agent-runtime/dist/`），脚本会先构建它；每
-个进程的日志分别写到 `/tmp/sisyphus-{sidecar,backend,frontend}.log`，在
-macOS 上还会自动打开对应的日志 tail 终端窗口。端口解析规则
+栈起来之后，可以用一段脚本化的语音对话验证整条真实链路（VAD、STT、sidecar、
+LLM、TTS、音频回传，全部用真实 provider）：
+
+```bash
+uv run python scripts/voice-smoke.py              # 说一句中文问候，收听回复
+uv run python scripts/voice-smoke.py --barge-in   # 插话，验证回复会被掐断
+scripts/query-hci-events.sh --latency             # 从事件日志看每轮延迟
+```
+
+如果 sidecar 缺少构建产物（`agent-runtime/dist/`）或构建产物比源码旧，脚本
+会先重新构建；每个进程的日志分别写到
+`/tmp/sisyphus-{sidecar,backend,frontend}.log`，在 macOS 上还会自动打开对应
+的日志 tail 终端窗口（设 `START_NO_LOG_WINDOWS=1` 可跳过）。端口解析规则
 （`.env` 里的 `WEBRTC_PORT`/`AGENT_RUNTIME_PORT`）等具体行为见脚本自身的
 头部注释。
 
@@ -152,12 +163,12 @@ STT/TTS 媒体平面有三种 engine，运行的都是完全相同的 pipeline *
 
 | Engine    | STT                  | TTS                        | 能否跑树莓派? | 何时使用 |
 |-----------|----------------------|------------------------------|--------------|-------------|
-| `cloud`   | Zhipu GLM ASR（默认）/ AssemblyAI / Deepgram / OpenRouter | OpenRouter MAI-Voice-2（当前可用默认）/ Cartesia / MiniMax / Edge TTS / VoxCPM2-CUDA | 可以（需要联网） | 生产环境 / 有网络时 |
+| `cloud`   | Zhipu GLM ASR（默认）/ AssemblyAI / Deepgram / OpenRouter | MiniMax（默认）/ Cartesia / OpenRouter MAI-Voice-2 / Edge TTS / VoxCPM2-CUDA | 可以（需要联网） | 生产环境 / 有网络时 |
 | `offline` | `faster-whisper`（`WhisperSTTService`） | Piper（`PiperTTSService`） | **可以** —— 真正的树莓派目标平台 | 无网络、未来跑在树莓派硬件上时 |
 | `omlx`    | oMLX 服务（`/v1/audio/transcriptions`） | oMLX 服务（`/v1/audio/speech`） | **不行 —— 仅限 Apple Silicon/MLX** | 在 Mac 上快速本地开发/测试，零云端花费，零网络依赖 |
 
-provider 的可用性取决于账户和配额。截至 2026-10-18，本机确认可用的只有
-Zhipu ASR 和 OpenRouter TTS；详见 `docs/project-restart.md`。上表中的
+provider 的可用性取决于账户和配额。本机确认可用的是 Zhipu ASR、MiniMax TTS
+（推荐），OpenRouter/Cartesia TTS 可用但慢；详见 `docs/project-restart.md`。上表中的
 「默认」指代码层兜底，不代表该 provider 的账户当前一定可用。
 
 通过 `.env` 里的 `ENGINE` 选择 engine：
