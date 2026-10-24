@@ -1,5 +1,5 @@
 import pytest
-from pipecat.frames.frames import EndFrame, TTSAudioRawFrame, UserStartedSpeakingFrame
+from pipecat.frames.frames import EndFrame, InterruptionFrame, TTSAudioRawFrame, UserStartedSpeakingFrame
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.tests.utils import SleepFrame, run_test
 
@@ -53,3 +53,16 @@ async def test_pre_synth_workers_resume_after_barge_in() -> None:
 
     audio = [frame.audio for frame in processor.emitted if isinstance(frame, TTSAudioRawFrame)]
     assert "第二句".encode() in audio
+
+
+@pytest.mark.asyncio
+async def test_barge_in_flushes_audio_already_handed_to_the_transport() -> None:
+    processor = CapturingPreSynthQueueProcessor(SpeechQueue(capacity=8))
+
+    await run_test(
+        processor,
+        frames_to_send=[SleepFrame(0.02), UserStartedSpeakingFrame(), SleepFrame(0.02), EndFrame()],
+    )
+
+    # Without an InterruptionFrame the output transport keeps playing its buffer.
+    assert any(isinstance(frame, InterruptionFrame) for frame in processor.emitted)

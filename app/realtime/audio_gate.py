@@ -90,6 +90,28 @@ class MicGateProcessor(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
+class VadTurnFramesProcessor(FrameProcessor):
+    """Auto turn mode: announce VAD speech boundaries as user-turn frames.
+
+    ``VADProcessor`` only emits ``VADUserStarted/StoppedSpeakingFrame``. The
+    rest of the media plane -- barge-in in the speech queues, the voice
+    activity events published to the sidecar -- listens for
+    ``UserStarted/StoppedSpeakingFrame``, which in a pipeline with an LLM
+    aggregator come from the user turn controller. This pipeline has no
+    aggregator, so without this bridge those frames never exist in auto mode
+    and the user could not interrupt Marcus by speaking. ``MicGateProcessor``
+    does the same job for manual mode (the mic button owns the boundaries).
+    """
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        await super().process_frame(frame, direction)
+        await self.push_frame(frame, direction)
+        if isinstance(frame, VADUserStartedSpeakingFrame):
+            await self.push_frame(UserStartedSpeakingFrame(), direction)
+        elif isinstance(frame, VADUserStoppedSpeakingFrame):
+            await self.push_frame(UserStoppedSpeakingFrame(), direction)
+
+
 class TTSOutputGateProcessor(FrameProcessor):
     """Hold TTS output while the mic is open and release it at mic close."""
 

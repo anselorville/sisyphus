@@ -36,6 +36,7 @@ from pipecat.frames.frames import (
     CancelFrame,
     EndFrame,
     Frame,
+    InterruptionFrame,
     StartFrame,
     TTSAudioRawFrame,
     UserStartedSpeakingFrame,
@@ -93,6 +94,11 @@ class PreSynthQueueProcessor(FrameProcessor):
             self._pending.clear()
             self._next_seq = 0
             await self._queue.cancel_current("barge_in")
+            # Dropping our own unplayed audio is not enough: chunks already
+            # handed downstream sit in the transport's output buffer and would
+            # keep playing for seconds. InterruptionFrame is what makes the
+            # output transport flush that buffer, so the user really is heard.
+            await self.push_frame(InterruptionFrame())
             if not self._closed:
                 self._playback_task = self.create_task(self._playback_loop())
                 for _ in range(self._concurrency):

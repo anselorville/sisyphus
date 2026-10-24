@@ -14,12 +14,14 @@ from app.config import Settings
 from app.latency import build_latency_observer
 from app.providers import build_stt, build_tts
 
-from .audio_gate import MicGateProcessor, TTSOutputGateProcessor
-from .events import RealtimeEvent
+from .audio_gate import MicGateProcessor, TTSOutputGateProcessor, VadTurnFramesProcessor
+from .events import EventSequence, RealtimeEvent
 from .pre_synth_queue import PreSynthQueueProcessor
 from .speech_queue import SpeechQueue
+from .standalone_tts import StandaloneTTS
 from .transcription import EventSink, SpeechInputProcessor, TranscriptEventProcessor
 from .turn_detection import SEMANTIC_BUFFER_FLUSH_TIMEOUT_SECONDS, SemanticBufferProcessor
+from .voice_activity import VoiceActivityEventProcessor
 
 
 def _ignore_event(_event: RealtimeEvent) -> None:
@@ -49,11 +51,17 @@ def build_media_pipeline(
         params=TransportParams(audio_in_enabled=True, audio_out_enabled=True),
     )
     stt = build_stt(settings)
-    transcript_events = TranscriptEventProcessor(event_sink or _ignore_event)
+    sink = event_sink or _ignore_event
+    # One sequence for every event this connection publishes, so the sidecar
+    # sees a single numbering however many processors emit.
+    sequence = EventSequence()
+    transcript_events = TranscriptEventProcessor(sink, sequence)
+    voice_activity = VoiceActivityEventProcessor(sink, sequence)
     speech_queue = speech_queue if speech_queue is not None else SpeechQueue()
     processors: list[object] = [
         transport.input(),
         stt,
+        voice_activity,
         SemanticBufferProcessor(flush_timeout=SEMANTIC_BUFFER_FLUSH_TIMEOUT_SECONDS),
         transcript_events,
         SpeechInputProcessor(agent_link),
@@ -61,7 +69,7 @@ def build_media_pipeline(
         # inline TTS stage: it synthesizes speech requests concurrently
         # (N independent TTS connections) and plays audio in request order,
         # so sentence B does not wait for sentence A's synthesis to finish.
-        PreSynthQueueProcessor(speech_queue, tts_factory=lambda: build_tts(settings)),
+        PreSynthQueueProcessor(speech_queue, tts_factory=lambda: StandaloneTTS(lambda: build_tts(settings))),
         transport.output(),
     ]
     if settings.turn_mode == "manual":
@@ -72,11 +80,14 @@ def build_media_pipeline(
         from pipecat.processors.audio.vad_processor import VADProcessor
 
         processors.insert(1, VADProcessor(vad_analyzer=SileroVADAnalyzer()))
+        # VADProcessor only emits VAD* frames; barge-in needs the user-turn frames.
+        processors.insert(2, VadTurnFramesProcessor())
 
     return Pipeline(processors), {
         "transport": transport,
         "stt": stt,
         "transcript_events": transcript_events,
+        "voice_activity": voice_activity,
         "speech_queue": speech_queue,
     }
 

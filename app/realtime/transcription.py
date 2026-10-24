@@ -10,7 +10,7 @@ from uuid import uuid4
 from pipecat.frames.frames import Frame, TranscriptionFrame, TTSTextFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-from .events import RealtimeEvent
+from .events import EventSequence, RealtimeEvent
 
 
 EventSink = Callable[[RealtimeEvent], Awaitable[None] | None]
@@ -19,18 +19,22 @@ EventSink = Callable[[RealtimeEvent], Awaitable[None] | None]
 class TranscriptEventProcessor(FrameProcessor):
     """Publish final STT text as structured realtime events."""
 
-    def __init__(self, event_sink: EventSink, **kwargs: object) -> None:
+    def __init__(
+        self,
+        event_sink: EventSink,
+        sequence: EventSequence | None = None,
+        **kwargs: object,
+    ) -> None:
         super().__init__(**kwargs)
         self._event_sink = event_sink
-        self._sequence = 0
+        self._sequence = sequence if sequence is not None else EventSequence()
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
         if isinstance(frame, TranscriptionFrame) and frame.text.strip():
-            self._sequence += 1
             event = RealtimeEvent(
                 event_id=str(uuid4()),
-                sequence=self._sequence,
+                sequence=self._sequence.next(),
                 source="pipecat",
                 type="voice.transcript.final",
                 timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),

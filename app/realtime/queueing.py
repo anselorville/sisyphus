@@ -17,6 +17,19 @@ class QueueClosed(RuntimeError):
 
 _CONTROL_EVENT_TYPES = frozenset({"voice.speech.cancel"})
 
+# High-frequency, individually disposable signals: only the latest matters, so
+# they must not occupy (or be resent from) the durable, ack-tracked buffer.
+_COALESCIBLE_EVENT_TYPES = frozenset({"voice.transcript.partial"})
+
+
+def priority_for_event(event: RealtimeEvent) -> EventPriority:
+    """Default send priority for a media-plane event (the queue may still upgrade it, see ``_protected_priority``)."""
+    if event.type in _CONTROL_EVENT_TYPES:
+        return EventPriority.CRITICAL
+    if event.type in _COALESCIBLE_EVENT_TYPES:
+        return EventPriority.COALESCIBLE
+    return EventPriority.DURABLE
+
 
 class BoundedEventQueue:
     def __init__(self, capacity: int) -> None:

@@ -33,6 +33,19 @@ class RealtimeEvent(msgspec.Struct, frozen=True, omit_defaults=True):
     task_id: str | None = None
 
 
+class EventSequence:
+    """Monotonic `sequence` allocator shared by every processor that publishes
+    events on one connection, so the sidecar sees a single gap-free numbering
+    (its inbound dedup and ack bookkeeping key on `sequence`)."""
+
+    def __init__(self) -> None:
+        self._value = 0
+
+    def next(self) -> int:
+        self._value += 1
+        return self._value
+
+
 _encoder = msgspec.json.Encoder()
 _decoder = msgspec.json.Decoder(RealtimeEvent)
 

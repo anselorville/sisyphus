@@ -69,6 +69,7 @@ from app.model_settings import (
 )
 from app.providers import select_engine, stt_provider_name, tts_provider_name
 from app.realtime.event_bridge import SidecarEventBridge
+from app.realtime.queueing import priority_for_event
 from app.realtime.speech_queue import SpeechQueue, speech_request_from_directive
 from app.realtime.media_pipeline import build_media_pipeline, build_pipeline_worker
 
@@ -918,7 +919,7 @@ async def run_bot(
             except Exception:
                 pass
         if bridge is not None:
-            await bridge.send(event)
+            await bridge.send(event, priority_for_event(event))
 
     speech_queue_holder: list[SpeechQueue] = []
     worker = build_pipeline_worker(
