@@ -60,6 +60,7 @@ export const REALTIME_EVENT_TYPES = [
   "role.slept",
   "role.retired",
   "decision.made",
+  "search.made",
 ] as const;
 export type RealtimeEventType = (typeof REALTIME_EVENT_TYPES)[number];
 

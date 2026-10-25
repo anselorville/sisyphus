@@ -57,6 +57,7 @@
 ## 已知缺口（现状记录，非任务本身）
 
 ### `agent-runtime`（详见 `agent-runtime/README.md` 的"已知缺口"一节）
+- 网页搜索：无结果缓存；`web_fetch` 被反爬拦截时尚无兜底（DeepSeek `/v1/tools/fetch`、Tavily Extract 可做同样的兜底链）；GLM REST 搜索需充值资源包才能用（目前只走 MCP）。
 - Jev 决策层的评测集是自己标注的 87 条，不是真实流量；需要用 shadow/live 日志里的分歧扩充标注并重新校准阈值（`docs/jev-decision-layer.md` 第 5 节）。
 - 路线图未做：回合结束判定、Scribe 话题漂移门、工具调用风险闸、独立验证边、推测性预热（见 `docs/jev-decision-layer.md` 第 6 节与 `docs/research/harness2-and-graph-engineering.md`）。
 - 没有真人用麦克风/扬声器跑过完整对话。合成语音冒烟测试（`scripts/voice-smoke.py`）

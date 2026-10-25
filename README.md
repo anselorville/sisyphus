@@ -295,6 +295,12 @@ first-run model download needs network access.
 
 ## What's implemented
 
+- `agent-runtime/src/search/` - `web_search` over DeepSeek, Brave, Tavily and
+  GLM (MCP): a fallback chain with rotation inside a tier, multi-source fan-out
+  with rank fusion for hard or time-sensitive questions, per-provider health
+  and cool-downs, and kept-alive connections (see
+  [`docs/web-search.md`](docs/web-search.md)). `scripts/eval-search.mjs` checks
+  the real providers.
 - `agent-runtime/src/decision/` - the Jev decision layer: a keep-alive client
   (connection warm-up, hard time budgets, circuit breaker), a decision engine
   with `off` / `shadow` / `live` modes and an audit record per decision, and

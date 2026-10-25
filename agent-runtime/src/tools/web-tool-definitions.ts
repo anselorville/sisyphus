@@ -31,7 +31,12 @@ export function createWebToolDefinitions(webTools: WebTools): ToolDefinition[] {
         const { query, count } = params as Static<typeof WebSearchParams>;
         const results = await webTools.web_search(query, { count });
         const text = results
-          .map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`)
+          .map((r, i) => {
+            // A page several independent indexes returned is worth saying so: it is the cross-check.
+            const confirmed = r.sources && r.sources.length > 1 ? `   (found by ${r.sources.join(" + ")})\n` : "";
+            const dated = r.publishedAt ? ` [${r.publishedAt.slice(0, 10)}]` : "";
+            return `${i + 1}. ${r.title}${dated}\n   ${r.url}\n${confirmed}   ${r.snippet}`;
+          })
           .join("\n\n");
         return toToolResult(text || "No results found.");
       },

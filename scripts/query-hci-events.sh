@@ -14,6 +14,7 @@
 #   scripts/query-hci-events.sh --latency        # 只统计延迟指标
 #   scripts/query-hci-events.sh --summary        # 只输出 HCI 指标汇总
 #   scripts/query-hci-events.sh --decisions      # Jev 决策层：规则 vs Jev 的一致率、回落原因、延迟
+#   scripts/query-hci-events.sh --search         # 网页搜索：各搜索源的调用/失败/延迟、模式分布、最近的搜索
 #
 # 数据库路径: 默认 <repo>/agent-runtime/data/agent-runtime.sqlite3
 #            可用环境变量 AGENT_RUNTIME_DB_PATH 覆盖。
@@ -37,7 +38,7 @@ N=20
 INTERACTION_ID=""
 TASK_ID=""
 OUTPUT_MODE="table"   # table | csv
-MODE="events"         # events | latency | summary | decisions
+MODE="events"         # events | latency | summary | decisions | search
 
 usage() {
   sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
@@ -53,6 +54,7 @@ while [[ $# -gt 0 ]]; do
     --latency)        MODE="latency"; shift ;;
     --summary)        MODE="summary"; shift ;;
     --decisions)      MODE="decisions"; shift ;;
+    --search)         MODE="search"; shift ;;
     -h|--help)        usage ;;
     *) echo "未知参数: $1" >&2; usage ;;
   esac
@@ -140,6 +142,47 @@ if [[ "$MODE" == "latency" ]]; then
   echo "-- 补充 --"
   echo "端到端听感延迟还要加上 TTS 首包与播放，来自日志: grep voice_latency /tmp/sisyphus-backend.log"
   echo "关注: user_to_bot_seconds（说话结束→首次 bot 语音）、first_bot_speech_seconds。"
+  exit 0
+fi
+
+# --- 模式: search（网页搜索审计） ---
+# 每次 web_search 写一条 search.made 事件：计划(模式/宽度/时效/主题)、每个搜索源的尝试
+# (成功与否、耗时、条数、失败原因)、最终贡献结果的搜索源、总耗时。
+if [[ "$MODE" == "search" ]]; then
+  echo "=== 搜索模式分布 ==="
+  sqlite3 -header -column "$DB_PATH" "
+    SELECT json_extract(payload,'$.plan') AS plan, COUNT(*) AS n,
+           CAST(AVG(json_extract(payload,'$.totalMs')) AS INTEGER) AS avg_ms
+    FROM events WHERE type='search.made' GROUP BY 1 ORDER BY n DESC;
+  "
+  echo
+  echo "=== 各搜索源（来自每次尝试）==="
+  sqlite3 -header -column "$DB_PATH" "
+    SELECT json_extract(a.value,'$.provider') AS provider,
+           COUNT(*) AS attempts,
+           SUM(json_extract(a.value,'$.ok')) AS ok,
+           COUNT(*) - SUM(json_extract(a.value,'$.ok')) AS failed,
+           CAST(AVG(CASE WHEN json_extract(a.value,'$.ok') THEN json_extract(a.value,'$.ms') END) AS INTEGER) AS avg_ok_ms
+    FROM events e, json_each(e.payload,'$.attempts') a
+    WHERE e.type='search.made' GROUP BY 1 ORDER BY attempts DESC;
+  "
+  echo
+  echo "=== 失败原因 ==="
+  sqlite3 -header -column "$DB_PATH" "
+    SELECT json_extract(a.value,'$.provider') AS provider, substr(json_extract(a.value,'$.error'),1,70) AS error, COUNT(*) AS n
+    FROM events e, json_each(e.payload,'$.attempts') a
+    WHERE e.type='search.made' AND json_extract(a.value,'$.ok')=0 GROUP BY 1,2 ORDER BY n DESC LIMIT ${N};
+  "
+  echo
+  echo "=== 最近的搜索 ==="
+  sqlite3 -header -column "$DB_PATH" "
+    SELECT strftime('%m-%d %H:%M:%S', received_at) AS time,
+           json_extract(payload,'$.totalMs') AS ms,
+           json_extract(payload,'$.plan') AS plan,
+           replace(replace(json_extract(payload,'$.contributors'),'[',''),']','') AS from_,
+           substr(json_extract(payload,'$.query'),1,40) AS query
+    FROM events WHERE type='search.made' ORDER BY rowid DESC LIMIT ${N};
+  "
   exit 0
 fi
 

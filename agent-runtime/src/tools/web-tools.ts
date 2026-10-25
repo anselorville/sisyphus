@@ -61,6 +61,17 @@ export interface WebSearchResult {
   readonly title: string;
   readonly url: string;
   readonly snippet: string;
+  /** Which search providers returned this page (present when the multi-provider router is used). */
+  readonly sources?: readonly string[];
+  readonly publishedAt?: string;
+}
+
+/** The slice of ../search/router.ts's SearchRouter that web_search needs. */
+export interface SearchPort {
+  search(
+    query: string,
+    options: { readonly count?: number },
+  ): Promise<{ readonly hits: ReadonlyArray<{ title: string; url: string; snippet: string; agreedBy: readonly string[]; publishedAt?: string }> }>;
 }
 
 export interface WebSearchRequestOptions {
@@ -100,6 +111,8 @@ interface BraveSearchResponsePayload {
 export interface WebToolsOptions {
   readonly gateway: CapabilityGatewayLike;
   readonly fetchImpl?: FetchLike;
+  /** Multi-provider search with fallback; when absent, web_search uses the single Brave adapter below. */
+  readonly search?: SearchPort;
   readonly brave?: BraveSearchConfig;
   readonly webFetch?: WebFetchOptions;
 }
@@ -207,6 +220,7 @@ async function readBodyCapped(response: Response, maxBytes: number): Promise<{ t
 export class WebTools {
   private readonly gateway: CapabilityGatewayLike;
   private readonly fetchImpl: FetchLike;
+  private readonly searchPort: SearchPort | undefined;
   private readonly braveEndpoint: string;
   private readonly braveApiKey: string | undefined;
   private readonly braveApiKeyEnvVar: string;
@@ -217,6 +231,7 @@ export class WebTools {
   constructor(options: WebToolsOptions) {
     this.gateway = options.gateway;
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.searchPort = options.search;
     this.braveEndpoint = options.brave?.endpoint ?? DEFAULT_BRAVE_ENDPOINT;
     this.braveApiKeyEnvVar = options.brave?.apiKeyEnvVar ?? DEFAULT_BRAVE_API_KEY_ENV;
     this.braveApiKey = options.brave?.apiKey ?? process.env[this.braveApiKeyEnvVar];
@@ -240,6 +255,16 @@ export class WebTools {
   }
 
   private async performSearch(query: string, options: WebSearchRequestOptions): Promise<readonly WebSearchResult[]> {
+    if (this.searchPort) {
+      const { hits } = await this.searchPort.search(query, options.count === undefined ? {} : { count: options.count });
+      return hits.map((hit) => ({
+        title: hit.title,
+        url: hit.url,
+        snippet: hit.snippet,
+        sources: hit.agreedBy,
+        ...(hit.publishedAt ? { publishedAt: hit.publishedAt } : {}),
+      }));
+    }
     if (!this.braveApiKey) {
       throw new BraveSearchConfigError(this.braveApiKeyEnvVar);
     }

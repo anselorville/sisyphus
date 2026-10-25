@@ -56,6 +56,9 @@ import { EventSequencer } from "./protocol/sequence.js";
 import { DecisionEngine, type DecisionRecord } from "./decision/decision-engine.js";
 import { JevClient } from "./decision/jev-client.js";
 import { TurnDecider } from "./decision/turn-decision.js";
+import { createSearchProviders } from "./search/factory.js";
+import { searchPlanSpec } from "./search/planner.js";
+import { SearchRouter } from "./search/router.js";
 import { TaskNest, type TaskRecord } from "./tasks/task-nest.js";
 import { createInboundEventRouter } from "./tasks/inbound-event-router.js";
 import { createTaskAssimilationHook } from "./tasks/task-assimilation.js";
@@ -256,6 +259,28 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     });
     jev.start();
     rollbacks.push(async () => jev.stop());
+
+    // Web search over every provider that has a key: DeepSeek, Brave, Tavily, GLM.
+    // Jev refines the rule plan (how hard is the question, how fast does its
+    // answer go stale) in parallel with the first provider call; each search is
+    // logged to the events table as `search.made`.
+    const searchRouter = new SearchRouter({
+      providers: createSearchProviders(process.env),
+      refine: (input) => decisionEngine.decide(searchPlanSpec, input, input.rule),
+      onSearch: (trace) => {
+        eventRecorder.record({
+          event_id: randomUUID(),
+          sequence: nextSequence(),
+          source: "tool",
+          type: "search.made",
+          timestamp: new Date().toISOString(),
+          payload: { ...trace },
+        });
+      },
+    });
+    searchRouter.start();
+    rollbacks.push(async () => searchRouter.stop());
+    console.log(`[search] providers: ${searchRouter.providerIds.join(", ") || "none"}`);
     console.log(`[jev] mode=${jev.enabled ? runtimeConfig.jevMode : "off"} (${jev.enabled ? `model ${runtimeConfig.jevModel}` : "no TYPESAFE_API_KEY"})`);
 
     const server = new RuntimeWebSocketServer({
@@ -307,7 +332,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
       options.piSessionProvider ??
       createDefaultPiSessionProvider({
         customTools: [
-          ...createWebToolDefinitions(new WebTools({ gateway: capabilityGateway })),
+          ...createWebToolDefinitions(new WebTools({ gateway: capabilityGateway, ...(searchRouter.providerIds.length > 0 ? { search: searchRouter } : {}) })),
           ...createMailToolDefinitions({ client: new AgentlyMailClient({ gateway: capabilityGateway }), gate: mailConfirmation }),
           ...createDeviceToolDefinitions(
             new DeviceTools({
@@ -481,6 +506,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
       acceptingInboundWork = false;
       metrics.stop();
       jev.stop();
+      searchRouter.stop();
 
       // 2. Close the WebSocket server: no more inbound frames, no more
       // queued outbound delivery.

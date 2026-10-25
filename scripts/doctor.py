@@ -134,8 +134,20 @@ def check_env_file(env: dict[str, str]) -> list[Check]:
             checks.append(Check(OK, f"{label} ({role})", f"{var} is set"))
         else:
             checks.append(Check(FAIL, f"{label} ({role})", f"{var} is empty in .env"))
-    brave = env.get("BRAVE_SEARCH_API_KEY") or os.environ.get("BRAVE_SEARCH_API_KEY")
-    checks.append(Check(OK if brave else WARN, "web search", "BRAVE_SEARCH_API_KEY is set" if brave else "BRAVE_SEARCH_API_KEY empty -- Marcus cannot search the web"))
+    # Web search: any provider with a key counts; more than one makes the chain a real fallback.
+    search_keys = {
+        "deepseek": "DEEPSEEK_API_KEY",
+        "brave": "BRAVE_SEARCH_API_KEY",
+        "tavily": "TAVILY_API_KEY",
+        "glm": "GLM_API_KEY",
+    }
+    have = [name for name, var in search_keys.items() if env.get(var) or os.environ.get(var)]
+    if not have:
+        checks.append(Check(WARN, "web search", "no search key set (DEEPSEEK/BRAVE_SEARCH/TAVILY/GLM) -- Marcus cannot search the web"))
+    elif len(have) == 1:
+        checks.append(Check(WARN, "web search", f"only {have[0]} configured -- no fallback if it fails"))
+    else:
+        checks.append(Check(OK, "web search", f"{len(have)} providers with a key: {', '.join(have)}"))
     return checks
 
 

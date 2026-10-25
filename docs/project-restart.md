@@ -369,6 +369,11 @@ sqlite3 agent-runtime/data/agent-runtime.sqlite3 \
 - 这台机器到 `api.typesafe.ai` 的 TLS 握手要 5 秒，所以客户端预热 + 保活 + 硬预算 + 熔断。
 - `scripts/query-hci-events.sh --decisions` 看规则与 Jev 的一致率、回落原因、延迟、分歧。
 
+网页搜索改为多源（DeepSeek / Brave / Tavily / GLM MCP）：兜底链、同层轮转、难题 / 时效性问题多路并行再融合、
+按失败原因冷却、长连接保活（这台机器到 Brave / Tavily 的新连接握手要 ~5.5 秒）。路由 8/8 命中，中位 ~450 ms。
+GLM 的 REST 搜索因账号无资源包返回 1113，只有 MCP 可用。设计与实测见 [`docs/web-search.md`](web-search.md)，
+`scripts/query-hci-events.sh --search` 看每次搜索的计划与各源表现。
+
 同日的两份调研：[Harness² 与图工程](research/harness2-and-graph-engineering.md)、
 [AI Passport 硬件](research/ai-passport.md)。
 
@@ -419,6 +424,7 @@ sqlite3 agent-runtime/data/agent-runtime.sqlite3 \
 | `docs/adr/0001-*.md` | 权威决策 | Phase A/B 路径与 oh-my-pi 取舍 |
 | `docs/lessons-learned.md` | 经验 | 调试教训（旧进程、构建新鲜度等） |
 | `docs/jev-decision-layer.md` | 权威设计 | Jev 决策层：做什么、阈值、评测、审计、路线图 |
+| `docs/web-search.md` | 权威设计 | 多源网页搜索：搜索源实测、路由与融合、健康冷却、评测、路线图 |
 | `docs/research/*.md` | 调研 | Harness²/图工程；AI Passport 硬件与接入方案 |
 | `docs/hci-observations.md` | 运行日志 | HCI 观察记录模板/记录 |
 | `docs/llm-auth-verification.md` | 历史证据 | 2026-08-08 的 LLM 认证验证 |
