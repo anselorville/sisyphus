@@ -335,6 +335,17 @@ function searchArgs(request: MailSearchRequest): string[] {
   return args;
 }
 
+/**
+ * Whether phase 1 is asking for the confirmation token. The documented signal
+ * is exit code 8, but the installed CLI answers with exit 0 and
+ * `data.confirmation_required: true` plus the token -- treating only exit 8 as
+ * the signal made every send/trash stop after phase 1 and report success (or a
+ * missing message_id) without doing anything. Either form means "confirm".
+ */
+function isConfirmationRequired(call: AgentlyCliCall): boolean {
+  return call.exitCode === EXIT_CONFIRMATION_REQUIRED || call.data?.["confirmation_required"] === true;
+}
+
 function readConfirmationToken(call: AgentlyCliCall): string {
   const token = call.data?.["confirmation_token"];
   if (typeof token !== "string" || token === "") {
@@ -356,7 +367,8 @@ function asRawMailMessage(value: unknown): RawMailMessage {
 }
 
 function extractMessages(call: AgentlyCliCall): NormalizedMailData[] {
-  const raw = call.data?.["messages"];
+  // The real CLI nests the list one level down (`data.data`); older fixtures used `data.messages`.
+  const raw = call.data?.["messages"] ?? call.data?.["data"];
   return Array.isArray(raw) ? raw.map((entry) => normalizeMailData(asRawMailMessage(entry))) : [];
 }
 
@@ -555,7 +567,7 @@ export class AgentlyMailClient {
   /** Drives agently-cli's two-phase confirmation protocol: phase 1 without a token; if that comes back exit 8, phase 2 with the identical args plus `--confirmation-token <token>`. Only ever reached once diplomacy has already allowed the whole logical action (see runThroughGateway/the module doc comment). */
   private async performTwoPhase(args: readonly string[]): Promise<AgentlyCliCall> {
     const first = await this.invoke(args);
-    if (first.exitCode !== EXIT_CONFIRMATION_REQUIRED) {
+    if (!isConfirmationRequired(first)) {
       return first;
     }
     const token = readConfirmationToken(first);

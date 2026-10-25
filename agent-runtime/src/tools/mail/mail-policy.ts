@@ -8,10 +8,11 @@
  *
  * Concretely: NormalizedMailData has no `instructions`, `command`, or other
  * executable-shaped field, and this module never derives one from message
- * content. Every text field passes through verbatim (not sanitized, not
- * stripped, not reinterpreted) -- verbatim pass-through is itself the
- * safety property, since silently rewriting content would hide what the
- * message actually said.
+ * content. Text passes through as the message said it -- never sanitized of
+ * wording, never reinterpreted -- with one exception: an HTML body (the CLI
+ * reports `body_format: "HTML"`) is reduced to its visible text, because raw
+ * markup is unreadable to the model and to a listener, and dropping
+ * `<script>`/`<style>` content only removes things nobody was meant to read.
  */
 
 /** Raw attachment metadata as agently-cli's JSON envelope shapes it (snake_case, exactly as the CLI emits it -- see the agently-mail skill's `message +read` example). */
@@ -29,14 +30,25 @@ export interface RawMailMessage {
   readonly thread_id?: string;
   readonly subject?: string;
   readonly body?: string;
-  readonly from?: string;
-  readonly to?: readonly string[];
-  readonly cc?: readonly string[];
-  readonly bcc?: readonly string[];
+  /** "HTML" when `body` is markup rather than plain text. */
+  readonly body_format?: string;
+  /** Short preview; `+search` results carry this instead of a body. */
+  readonly snippet?: string;
+  readonly from?: RawMailAddress;
+  readonly to?: readonly RawMailAddress[];
+  readonly cc?: readonly RawMailAddress[];
+  readonly bcc?: readonly RawMailAddress[];
   readonly attachments?: readonly RawMailAttachment[];
   readonly received_at?: string;
+  /** What the real CLI calls `received_at`. */
+  readonly created_at?: string;
   readonly is_unread?: boolean;
+  /** What the real CLI reports (the inverse of `is_unread`). */
+  readonly is_read?: boolean;
 }
+
+/** The real CLI emits addresses as `{ email, name }`; older fixtures use a bare string. */
+export type RawMailAddress = string | { readonly email?: string; readonly name?: string };
 
 export interface NormalizedMailAttachment {
   readonly attachmentId: string | undefined;
@@ -71,8 +83,48 @@ function asPlainString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-function asStringArray(value: unknown): readonly string[] {
-  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+function formatAddress(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value !== null && typeof value === "object") {
+    const { email, name } = value as { email?: unknown; name?: unknown };
+    const address = typeof email === "string" ? email : "";
+    const display = typeof name === "string" ? name : "";
+    return display && address ? `${display} <${address}>` : address || display;
+  }
+  return "";
+}
+
+function asAddressArray(value: unknown): readonly string[] {
+  return Array.isArray(value) ? value.map(formatAddress).filter((entry) => entry !== "") : [];
+}
+
+const HTML_ENTITIES: Record<string, string> = { nbsp: " ", amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+
+/** Visible text of an HTML document: no tags, no script/style content, block elements become line breaks. */
+export function htmlToText(html: string): string {
+  return html
+    .replace(/<(script|style|head)\b[\s\S]*?<\/\1\s*>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<br\s*\/?>|<\/(p|div|li|tr|h[1-6]|table|blockquote)\s*>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&#(\d+);/g, (_m, code: string) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_m, code: string) => String.fromCodePoint(Number.parseInt(code, 16)))
+    .replace(/&([a-z]+);/gi, (match, name: string) => HTML_ENTITIES[name.toLowerCase()] ?? match)
+    .replace(/[ \t\u00a0]+/g, " ")
+    .replace(/ ?\n ?/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function bodyText(raw: RawMailMessage): string {
+  const body = asPlainString(raw.body);
+  if (body === "") {
+    return asPlainString(raw.snippet);
+  }
+  const isHtml = raw.body_format?.toUpperCase() === "HTML" || /^\s*<(!doctype|html)\b/i.test(body);
+  return isHtml ? htmlToText(body) : body;
 }
 
 function normalizeAttachment(raw: RawMailAttachment): NormalizedMailAttachment {
@@ -98,13 +150,13 @@ export function normalizeMailData(raw: RawMailMessage): NormalizedMailData {
     messageId: raw.message_id,
     threadId: raw.thread_id,
     subject: asPlainString(raw.subject),
-    body: asPlainString(raw.body),
-    sender: asPlainString(raw.from),
-    to: asStringArray(raw.to),
-    cc: asStringArray(raw.cc),
-    bcc: asStringArray(raw.bcc),
+    body: bodyText(raw),
+    sender: formatAddress(raw.from),
+    to: asAddressArray(raw.to),
+    cc: asAddressArray(raw.cc),
+    bcc: asAddressArray(raw.bcc),
     attachments: (raw.attachments ?? []).map(normalizeAttachment),
-    receivedAt: raw.received_at,
-    isUnread: raw.is_unread ?? false,
+    receivedAt: raw.received_at ?? raw.created_at,
+    isUnread: raw.is_unread ?? (raw.is_read === undefined ? false : !raw.is_read),
   });
 }

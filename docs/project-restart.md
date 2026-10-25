@@ -318,6 +318,27 @@ sqlite3 agent-runtime/data/agent-runtime.sqlite3 \
    面向用户的角色提示词加了"Speaking style"：先给结论、最多三句、细节等追问；
    同一场景现在 13.5 s，并以"要我看看明后两天怎么样吗？"收尾。
 
+9. **邮件与设备角色没有任何可调用的工具。** `mail_*` 和 `device_status`/`service_action` 只存在于
+   `agent-runtime/src/tools/`，从未注册成 Pi 会话的自定义工具（只有 `web_search`/`web_fetch`
+   注册了），而且能力标签只有英文，中文"看看邮件""后端还在吗"根本路由不到这两个角色。现已：
+   - 注册 `mail_search/read/send/reply/forward/trash/download` 与 `device_status/service_action`；
+   - 给两个角色补了口语关键词（邮件、邮箱、收件箱、后端、重启……），有路由测试。
+10. **邮件适配器与真实 `agently-cli` 对不上**（单测用的是想象出来的数据）：搜索结果在
+    `data.data` 而不是 `data.messages`（搜索永远返回空）；`from`/`to` 是 `{email, name}` 对象；
+    已读标记是 `is_read`（与 `is_unread` 相反）；正文是 HTML；最严重的是写操作第一阶段返回
+    **退出码 0 + `confirmation_required: true`**，而适配器只认文档里的退出码 8，于是用户确认后
+    邮件根本没发出去、垃圾箱操作还会假装成功。均已按真实输出修复并加回归测试。
+11. **邮件写操作改为代码强制的"先确认再执行"。** 外交官对单封发送默认 `ALLOW_LOGGED`（自动执行），
+    而邮件正文是不可信输入，agently-mail 技能也要求写操作必须由用户在下一轮亲口确认。
+    所以 `mail_send/reply/forward/trash` 第一次调用只"准备"并返回 `confirmation_id`，
+    只有同样参数、未过期（5 分钟）、且**用户在准备之后又说过话**才会真正执行；同一轮里自己确认会被拒绝。
+    用户的"好，发吧"会被路由回邮件角色，"算了/不要"会撤销待确认动作。这比设计文档里的
+    "单封发送自动执行"更严格，是有意的。
+12. **设备角色接上真实实现，范围限定在 Marcus 自己的三个进程。** `device_status` 探测 sidecar /
+    后端 / 前端（IPv4 与 IPv6 回环）；`service_action` 只支持 `restart marcus-backend`
+    （新增 `scripts/restart-backend.sh`，后台分离执行，会掐断当前语音连接，Marcus 会先说明）。
+    start/stop/shutdown、其他服务、sidecar 自身重启一律返回"不支持"，不会被即兴执行。
+
 同批完成的重启文档 P0/P1 项：
 
 - HCI 事件日志完整：媒体面补发 `voice.user.started/stopped`、`voice.transcript.partial`、
@@ -344,13 +365,13 @@ sqlite3 agent-runtime/data/agent-runtime.sqlite3 \
    `PopulationRegistry.retire()` 仍无触发规则；等真实 fitness/pheromone 数据积累后再启用。
 4. **树莓派硬件未调优/基准（P2，需要硬件）。** `.proj-init/performance-baseline.md`
    的 Pi 章节仍是"未测"。
-5. **设备与邮件角色尚未接到 LLM（P3，需要决策）。** 比此前文档写的更彻底：
-   `device_status`/`service_action`（设备）和 `mail_*`（邮件，`AgentlyMailClient` 已实现并有
-   测试）都只存在于 `agent-runtime/src/tools/`，从未注册成 Pi 会话的自定义工具，目前只有
-   `web_search`/`web_fetch` 注册了（`src/index.ts` 的 `customTools`）。所以这两个角色现在
-   即使被路由到，也没有可调用的工具。设备侧还缺真实的 `DeviceStatusProvider` /
-   `ServiceController`。要接哪些、能否让邮件发送自动执行，是产品决策，见第 7 节。
-6. **外部依赖状态：** Deepgram key 无效（401）；Edge TTS 返回 403；局域网 VoxCPM2
+5. **邮件的"确认后真正发出"这一步没有在真实邮箱上跑过（P2）。** 起草→询问→放弃的流程、
+   发送前的各项拦截都已在真实 LLM 与真实邮箱上验证；但真正把邮件发出去会产生外部副作用，
+   我没有替你发。请找一次机会对自己的邮箱走一遍"发送→确认→收到"。
+   另外 `mail_watch`（持续监听新邮件）没有暴露给 LLM，要看新邮件请用"最近有哪些未读"。
+6. **代码角色（`code`，带终端/文件写入能力）仍只能通过英文标签路由。** 没有给它加中文口语关键词，
+   因为让一句语音直接触达带 bash 的角色是需要单独权衡的安全决定。
+7. **外部依赖状态：** Deepgram key 无效（401）；Edge TTS 返回 403；局域网 VoxCPM2
    不在线。以上都不影响推荐组合。
 
 ---
@@ -363,8 +384,7 @@ sqlite3 agent-runtime/data/agent-runtime.sqlite3 \
    - 是否唤醒蜂群治理（Queen/Population）；
    - 是否引入 oh-my-pi 的子 agent / 记忆 / 插件市场（见 ADR-001）。
 3. 有树莓派硬件时做基准测试。
-4. 决定设备与邮件角色怎么接（见 6.2-5）：至少先把只读的 `mail_search`/`mail_read` 注册成工具；
-   设备侧决定控制对象（Marcus 自己的服务？launchd/systemd？）。
+4. 找一次机会真实走一遍邮件"发送→确认→收到"（见 6.2-5），并决定要不要给代码角色加口语入口（6.2-6）。
 
 ---
 

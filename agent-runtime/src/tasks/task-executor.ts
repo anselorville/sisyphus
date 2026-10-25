@@ -57,6 +57,15 @@ export interface TaskExecutorOptions {
    * clipped args string, duration, result size), never raw tool results.
    */
   readonly eventLog?: (event: RealtimeEvent) => void;
+  /**
+   * Lets a two-step action (mail send/reply/forward/trash) hear the user's
+   * answer: called with every final transcript, and asked which role is
+   * waiting for a yes so the answer is routed back to it.
+   */
+  readonly confirmation?: {
+    noteUserUtterance(transcript: string): void;
+    pendingRoleId(): string | undefined;
+  };
   /** Assigns each emitted event's `sequence`. Default: this executor's own EventSequencer; production passes the process-wide one (see ../protocol/sequence.ts). */
   readonly nextSequence?: () => number;
   readonly ackGraceMs?: number;
@@ -76,6 +85,7 @@ export class TaskExecutor {
   private readonly db: TaskAssimilationDb | undefined;
   private readonly hub: InfoHub | undefined;
   private readonly eventLog: ((event: RealtimeEvent) => void) | undefined;
+  private readonly confirmation: TaskExecutorOptions["confirmation"];
   private readonly onTerminal: (() => void) | undefined;
   private readonly ackGraceMs: number;
   private readonly toolAckGenerator: ToolAckGenerator;
@@ -98,6 +108,7 @@ export class TaskExecutor {
     this.hub = options.hub;
     this.onTerminal = options.onTerminal;
     this.eventLog = options.eventLog;
+    this.confirmation = options.confirmation;
     const ownSequencer = new EventSequencer();
     this.nextSequence = options.nextSequence ?? ((): number => ownSequencer.next());
     this.ackGraceMs = options.ackGraceMs ?? DEFAULT_ACK_GRACE_MS;
@@ -126,6 +137,7 @@ export class TaskExecutor {
   /** Routes a final transcript, cancels/steers, or creates + runs a task. */
   async onVoiceTranscript(text: string, interactionId: string, sourceEventId?: string): Promise<string | undefined> {
     this.activeFillerScheduler?.stop();
+    this.confirmation?.noteUserUtterance(text);
     const active = this.activeTask;
     const routeState = this.buildRouteState(active);
     const decision = this.reflexRouter.route(text, routeState);
@@ -152,7 +164,11 @@ export class TaskExecutor {
       return;
     }
 
-    const roleId = decision.roleId ?? DEFAULT_GENERAL_ROLE_ID;
+    // A reply that matched no capability goes to the role that is waiting for
+    // the user's yes/no (e.g. "好，发吧" back to the mail role), not to a general
+    // worker that has never heard of the pending action.
+    const waitingRole = decision.kind === "general_worker" ? this.confirmation?.pendingRoleId() : undefined;
+    const roleId = waitingRole ?? decision.roleId ?? DEFAULT_GENERAL_ROLE_ID;
     console.log(`[task-executor] route=${decision.kind} role=${roleId} creating task...`);
     const task = await this.taskNest.create({
       goal: text,

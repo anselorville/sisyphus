@@ -17,6 +17,7 @@ alive and to put real turns into the HCI event log
     uv run python scripts/voice-smoke.py --wav my-question.wav
     uv run python scripts/voice-smoke.py --barge-in   # interrupt the reply
     uv run python scripts/voice-smoke.py --suite      # the regression scenarios below
+    uv run python scripts/voice-smoke.py --text "给 a@example.com 发邮件" --follow-up "算了，不发了"
 
 Exit status is 0 only when the user's speech was transcribed, the agent
 answered with a task result, and audio came back.
@@ -130,9 +131,10 @@ class ScriptedMic(MediaStreamTrack):
 
 
 class Session:
-    def __init__(self, args: argparse.Namespace, pcm: np.ndarray) -> None:
+    def __init__(self, args: argparse.Namespace, pcm: np.ndarray, follow_ups: list[np.ndarray] | None = None) -> None:
         self.args = args
         self.pcm = pcm
+        self.follow_ups = follow_ups or []
         self.mic = ScriptedMic()
         self.pc = RTCPeerConnection()
         self.t0 = time.monotonic()
@@ -244,6 +246,22 @@ class Session:
             lambda: len(self.of_type("task.completed")) + len(self.of_type("task.failed")) >= wanted,
             self.args.timeout,
         )
+        # Further user turns, each said once the previous reply has finished.
+        for extra in self.follow_ups:
+            await self.wait_for(lambda: self.reply_audio_finished(spoke_until), self.args.audio_timeout)
+            if manual_turns:
+                self._send_mic(True)
+            self.mic.say(extra)
+            await self.wait_for(lambda: not self.mic.speaking, 60)
+            spoke_until = self.now()
+            if manual_turns:
+                await asyncio.sleep(0.4)
+                self._send_mic(False)
+            wanted += 1
+            done = await self.wait_for(
+                lambda: len(self.of_type("task.completed")) + len(self.of_type("task.failed")) >= wanted,
+                self.args.timeout,
+            )
         # Synthesis lags the text (a sentence can take several seconds), so the
         # spoken answer keeps arriving well after the task is done: wait until
         # reply audio has been heard and then gone quiet for `--tail` seconds.
@@ -321,12 +339,19 @@ SUITE: list[tuple[str, str, bool]] = [
 ]
 
 
-async def run_scenario(args: argparse.Namespace, manual_turns: bool, text: str, barge_in: bool, wav: Path | None) -> dict:
+async def run_scenario(
+    args: argparse.Namespace, manual_turns: bool, text: str, barge_in: bool, wav: Path | None, follow_ups: list[str] | None = None
+) -> dict:
     scenario_args = argparse.Namespace(**{**vars(args), "barge_in": barge_in, "timeout": args.timeout})
     with tempfile.TemporaryDirectory() as tmp:
         source = wav or synthesize(text, args.voice, Path(tmp))
         pcm = load_pcm(source)
-        return await Session(scenario_args, pcm).run(manual_turns)
+        extra = []
+        for index, line in enumerate(follow_ups or []):
+            sub = Path(tmp) / f"followup-{index}"
+            sub.mkdir()
+            extra.append(load_pcm(synthesize(line, args.voice, sub)))
+        return await Session(scenario_args, pcm, extra).run(manual_turns)
 
 
 async def main() -> int:
@@ -340,6 +365,7 @@ async def main() -> int:
     parser.add_argument("--tail", type=float, default=3.0, help="seconds of quiet after the reply audio that end the call")
     parser.add_argument("--audio-timeout", type=float, default=40.0, help="max seconds to wait for the spoken reply to finish")
     parser.add_argument("--barge-in", action="store_true", help="talk over the reply once it starts")
+    parser.add_argument("--follow-up", action="append", default=[], metavar="TEXT", help="say this after the reply finishes (repeatable)")
     parser.add_argument("--suite", action="store_true", help="run the regression scenarios and report pass/fail")
     args = parser.parse_args()
 
@@ -353,7 +379,7 @@ async def main() -> int:
     print(f"backend: stt={status.get('stt_provider')} tts={status.get('tts_provider')} turn_mode={status.get('turn_mode')}")
 
     if not args.suite:
-        result = await run_scenario(args, manual_turns, args.text, args.barge_in, args.wav)
+        result = await run_scenario(args, manual_turns, args.text, args.barge_in, args.wav, args.follow_up)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["ok"] else 1
 

@@ -85,7 +85,9 @@ export const DEVICE_ROLE_PROMPT_PATH = resolveRolePromptPath("device.md");
 
 export const DEVICE_ROLE_MANIFEST: RoleManifest = Object.freeze({
   id: "device",
-  capabilities: ["device-status", "service-control"],
+  // Tags are matched as substrings of the transcript (routing/reflex-router.ts),
+  // so the spoken words people actually use belong here, not just role jargon.
+  capabilities: ["device-status", "service-control", "后端", "前端", "服务状态", "重启", "restart", "marcus-"],
   tools: ["device_status", "service_action"],
   promptPath: DEVICE_ROLE_PROMPT_PATH,
   modelClass: "fast",
@@ -98,11 +100,11 @@ export const MAIL_ROLE_PROMPT_PATH = resolveRolePromptPath("mail.md");
 
 export const MAIL_ROLE_MANIFEST: RoleManifest = Object.freeze({
   id: "mail",
-  capabilities: ["mail-search", "mail-read", "mail-send", "mail-triage"],
+  // See the note on the device role's tags: spoken words, Chinese and English.
+  capabilities: ["mail-search", "mail-read", "mail-send", "mail-triage", "邮件", "邮箱", "收件箱", "email", "e-mail", "mail"],
   tools: [
     "mail_search",
     "mail_read",
-    "mail_watch",
     "mail_send",
     "mail_reply",
     "mail_forward",

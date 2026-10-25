@@ -94,6 +94,29 @@ describe("AgentlyMailClient", () => {
       expect(cli.calls).toHaveLength(2);
     });
 
+    // Shape captured from the installed agently-cli: phase 1 answers exit 0 with
+    // `confirmation_required: true` and the token (not the documented exit 8).
+    it("completes phase 2 when the CLI asks for confirmation with exit 0 and confirmation_required", async () => {
+      cli.queueResult({ exitCode: 0, data: { confirmation_required: true, confirmation_token: "ctk_real", summary: { action: "send" } } });
+      cli.queueResult({ exitCode: 0, data: { message_id: "msg_real" } });
+
+      const result = await mail.send({ to: ["a@example.com"], subject: "Hi", body: "Hello" });
+
+      expect(result.messageId).toBe("msg_real");
+      expect(cli.calls).toHaveLength(2);
+      expect(cli.calls[1]).toEqual([...cli.calls[0]!, "--confirmation-token", "ctk_real"]);
+    });
+
+    it("trash also confirms in a second phase instead of stopping after phase 1", async () => {
+      cli.queueResult({ exitCode: 0, data: { confirmation_required: true, confirmation_token: "ctk_trash" } });
+      cli.queueResult({ exitCode: 0, data: {} });
+
+      await mail.trash("msg_9");
+
+      expect(cli.calls).toHaveLength(2);
+      expect(cli.calls[1]).toEqual(["message", "+trash", "--id", "msg_9", "--confirmation-token", "ctk_trash"]);
+    });
+
     it("requires elevation for bulk delivery", async () => {
       await expect(mail.send(bulkCampaign(50))).rejects.toMatchObject({ code: "ELEVATION_REQUIRED" });
       expect(cli.calls).toHaveLength(0);

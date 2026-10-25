@@ -35,7 +35,7 @@ describe("baseline worker role manifests: least-privilege tool sets", () => {
 
   it("Mail Worker gets exactly its agently-cli mail operations -- never bash", () => {
     expect([...MAIL_ROLE_MANIFEST.tools].sort()).toEqual(
-      ["mail_download", "mail_forward", "mail_read", "mail_reply", "mail_search", "mail_send", "mail_trash", "mail_watch"].sort(),
+      ["mail_download", "mail_forward", "mail_read", "mail_reply", "mail_search", "mail_send", "mail_trash"].sort(),
     );
     expect(MAIL_ROLE_MANIFEST.tools).not.toContain("bash");
     expect(MAIL_ROLE_MANIFEST.tools).not.toContain("write");

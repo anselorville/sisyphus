@@ -42,7 +42,7 @@
  */
 
 import { mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { config as defaultConfig, type AgentRuntimeConfig } from "./config.js";
@@ -75,6 +75,12 @@ import { DiplomacyOfficer } from "./tools/diplomacy-officer.js";
 import { createDiplomacyPersistenceHooks } from "./tools/diplomacy-persistence.js";
 import { WebTools } from "./tools/web-tools.js";
 import { createWebToolDefinitions } from "./tools/web-tool-definitions.js";
+import { AgentlyMailClient } from "./tools/mail/agently-mail.js";
+import { MailConfirmationGate } from "./tools/mail/mail-confirmation.js";
+import { createMailToolDefinitions } from "./tools/mail/mail-tool-definitions.js";
+import { DeviceTools } from "./tools/device-tools.js";
+import { OWN_SERVICE_NAMES, createMarcusDeviceStatusProvider, createMarcusServiceController } from "./tools/device-system.js";
+import { createDeviceToolDefinitions } from "./tools/device-tool-definitions.js";
 import { ReflexRouter } from "./routing/reflex-router.js";
 import { TrafficCommander } from "./voice/traffic-commander.js";
 import { AckGenerator } from "./voice/ack-generator.js";
@@ -261,6 +267,8 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     // diplomacy-officer.ts's own doc comment for this stage. Elevation
     // persistence + broadcast is real (see ./tools/diplomacy-persistence.ts).
     const diplomacyOfficer = new DiplomacyOfficer();
+    // Irreversible mail actions need the user's spoken yes in a later turn (see ./tools/mail/mail-confirmation.ts).
+    const mailConfirmation = new MailConfirmationGate();
     const diplomacyPersistence = createDiplomacyPersistenceHooks({ db, broadcast: (event) => server.broadcast(event), nextSequence });
     const capabilityGateway = new CapabilityGateway({ officer: diplomacyOfficer, ...diplomacyPersistence });
 
@@ -272,7 +280,20 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     const piSessionProvider =
       options.piSessionProvider ??
       createDefaultPiSessionProvider({
-        customTools: createWebToolDefinitions(new WebTools({ gateway: capabilityGateway })),
+        customTools: [
+          ...createWebToolDefinitions(new WebTools({ gateway: capabilityGateway })),
+          ...createMailToolDefinitions({ client: new AgentlyMailClient({ gateway: capabilityGateway }), gate: mailConfirmation }),
+          ...createDeviceToolDefinitions(
+            new DeviceTools({
+              gateway: capabilityGateway,
+              statusProvider: createMarcusDeviceStatusProvider({
+                ports: { backend: Number(process.env["WEBRTC_PORT"]) || 7860, frontend: 1420 },
+              }),
+              serviceController: createMarcusServiceController({ repoRoot: join(import.meta.dirname, "..", "..") }),
+              ownServiceNames: OWN_SERVICE_NAMES,
+            }),
+          ),
+        ],
       });
     const sessionManager = new PiRoleSessionManager({ registry: roleRegistry, provider: piSessionProvider });
     rollbacks.push(() => sessionManager.close());
@@ -336,6 +357,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
       hub: infoHub,
       onTerminal: () => pokeScribe(),
       eventLog: (event) => eventRecorder.record(event),
+      confirmation: mailConfirmation,
       nextSequence,
     });
 
