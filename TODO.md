@@ -60,7 +60,7 @@
 - 没有真人用麦克风/扬声器跑过完整对话。合成语音冒烟测试（`scripts/voice-smoke.py`）
   证明了链路和打断，但语气节奏、嘈杂环境下的 VAD 误触发、真实口音识别率只能真人测。
   这是 Phase A 最优先的缺口。
-- 邮件"确认后真正发出"在真实邮箱上没跑过（会产生外部副作用）；`mail_watch` 未暴露给 LLM。
+- `mail_reply`/`mail_forward`/`mail_trash` 的"确认后真正执行"没有在真实邮箱上各跑一次（`mail_send` 已真实验证）；`mail_watch` 未暴露给 LLM。
 - 代码角色（带终端）没有中文口语路由入口，需要单独的安全决定。
 - `Queen` 的 merge/wake 决策、`PopulationRegistry.retire()` 尚无触发规则（= Phase 3）。
 - 邮件之外的设备控制器仍是可注入的接口占位，未接入具体系统（= Phase 5）。

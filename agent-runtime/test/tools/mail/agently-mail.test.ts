@@ -107,6 +107,23 @@ describe("AgentlyMailClient", () => {
       expect(cli.calls[1]).toEqual([...cli.calls[0]!, "--confirmation-token", "ctk_real"]);
     });
 
+    // The CLI's own output schema (`message +send --print-output-schema`): success is `queued: true`, no message_id.
+    it("treats data.queued as a successful send even though the CLI returns no message_id", async () => {
+      cli.queueResult({ exitCode: 0, data: { confirmation_required: true, confirmation_token: "ctk_q" } });
+      cli.queueResult({ exitCode: 0, data: { queued: true } });
+
+      const result = await mail.send({ to: ["a@example.com"], subject: "Hi", body: "Hello" });
+
+      expect(result).toEqual({ messageId: undefined, queued: true });
+    });
+
+    it("still fails when the CLI neither queued the message nor returned an id", async () => {
+      cli.queueResult({ exitCode: 0, data: { confirmation_required: true, confirmation_token: "ctk_n" } });
+      cli.queueResult({ exitCode: 0, data: {} });
+
+      await expect(mail.send({ to: ["a@example.com"], subject: "Hi", body: "Hello" })).rejects.toThrow(/neither queued/);
+    });
+
     it("trash also confirms in a second phase instead of stopping after phase 1", async () => {
       cli.queueResult({ exitCode: 0, data: { confirmation_required: true, confirmation_token: "ctk_trash" } });
       cli.queueResult({ exitCode: 0, data: {} });

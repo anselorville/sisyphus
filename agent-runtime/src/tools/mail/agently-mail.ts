@@ -243,7 +243,10 @@ export interface MailDownloadRequest {
 }
 
 export interface MailSendResult {
-  readonly messageId: string;
+  /** The CLI's own id for the sent message, when it returns one (it currently does not). */
+  readonly messageId: string | undefined;
+  /** True when the CLI reported the message queued for delivery. */
+  readonly queued: boolean;
 }
 
 export interface MailDownloadResult {
@@ -354,12 +357,21 @@ function readConfirmationToken(call: AgentlyCliCall): string {
   return token;
 }
 
+/**
+ * A successful send is `data.queued: true` per the CLI's own output schema
+ * (`message +send --print-output-schema`); there is no message_id. Treating a
+ * missing id as failure reported "failed" for mail that had in fact been sent,
+ * and a retry of that "failure" sends it twice. So success is: the call came
+ * back OK and says queued, or hands back an id. Anything else is an error.
+ */
 function mapSendResult(call: AgentlyCliCall): MailSendResult {
   const messageId = call.data?.["message_id"];
-  if (typeof messageId !== "string" || messageId === "") {
-    throw new Error("agently-cli did not return a message_id");
+  const hasId = typeof messageId === "string" && messageId !== "";
+  const queued = call.data?.["queued"] === true;
+  if (!hasId && !queued) {
+    throw new Error("agently-cli neither queued the message nor returned a message_id");
   }
-  return { messageId };
+  return { messageId: hasId ? messageId : undefined, queued: queued || hasId };
 }
 
 function asRawMailMessage(value: unknown): RawMailMessage {
