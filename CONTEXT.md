@@ -14,7 +14,7 @@
 
 **pi-agent**：`@earendil-works/pi-coding-agent` 的 SDK 入口（`createAgentSession`）。当前版本 0.82.0，Node 兼容。层级：`pi-ai`（LLM 访问层）→ `pi-agent-core`（agent 循环：工具调用+状态管理）→ `pi-coding-agent`（组合产品：CLI + SDK）。
 
-**模型选择**：所有角色统一使用 deepseek-flash（不分 fast/balanced/deep tier）。通过 `AGENT_RUNTIME_MODEL_FAST`、`AGENT_RUNTIME_MODEL_BALANCED`、`AGENT_RUNTIME_MODEL_DEEP` 三个环境变量均设为 `deepseek:deepseek-flash` 实现。
+**模型选择**：所有角色统一使用 deepseek-flash（不分 fast/balanced/deep tier）。三个档位的代码默认值就是 `deepseek:deepseek-flash`，无需任何配置；要改某一档，设 `AGENT_RUNTIME_MODEL_FAST` / `AGENT_RUNTIME_MODEL_BALANCED` / `AGENT_RUNTIME_MODEL_DEEP`。
 
 **oh-my-pi / omp**：Pi 的完整 fork（`can1357/oh-my-pi`，22.8k star，MIT）。有自己的 npm scope `@oh-my-pi/*`、CLI `omp`、版本线 17.x。Bun-only 运行时（≥1.3.14）。添加了 LSP、DAP、浏览器自动化、子 agent、记忆、插件市场等 harness 功能。**不是插件，是 fork**。SDK 面变了：`modelRuntime`/`resourceLoader` 被移除，换成 `authStorage`/`ModelRegistry`/`Settings`。
 

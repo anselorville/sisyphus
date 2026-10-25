@@ -41,13 +41,11 @@ export interface AgentRuntimeConfig {
    * Which concrete provider/model each RoleManifest.modelClass tier routes
    * to (see ./roles/model-routing.ts). Overridable per tier via
    * AGENT_RUNTIME_MODEL_FAST/BALANCED/DEEP ("<provider>:<modelId>", e.g.
-   * "anthropic:claude-opus-4-5"). Defaults route every tier to whichever
-   * DeepSeek model this environment already authenticates
-   * (DEEPSEEK_API_KEY) -- the cheaper deepseek-flash for "fast", the
-   * fuller deepseek-v4-pro for "balanced"/"deep" -- so roles differentiate
-   * by cost tier out of the box with zero extra config, and an operator
-   * with other providers configured can repoint any tier without a code
-   * change.
+   * "anthropic:claude-opus-4-5"). Every tier defaults to deepseek-flash --
+   * the product decision is one fast model for all roles (latency matters
+   * more than depth in a voice conversation; see CONTEXT.md) -- so it works
+   * out of the box with only DEEPSEEK_API_KEY, and an operator with other
+   * providers configured can repoint any tier without a code change.
    */
   readonly modelClassRouting: RoleModelClassRouting;
   /** Device this runtime is on; pheromone paths are keyed per device (../ecology/pheromone-map.ts). Default: the machine's hostname. */
@@ -109,7 +107,6 @@ function parseModelRef(name: string, fallback: RoleModelRef): RoleModelRef {
 const DEFAULT_DB_PATH = fileURLToPath(new URL("../data/agent-runtime.sqlite3", import.meta.url));
 
 const DEEPSEEK_FLASH: RoleModelRef = { provider: "deepseek", modelId: "deepseek-flash" };
-const DEEPSEEK_PRO: RoleModelRef = { provider: "deepseek", modelId: "deepseek-v4-pro" };
 
 export const config: AgentRuntimeConfig = Object.freeze({
   maxPayloadDepth: readPositiveInt("AGENT_RUNTIME_MAX_PAYLOAD_DEPTH", 12),
@@ -123,7 +120,7 @@ export const config: AgentRuntimeConfig = Object.freeze({
   networkId: readString("AGENT_RUNTIME_NETWORK_ID", "default"),
   modelClassRouting: Object.freeze({
     fast: parseModelRef("AGENT_RUNTIME_MODEL_FAST", DEEPSEEK_FLASH),
-    balanced: parseModelRef("AGENT_RUNTIME_MODEL_BALANCED", DEEPSEEK_PRO),
-    deep: parseModelRef("AGENT_RUNTIME_MODEL_DEEP", DEEPSEEK_PRO),
+    balanced: parseModelRef("AGENT_RUNTIME_MODEL_BALANCED", DEEPSEEK_FLASH),
+    deep: parseModelRef("AGENT_RUNTIME_MODEL_DEEP", DEEPSEEK_FLASH),
   }),
 });
