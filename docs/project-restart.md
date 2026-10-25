@@ -359,6 +359,19 @@ sqlite3 agent-runtime/data/agent-runtime.sqlite3 \
   网络 `AGENT_RUNTIME_NETWORK_ID`，默认 `default`）。
 - 所有面向用户的角色提示词、页面标题改为以 Marcus 自称。
 
+### 6.1b 2026-10-25（晚）：Jev 决策层
+
+固定模式的决策（谁处理这句话、“好”是不是在回答待确认问题、取消/纠正/追加）接入了 Jev，规则兜底。
+设计、阈值、评测与路线图见 [`docs/jev-decision-layer.md`](jev-decision-layer.md)：
+
+- 87 条标注话语上，规则 52% → 组合策略 99%；误把非“同意”当同意为 0；热连接延迟 p50 ≈ 325 ms。
+- 邮件确认现在要求**语义上的同意**（Jev ≥0.9 或严格规则），不再是“用户说过话就算”。
+- 这台机器到 `api.typesafe.ai` 的 TLS 握手要 5 秒，所以客户端预热 + 保活 + 硬预算 + 熔断。
+- `scripts/query-hci-events.sh --decisions` 看规则与 Jev 的一致率、回落原因、延迟、分歧。
+
+同日的两份调研：[Harness² 与图工程](research/harness2-and-graph-engineering.md)、
+[AI Passport 硬件](research/ai-passport.md)。
+
 ### 6.2 仍然开放的
 
 1. **真人麦克风/扬声器对话未人工验证（P0，只能由人做）。**
@@ -405,6 +418,8 @@ sqlite3 agent-runtime/data/agent-runtime.sqlite3 \
 | `agent-runtime/README.md` | 权威 sidecar 说明 | 模块与已知缺口 |
 | `docs/adr/0001-*.md` | 权威决策 | Phase A/B 路径与 oh-my-pi 取舍 |
 | `docs/lessons-learned.md` | 经验 | 调试教训（旧进程、构建新鲜度等） |
+| `docs/jev-decision-layer.md` | 权威设计 | Jev 决策层：做什么、阈值、评测、审计、路线图 |
+| `docs/research/*.md` | 调研 | Harness²/图工程；AI Passport 硬件与接入方案 |
 | `docs/hci-observations.md` | 运行日志 | HCI 观察记录模板/记录 |
 | `docs/llm-auth-verification.md` | 历史证据 | 2026-08-08 的 LLM 认证验证 |
 | `.proj-init/*` | 设计档案 | 蜂群架构与分阶段计划；不是当前运行状态 |

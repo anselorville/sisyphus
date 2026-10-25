@@ -23,6 +23,9 @@ import type { TrafficCommander } from "../voice/traffic-commander.js";
 import type { SpeechDirective, VoiceHerald } from "../voice/voice-herald.js";
 import type { InfoHub } from "../hub/info-hub.js";
 import { EventSequencer } from "../protocol/sequence.js";
+import { DecisionEngine } from "../decision/decision-engine.js";
+import { JevClient } from "../decision/jev-client.js";
+import { TurnDecider, type AnswerKind, type RoleMenuItem } from "../decision/turn-decision.js";
 import { LongTaskFillerScheduler } from "../voice/long-task-filler-scheduler.js";
 import { ToolAckGenerator } from "../voice/tool-ack-generator.js";
 
@@ -35,6 +38,8 @@ interface ActiveTaskInfo {
   readonly taskId: string;
   readonly roleId: string;
   readonly interactionId: string;
+  /** The request being worked on, so the decision layer can tell a correction from a new request. */
+  readonly goal: string;
   cancelled: boolean;
 }
 
@@ -58,14 +63,21 @@ export interface TaskExecutorOptions {
    */
   readonly eventLog?: (event: RealtimeEvent) => void;
   /**
-   * Lets a two-step action (mail send/reply/forward/trash) hear the user's
-   * answer: called with every final transcript, and asked which role is
-   * waiting for a yes so the answer is routed back to it.
+   * A two-step action (mail send/reply/forward/trash) waiting on the user's
+   * yes/no. While one is pending the decision layer is asked whether each
+   * utterance answers it, the verdict is recorded here, and an answer is
+   * routed back to the role that asked.
    */
   readonly confirmation?: {
-    noteUserUtterance(transcript: string): void;
-    pendingRoleId(): string | undefined;
+    pendingQuestion(): { readonly summary: string; readonly roleId: string } | undefined;
+    recordAnswer(kind: AnswerKind): void;
   };
+  /**
+   * Decides what each user turn means (see ../decision/turn-decision.ts).
+   * Default: the deterministic ReflexRouter alone, which is what tests and a
+   * deployment without a Jev key get.
+   */
+  readonly turnDecider?: TurnDecider;
   /** Assigns each emitted event's `sequence`. Default: this executor's own EventSequencer; production passes the process-wide one (see ../protocol/sequence.ts). */
   readonly nextSequence?: () => number;
   readonly ackGraceMs?: number;
@@ -86,6 +98,7 @@ export class TaskExecutor {
   private readonly hub: InfoHub | undefined;
   private readonly eventLog: ((event: RealtimeEvent) => void) | undefined;
   private readonly confirmation: TaskExecutorOptions["confirmation"];
+  private readonly turnDecider: TurnDecider;
   private readonly onTerminal: (() => void) | undefined;
   private readonly ackGraceMs: number;
   private readonly toolAckGenerator: ToolAckGenerator;
@@ -109,6 +122,7 @@ export class TaskExecutor {
     this.onTerminal = options.onTerminal;
     this.eventLog = options.eventLog;
     this.confirmation = options.confirmation;
+    this.turnDecider = options.turnDecider ?? new TurnDecider({ engine: new DecisionEngine({ client: new JevClient(), mode: "off" }), reflex: options.reflexRouter });
     const ownSequencer = new EventSequencer();
     this.nextSequence = options.nextSequence ?? ((): number => ownSequencer.next());
     this.ackGraceMs = options.ackGraceMs ?? DEFAULT_ACK_GRACE_MS;
@@ -137,10 +151,24 @@ export class TaskExecutor {
   /** Routes a final transcript, cancels/steers, or creates + runs a task. */
   async onVoiceTranscript(text: string, interactionId: string, sourceEventId?: string): Promise<string | undefined> {
     this.activeFillerScheduler?.stop();
-    this.confirmation?.noteUserUtterance(text);
+    const pending = this.confirmation?.pendingQuestion();
+    const outcome = await this.turnDecider.decide(
+      {
+        transcript: text,
+        active: this.activeTask
+          ? { taskId: this.activeTask.taskId, roleId: this.activeTask.roleId, goal: this.activeTask.goal }
+          : undefined,
+        roles: this.roleMenu(),
+        pending,
+      },
+      this.buildRouteState(this.activeTask),
+    );
+    if (pending && outcome.answer !== undefined) {
+      this.confirmation?.recordAnswer(outcome.answer);
+    }
+    const decision = outcome.route;
+    // The decision may have taken a moment; act on the task state as it is now.
     const active = this.activeTask;
-    const routeState = this.buildRouteState(active);
-    const decision = this.reflexRouter.route(text, routeState);
 
     if (decision.kind === "cancel" || decision.kind === "stop_speech") {
       await this.handleCancel(interactionId);
@@ -164,11 +192,7 @@ export class TaskExecutor {
       return;
     }
 
-    // A reply that matched no capability goes to the role that is waiting for
-    // the user's yes/no (e.g. "好，发吧" back to the mail role), not to a general
-    // worker that has never heard of the pending action.
-    const waitingRole = decision.kind === "general_worker" ? this.confirmation?.pendingRoleId() : undefined;
-    const roleId = waitingRole ?? decision.roleId ?? DEFAULT_GENERAL_ROLE_ID;
+    const roleId = decision.roleId ?? DEFAULT_GENERAL_ROLE_ID;
     console.log(`[task-executor] route=${decision.kind} role=${roleId} creating task...`);
     const task = await this.taskNest.create({
       goal: text,
@@ -187,6 +211,14 @@ export class TaskExecutor {
     return task.id;
   }
 
+  /** The specialists a spoken request can be sent to right now: registered roles that describe themselves. */
+  private roleMenu(): RoleMenuItem[] {
+    return this.roleRegistry
+      .list()
+      .filter((manifest) => manifest.routingHint !== undefined)
+      .map((manifest) => ({ roleId: manifest.id, hint: manifest.routingHint as string }));
+  }
+
   private buildRouteState(active: ActiveTaskInfo | undefined): RouteState {
     return {
       activeTask: active ? { taskId: active.taskId, roleId: active.roleId } : undefined,
@@ -198,7 +230,7 @@ export class TaskExecutor {
   }
 
   private startTask(taskId: string, roleId: string, interactionId: string, text: string): void {
-    const taskInfo: ActiveTaskInfo = { taskId, roleId, interactionId, cancelled: false };
+    const taskInfo: ActiveTaskInfo = { taskId, roleId, interactionId, goal: text, cancelled: false };
     this.activeTask = taskInfo;
     console.log(`[task-executor] START task ${taskId} role=${roleId} goal="${text.slice(0, 50)}"`);
 

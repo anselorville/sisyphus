@@ -53,6 +53,9 @@ import { RuntimeMetrics } from "./telemetry/runtime-metrics.js";
 import { DatabaseClient } from "./storage/database.js";
 import { EventRecorder } from "./storage/event-recorder.js";
 import { EventSequencer } from "./protocol/sequence.js";
+import { DecisionEngine, type DecisionRecord } from "./decision/decision-engine.js";
+import { JevClient } from "./decision/jev-client.js";
+import { TurnDecider } from "./decision/turn-decision.js";
 import { TaskNest, type TaskRecord } from "./tasks/task-nest.js";
 import { createInboundEventRouter } from "./tasks/inbound-event-router.js";
 import { createTaskAssimilationHook } from "./tasks/task-assimilation.js";
@@ -232,6 +235,29 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     const eventSequencer = new EventSequencer();
     const nextSequence = (): number => eventSequencer.next();
 
+    // Fixed-pattern decisions: rules first, Jev as a second opinion or the
+    // decider depending on AGENT_RUNTIME_JEV_MODE (see ./decision/). The
+    // client warms its connection in the background; until it is warm every
+    // decision is simply the rule's.
+    const jev = new JevClient({ apiKey: process.env["TYPESAFE_API_KEY"], model: runtimeConfig.jevModel });
+    const decisionEngine = new DecisionEngine({
+      client: jev,
+      mode: runtimeConfig.jevMode,
+      onRecord: (record: DecisionRecord): void => {
+        eventRecorder.record({
+          event_id: randomUUID(),
+          sequence: nextSequence(),
+          source: "system",
+          type: "decision.made",
+          timestamp: new Date().toISOString(),
+          payload: { ...record },
+        });
+      },
+    });
+    jev.start();
+    rollbacks.push(async () => jev.stop());
+    console.log(`[jev] mode=${jev.enabled ? runtimeConfig.jevMode : "off"} (${jev.enabled ? `model ${runtimeConfig.jevModel}` : "no TYPESAFE_API_KEY"})`);
+
     const server = new RuntimeWebSocketServer({
       port: runtimeConfig.port,
       onEventObserved: (event) => eventRecorder.record(event),
@@ -358,6 +384,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
       onTerminal: () => pokeScribe(),
       eventLog: (event) => eventRecorder.record(event),
       confirmation: mailConfirmation,
+      turnDecider: new TurnDecider({ engine: decisionEngine, reflex: reflexRouter }),
       nextSequence,
     });
 
@@ -453,6 +480,7 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
       // before anything below starts tearing down.
       acceptingInboundWork = false;
       metrics.stop();
+      jev.stop();
 
       // 2. Close the WebSocket server: no more inbound frames, no more
       // queued outbound delivery.

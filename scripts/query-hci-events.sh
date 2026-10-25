@@ -13,6 +13,7 @@
 #   scripts/query-hci-events.sh -c               # 输出原始 CSV（无排版）
 #   scripts/query-hci-events.sh --latency        # 只统计延迟指标
 #   scripts/query-hci-events.sh --summary        # 只输出 HCI 指标汇总
+#   scripts/query-hci-events.sh --decisions      # Jev 决策层：规则 vs Jev 的一致率、回落原因、延迟
 #
 # 数据库路径: 默认 <repo>/agent-runtime/data/agent-runtime.sqlite3
 #            可用环境变量 AGENT_RUNTIME_DB_PATH 覆盖。
@@ -36,7 +37,7 @@ N=20
 INTERACTION_ID=""
 TASK_ID=""
 OUTPUT_MODE="table"   # table | csv
-MODE="events"         # events | latency | summary
+MODE="events"         # events | latency | summary | decisions
 
 usage() {
   sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
@@ -51,6 +52,7 @@ while [[ $# -gt 0 ]]; do
     -c|--csv)         OUTPUT_MODE="csv"; shift ;;
     --latency)        MODE="latency"; shift ;;
     --summary)        MODE="summary"; shift ;;
+    --decisions)      MODE="decisions"; shift ;;
     -h|--help)        usage ;;
     *) echo "未知参数: $1" >&2; usage ;;
   esac
@@ -138,6 +140,57 @@ if [[ "$MODE" == "latency" ]]; then
   echo "-- 补充 --"
   echo "端到端听感延迟还要加上 TTS 首包与播放，来自日志: grep voice_latency /tmp/sisyphus-backend.log"
   echo "关注: user_to_bot_seconds（说话结束→首次 bot 语音）、first_bot_speech_seconds。"
+  exit 0
+fi
+
+# --- 模式: decisions（Jev 决策层审计） ---
+# 每个固定模式决策（谁来处理这句话、"好"是不是在回答待确认问题……）都会写一条
+# decision.made 事件：规则的答案(baseline)、Jev 的答案(jev)、实际采用的(chosen)与来源
+# (source: jev / rule / rule_fallback)、Jev 的把握、延迟、回落原因。shadow 模式下用它
+# 校准阈值：一致率高且分歧处 Jev 更合理，才值得切到 live。
+if [[ "$MODE" == "decisions" ]]; then
+  echo "=== 决策层概览（全部 decision.made 事件）==="
+  sqlite3 -header -column "$DB_PATH" "
+    SELECT json_extract(payload,'$.decision') AS decision,
+           json_extract(payload,'$.version') AS ver,
+           json_extract(payload,'$.mode') AS mode,
+           COUNT(*) AS n,
+           SUM(json_extract(payload,'$.source')='jev') AS by_jev,
+           SUM(json_extract(payload,'$.source')='rule') AS by_rule,
+           SUM(json_extract(payload,'$.source')='rule_fallback') AS fallback,
+           printf('%.0f%%', 100.0*SUM(json_extract(payload,'$.agreed')=1)/NULLIF(SUM(json_extract(payload,'$.agreed') IS NOT NULL),0)) AS agree
+    FROM events WHERE type='decision.made'
+    GROUP BY 1,2,3 ORDER BY n DESC;
+  "
+  echo
+  echo "=== 回落到规则的原因 ==="
+  sqlite3 -header -column "$DB_PATH" "
+    SELECT json_extract(payload,'$.fallbackReason') AS reason, COUNT(*) AS n
+    FROM events WHERE type='decision.made' AND json_extract(payload,'$.fallbackReason') IS NOT NULL
+    GROUP BY 1 ORDER BY n DESC;
+  "
+  echo
+  echo "=== Jev 延迟（ms，仅实际调用成功的）==="
+  sqlite3 -header -column "$DB_PATH" "
+    WITH l AS (SELECT CAST(json_extract(payload,'$.latencyMs') AS INTEGER) AS ms
+               FROM events WHERE type='decision.made' AND json_extract(payload,'$.jev') IS NOT NULL ORDER BY ms)
+    SELECT COUNT(*) AS n,
+           (SELECT ms FROM l LIMIT 1 OFFSET (SELECT COUNT(*)/2 FROM l)) AS p50,
+           (SELECT ms FROM l LIMIT 1 OFFSET (SELECT CAST(COUNT(*)*0.95 AS INTEGER) FROM l)) AS p95,
+           MAX(ms) AS max FROM l;
+  "
+  echo
+  echo "=== 最近的分歧（规则 vs Jev）==="
+  sqlite3 -header -column "$DB_PATH" "
+    SELECT strftime('%m-%d %H:%M:%S', received_at) AS time,
+           json_extract(payload,'$.decision') AS decision,
+           json_extract(payload,'$.baseline') AS rule,
+           json_extract(payload,'$.jev') AS jev,
+           printf('%.2f', json_extract(payload,'$.confidence')) AS conf,
+           json_extract(payload,'$.source') AS used
+    FROM events WHERE type='decision.made' AND json_extract(payload,'$.agreed')=0
+    ORDER BY rowid DESC LIMIT ${N};
+  "
   exit 0
 fi
 

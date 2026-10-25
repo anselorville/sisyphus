@@ -57,6 +57,8 @@
 ## 已知缺口（现状记录，非任务本身）
 
 ### `agent-runtime`（详见 `agent-runtime/README.md` 的"已知缺口"一节）
+- Jev 决策层的评测集是自己标注的 87 条，不是真实流量；需要用 shadow/live 日志里的分歧扩充标注并重新校准阈值（`docs/jev-decision-layer.md` 第 5 节）。
+- 路线图未做：回合结束判定、Scribe 话题漂移门、工具调用风险闸、独立验证边、推测性预热（见 `docs/jev-decision-layer.md` 第 6 节与 `docs/research/harness2-and-graph-engineering.md`）。
 - 没有真人用麦克风/扬声器跑过完整对话。合成语音冒烟测试（`scripts/voice-smoke.py`）
   证明了链路和打断，但语气节奏、嘈杂环境下的 VAD 误触发、真实口音识别率只能真人测。
   这是 Phase A 最优先的缺口。

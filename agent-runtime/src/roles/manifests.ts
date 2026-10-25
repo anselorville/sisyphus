@@ -42,6 +42,7 @@ export const GENERAL_ROLE_MANIFEST: RoleManifest = Object.freeze({
   modelClass: "balanced",
   thinkingLevel: "medium",
   lifecycle: "resident",
+  routingHint: "Everyday questions, explanations, advice, planning, brainstorming, chat and small talk -- anything that needs no special tool or live information.",
 });
 
 /**
@@ -73,6 +74,7 @@ export const WEB_ROLE_MANIFEST: RoleManifest = Object.freeze({
   modelClass: "balanced",
   thinkingLevel: "medium",
   lifecycle: "resident",
+  routingHint: "Needs current information from the internet: today's weather, news, prices, scores, facts that may have changed, or looking something up on a web page.",
 });
 
 /**
@@ -93,6 +95,7 @@ export const DEVICE_ROLE_MANIFEST: RoleManifest = Object.freeze({
   modelClass: "fast",
   thinkingLevel: "low",
   lifecycle: "resident",
+  routingHint: "The status or restart of Marcus's own services (backend, frontend, sidecar): is it running, is it healthy, restart it.",
 });
 
 /** Mail Worker: only its agently-cli-backed mail operations (../tools/mail/agently-mail.ts) -- deliberately no `bash` (or any other terminal/filesystem tool). */
@@ -115,6 +118,7 @@ export const MAIL_ROLE_MANIFEST: RoleManifest = Object.freeze({
   modelClass: "balanced",
   thinkingLevel: "medium",
   lifecycle: "resident",
+  routingHint: "The user's email: check or search the inbox, read or summarize messages, reply to, write, forward or send an email.",
 });
 
 /**

@@ -142,10 +142,14 @@ over it requires real hardware and has not been manually verified in this
 environment (no microphone/speaker available here).
 
 Higher-level voice commands (stop-speech, cancel, steer, follow-up,
-new-task) are classified by the agent-runtime sidecar's Reflex Router /
-Interruption Router (`agent-runtime/src/routing/`), not by the Python
-media plane -- see `agent-runtime/test/routing/interruption-router.test.ts`
-and `agent-runtime/test/routing/reflex-router.test.ts`.
+new-task) are classified by the agent-runtime sidecar, not by the Python
+media plane. Explicit commands ("取消", "闭嘴") are matched instantly by the
+Reflex Router / Interruption Router (`agent-runtime/src/routing/`). Everything
+else is a fixed-pattern decision -- which specialist handles a request,
+whether "好" answers a pending question -- made by Jev, TypeSafe's typed
+decision model, with the rule router as fallback
+(`agent-runtime/src/decision/`, see [`docs/jev-decision-layer.md`](docs/jev-decision-layer.md)).
+Set `TYPESAFE_API_KEY` to enable it; without a key the rules decide alone.
 
 ### Latency behavior and logs
 
@@ -290,6 +294,12 @@ Both run fully offline once their models are downloaded -- only the
 first-run model download needs network access.
 
 ## What's implemented
+
+- `agent-runtime/src/decision/` - the Jev decision layer: a keep-alive client
+  (connection warm-up, hard time budgets, circuit breaker), a decision engine
+  with `off` / `shadow` / `live` modes and an audit record per decision, and
+  the per-turn decision spec. `agent-runtime/eval/` holds a labelled set and
+  `scripts/eval-turn-decision.mjs` scores rules against Jev on it.
 
 - `app/config.py` - env var loading (via `python-dotenv`), engine selection
   (`ENGINE`, with `FORCE_OFFLINE`/`FORCE_ONLINE` backward compat --

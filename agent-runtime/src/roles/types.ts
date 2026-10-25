@@ -55,6 +55,15 @@ export interface RoleManifest {
   readonly modelClass: RoleModelClass;
   readonly thinkingLevel: RoleThinkingLevel;
   readonly lifecycle: RoleLifecycle;
+  /**
+   * What this role is for, in plain language. It is what the semantic router
+   * (src/decision/turn-decision.ts) reads when choosing who handles a spoken
+   * request, so write it as the situations a user would be in. A role without
+   * a hint is never offered to the router: internal roles (scribe, inspector,
+   * memory) and the code role -- which has a shell -- are not reachable by a
+   * spoken sentence.
+   */
+  readonly routingHint?: string;
 }
 
 /**

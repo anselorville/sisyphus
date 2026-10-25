@@ -1,0 +1,850 @@
+[
+ {
+  "text": "你好",
+  "expect": {
+   "type": "request",
+   "role": "general"
+  },
+  "id": 1
+ },
+ {
+  "text": "请用一句话介绍你自己",
+  "expect": {
+   "type": "request",
+   "role": "general"
+  },
+  "id": 2
+ },
+ {
+  "text": "讲个笑话",
+  "expect": {
+   "type": "request",
+   "role": "general"
+  },
+  "id": 3
+ },
+ {
+  "text": "帮我想想周末去哪里玩",
+  "expect": {
+   "type": "request",
+   "role": "general"
+  },
+  "id": 4
+ },
+ {
+  "text": "解释一下什么是量子纠缠",
+  "expect": {
+   "type": "request",
+   "role": "general"
+  },
+  "id": 5
+ },
+ {
+  "text": "1加1等于几",
+  "expect": {
+   "type": "request",
+   "role": "general"
+  },
+  "id": 6
+ },
+ {
+  "text": "你叫什么名字",
+  "expect": {
+   "type": "request",
+   "role": "general"
+  },
+  "id": 7
+ },
+ {
+  "text": "谢谢你",
+  "expect": {
+   "type": "request",
+   "role": "general"
+  },
+  "id": 8
+ },
+ {
+  "text": "what is the difference between TCP and UDP",
+  "expect": {
+   "type": "request",
+   "role": "general"
+  },
+  "id": 9
+ },
+ {
+  "text": "帮我写一段自我介绍",
+  "expect": {
+   "type": "request",
+   "role": "general"
+  },
+  "id": 10
+ },
+ {
+  "text": "推荐几本适合入门的编程书",
+  "expect": {
+   "type": "request",
+   "role": "general"
+  },
+  "id": 11
+ },
+ {
+  "text": "我今天有点累，陪我聊聊",
+  "expect": {
+   "type": "request",
+   "role": "general"
+  },
+  "id": 12
+ },
+ {
+  "text": "帮我查一下今天上海的天气",
+  "expect": {
+   "type": "request",
+   "role": "web"
+  },
+  "id": 13
+ },
+ {
+  "text": "北京明天会下雨吗",
+  "expect": {
+   "type": "request",
+   "role": "web"
+  },
+  "id": 14
+ },
+ {
+  "text": "现在黄金多少钱一克",
+  "expect": {
+   "type": "request",
+   "role": "web"
+  },
+  "id": 15
+ },
+ {
+  "text": "最近有什么科技新闻",
+  "expect": {
+   "type": "request",
+   "role": "web"
+  },
+  "id": 16
+ },
+ {
+  "text": "英伟达股价现在多少",
+  "expect": {
+   "type": "request",
+   "role": "web"
+  },
+  "id": 17
+ },
+ {
+  "text": "who won the game last night",
+  "expect": {
+   "type": "request",
+   "role": "web"
+  },
+  "id": 18
+ },
+ {
+  "text": "帮我搜一下最新的 iPhone 什么时候发布",
+  "expect": {
+   "type": "request",
+   "role": "web"
+  },
+  "id": 19
+ },
+ {
+  "text": "今天微博热搜是什么",
+  "expect": {
+   "type": "request",
+   "role": "web"
+  },
+  "id": 20
+ },
+ {
+  "text": "Python 最新的稳定版本是多少",
+  "expect": {
+   "type": "request",
+   "role": "web"
+  },
+  "id": 21
+ },
+ {
+  "text": "这个周末杭州冷不冷",
+  "expect": {
+   "type": "request",
+   "role": "web"
+  },
+  "id": 22
+ },
+ {
+  "text": "帮我看看最近收到了哪些邮件",
+  "expect": {
+   "type": "request",
+   "role": "mail"
+  },
+  "id": 23
+ },
+ {
+  "text": "有没有人给我回信",
+  "expect": {
+   "type": "request",
+   "role": "mail"
+  },
+  "id": 24
+ },
+ {
+  "text": "给张三发一封邮件说明天开会",
+  "expect": {
+   "type": "request",
+   "role": "mail"
+  },
+  "id": 25
+ },
+ {
+  "text": "我的收件箱里有未读的吗",
+  "expect": {
+   "type": "request",
+   "role": "mail"
+  },
+  "id": 26
+ },
+ {
+  "text": "把刚才那封邮件转发给李四",
+  "expect": {
+   "type": "request",
+   "role": "mail"
+  },
+  "id": 27
+ },
+ {
+  "text": "check my email",
+  "expect": {
+   "type": "request",
+   "role": "mail"
+  },
+  "id": 28
+ },
+ {
+  "text": "帮我回复一下老板的邮件说收到了",
+  "expect": {
+   "type": "request",
+   "role": "mail"
+  },
+  "id": 29
+ },
+ {
+  "text": "把那封广告邮件删掉",
+  "expect": {
+   "type": "request",
+   "role": "mail"
+  },
+  "id": 30
+ },
+ {
+  "text": "昨天谁给我发过合同",
+  "expect": {
+   "type": "request",
+   "role": "mail"
+  },
+  "id": 31
+ },
+ {
+  "text": "看看有没有快递通知",
+  "expect": {
+   "type": "request",
+   "role": "mail"
+  },
+  "id": 32
+ },
+ {
+  "text": "后端服务还在运行吗",
+  "expect": {
+   "type": "request",
+   "role": "device"
+  },
+  "id": 33
+ },
+ {
+  "text": "帮我重启一下后端",
+  "expect": {
+   "type": "request",
+   "role": "device"
+  },
+  "id": 34
+ },
+ {
+  "text": "你自己的服务状态怎么样",
+  "expect": {
+   "type": "request",
+   "role": "device"
+  },
+  "id": 35
+ },
+ {
+  "text": "前端是不是挂了",
+  "expect": {
+   "type": "request",
+   "role": "device"
+  },
+  "id": 36
+ },
+ {
+  "text": "is the backend running",
+  "expect": {
+   "type": "request",
+   "role": "device"
+  },
+  "id": 37
+ },
+ {
+  "text": "Marcus 你的服务都正常吗",
+  "expect": {
+   "type": "request",
+   "role": "device"
+  },
+  "id": 38
+ },
+ {
+  "text": "后端开发需要学哪些东西",
+  "expect": {
+   "type": "request",
+   "role": "general"
+  },
+  "note": "rule keyword 后端 -> device",
+  "id": 39
+ },
+ {
+  "text": "邮件营销有哪些技巧",
+  "expect": {
+   "type": "request",
+   "role": "general"
+  },
+  "note": "rule keyword 邮件 -> mail",
+  "id": 40
+ },
+ {
+  "text": "电脑重启之后 wifi 连不上怎么办",
+  "expect": {
+   "type": "request",
+   "role": "general"
+  },
+  "note": "rule keyword 重启 -> device",
+  "id": 41
+ },
+ {
+  "text": "天气好的时候适合做什么运动",
+  "expect": {
+   "type": "request",
+   "role": "general"
+  },
+  "note": "rule keyword 天气 -> web",
+  "id": 42
+ },
+ {
+  "text": "写一首关于下雨的诗",
+  "expect": {
+   "type": "request",
+   "role": "general"
+  },
+  "id": 43
+ },
+ {
+  "text": "email 这个单词怎么读",
+  "expect": {
+   "type": "request",
+   "role": "general"
+  },
+  "note": "rule keyword email -> mail",
+  "id": 44
+ },
+ {
+  "text": "邮箱的英文怎么说",
+  "expect": {
+   "type": "request",
+   "role": "general"
+  },
+  "note": "rule keyword 邮箱 -> mail",
+  "id": 45
+ },
+ {
+  "text": "明天会不会下雪，要不要带伞",
+  "expect": {
+   "type": "request",
+   "role": "web"
+  },
+  "note": "no rule keyword at all",
+  "id": 46
+ },
+ {
+  "text": "我想知道有没有人联系过我",
+  "expect": {
+   "type": "request",
+   "role": "mail"
+  },
+  "note": "no rule keyword at all",
+  "id": 47
+ },
+ {
+  "text": "你那边的服务是不是一切正常",
+  "expect": {
+   "type": "request",
+   "role": "device"
+  },
+  "note": "no rule keyword",
+  "id": 48
+ },
+ {
+  "text": "算了，不用查了",
+  "expect": {
+   "type": "cancel"
+  },
+  "active": {
+   "roleId": "web",
+   "goal": "查询上海今天的天气"
+  },
+  "id": 49
+ },
+ {
+  "text": "别查了，我不想知道了",
+  "expect": {
+   "type": "cancel"
+  },
+  "active": {
+   "roleId": "web",
+   "goal": "查询上海今天的天气"
+  },
+  "id": 50
+ },
+ {
+  "text": "forget it, never mind that",
+  "expect": {
+   "type": "cancel"
+  },
+  "active": {
+   "roleId": "web",
+   "goal": "查询上海今天的天气"
+  },
+  "id": 51
+ },
+ {
+  "text": "这个不要了",
+  "expect": {
+   "type": "cancel"
+  },
+  "active": {
+   "roleId": "web",
+   "goal": "查询上海今天的天气"
+  },
+  "id": 52
+ },
+ {
+  "text": "不对，我要的是北京的",
+  "expect": {
+   "type": "steer"
+  },
+  "active": {
+   "roleId": "web",
+   "goal": "查询上海今天的天气"
+  },
+  "id": 53
+ },
+ {
+  "text": "改成查明天的",
+  "expect": {
+   "type": "steer"
+  },
+  "active": {
+   "roleId": "web",
+   "goal": "查询上海今天的天气"
+  },
+  "id": 54
+ },
+ {
+  "text": "不是上海，是杭州",
+  "expect": {
+   "type": "steer"
+  },
+  "active": {
+   "roleId": "web",
+   "goal": "查询上海今天的天气"
+  },
+  "id": 55
+ },
+ {
+  "text": "等等，我说的是周末",
+  "expect": {
+   "type": "steer"
+  },
+  "active": {
+   "roleId": "web",
+   "goal": "查询上海今天的天气"
+  },
+  "id": 56
+ },
+ {
+  "text": "查完之后再帮我查一下空气质量",
+  "expect": {
+   "type": "follow_up"
+  },
+  "active": {
+   "roleId": "web",
+   "goal": "查询上海今天的天气"
+  },
+  "id": 57
+ },
+ {
+  "text": "做完这个顺便告诉我穿什么衣服",
+  "expect": {
+   "type": "follow_up"
+  },
+  "active": {
+   "roleId": "web",
+   "goal": "查询上海今天的天气"
+  },
+  "id": 58
+ },
+ {
+  "text": "等这个出来以后，再对比一下上周",
+  "expect": {
+   "type": "follow_up"
+  },
+  "active": {
+   "roleId": "web",
+   "goal": "查询上海今天的天气"
+  },
+  "id": 59
+ },
+ {
+  "text": "安静一下",
+  "expect": {
+   "type": "stop_speech"
+  },
+  "active": {
+   "roleId": "web",
+   "goal": "查询上海今天的天气"
+  },
+  "id": 60
+ },
+ {
+  "text": "先别说话",
+  "expect": {
+   "type": "stop_speech"
+  },
+  "active": {
+   "roleId": "web",
+   "goal": "查询上海今天的天气"
+  },
+  "id": 61
+ },
+ {
+  "text": "stop talking for a second",
+  "expect": {
+   "type": "stop_speech"
+  },
+  "active": {
+   "roleId": "web",
+   "goal": "查询上海今天的天气"
+  },
+  "id": 62
+ },
+ {
+  "text": "对了，帮我看看有没有新邮件",
+  "expect": {
+   "type": "request",
+   "role": "mail"
+  },
+  "active": {
+   "roleId": "web",
+   "goal": "查询上海今天的天气"
+  },
+  "note": "unrelated to the running task",
+  "id": 63
+ },
+ {
+  "text": "讲个笑话",
+  "expect": {
+   "type": "request",
+   "role": "general"
+  },
+  "active": {
+   "roleId": "web",
+   "goal": "查询上海今天的天气"
+  },
+  "id": 64
+ },
+ {
+  "text": "好，发吧",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "confirm"
+  },
+  "id": 65
+ },
+ {
+  "text": "可以",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "confirm"
+  },
+  "id": 66
+ },
+ {
+  "text": "嗯，发出去吧",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "confirm"
+  },
+  "id": 67
+ },
+ {
+  "text": "确认发送",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "confirm"
+  },
+  "id": 68
+ },
+ {
+  "text": "yes, send it",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "confirm"
+  },
+  "id": 69
+ },
+ {
+  "text": "没问题，发",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "confirm"
+  },
+  "id": 70
+ },
+ {
+  "text": "行",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "confirm"
+  },
+  "id": 71
+ },
+ {
+  "text": "对，就这样发",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "confirm"
+  },
+  "id": 72
+ },
+ {
+  "text": "算了不发了",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "decline"
+  },
+  "id": 73
+ },
+ {
+  "text": "不要发",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "decline"
+  },
+  "id": 74
+ },
+ {
+  "text": "先别发",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "decline"
+  },
+  "id": 75
+ },
+ {
+  "text": "等一下，我改一下内容",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "decline"
+  },
+  "id": 76
+ },
+ {
+  "text": "no, don't send",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "decline"
+  },
+  "id": 77
+ },
+ {
+  "text": "不用了",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "decline"
+  },
+  "id": 78
+ },
+ {
+  "text": "今天天气怎么样",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "unrelated"
+  },
+  "id": 79
+ },
+ {
+  "text": "帮我查一下英伟达的股价",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "unrelated"
+  },
+  "id": 80
+ },
+ {
+  "text": "你叫什么名字",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "unrelated"
+  },
+  "id": 81
+ },
+ {
+  "text": "讲个笑话",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "unrelated"
+  },
+  "id": 82
+ },
+ {
+  "text": "嗯……",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "not_confirm"
+  },
+  "id": 83
+ },
+ {
+  "text": "让我想想",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "not_confirm"
+  },
+  "id": 84
+ },
+ {
+  "text": "这封邮件是发给谁来着",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "not_confirm"
+  },
+  "id": 85
+ },
+ {
+  "text": "好像要下雨了",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "not_confirm"
+  },
+  "id": 86
+ },
+ {
+  "text": "好，不过把标题改成周报",
+  "pending": {
+   "summary": "send the email 'Hello' to a@example.com",
+   "roleId": "mail"
+  },
+  "expect": {
+   "type": "answer",
+   "answer": "not_confirm"
+  },
+  "id": 87
+ }
+]

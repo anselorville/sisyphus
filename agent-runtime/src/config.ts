@@ -10,6 +10,7 @@
 import { hostname } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { DECISION_MODES, type DecisionMode } from "./decision/decision-engine.js";
 import type { RoleModelClassRouting, RoleModelRef } from "./roles/types.js";
 
 export interface AgentRuntimeConfig {
@@ -52,6 +53,17 @@ export interface AgentRuntimeConfig {
   readonly deviceId: string;
   /** Network label for pheromone paths (e.g. "home-wifi", "office"), set via AGENT_RUNTIME_NETWORK_ID; the runtime cannot reliably detect it itself. Default "default". */
   readonly networkId: string;
+  /**
+   * How fixed-pattern decisions (who handles a spoken request, whether "好"
+   * answers a pending question) use Jev: `off` = rules only, `shadow` = rules
+   * decide while Jev is asked in the background and compared, `live` = Jev
+   * decides when reachable and confident, rules otherwise. Set via
+   * AGENT_RUNTIME_JEV_MODE. With no TYPESAFE_API_KEY it is always effectively
+   * `off`.
+   */
+  readonly jevMode: DecisionMode;
+  /** Jev model name or alias (JEV_MODEL); `jev-latest` follows TypeSafe's current release. */
+  readonly jevModel: string;
 }
 
 function readPositiveInt(name: string, fallback: number): number {
@@ -80,6 +92,17 @@ function readNonNegativeNumber(name: string, fallback: number): number {
   }
 
   return parsed;
+}
+
+function readDecisionMode(name: string, fallback: DecisionMode): DecisionMode {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (raw === undefined || raw === "") {
+    return fallback;
+  }
+  if ((DECISION_MODES as readonly string[]).includes(raw)) {
+    return raw as DecisionMode;
+  }
+  throw new RangeError(`environment variable ${name} must be one of ${DECISION_MODES.join(", ")}, got: ${raw}`);
 }
 
 function readString(name: string, fallback: string): string {
@@ -118,6 +141,8 @@ export const config: AgentRuntimeConfig = Object.freeze({
   apiBudgetVoiceReserveUsd: readNonNegativeNumber("AGENT_RUNTIME_API_BUDGET_VOICE_RESERVE_USD", 2),
   deviceId: readString("AGENT_RUNTIME_DEVICE_ID", hostname()),
   networkId: readString("AGENT_RUNTIME_NETWORK_ID", "default"),
+  jevMode: readDecisionMode("AGENT_RUNTIME_JEV_MODE", "live"),
+  jevModel: readString("JEV_MODEL", "jev-latest"),
   modelClassRouting: Object.freeze({
     fast: parseModelRef("AGENT_RUNTIME_MODEL_FAST", DEEPSEEK_FLASH),
     balanced: parseModelRef("AGENT_RUNTIME_MODEL_BALANCED", DEEPSEEK_FLASH),

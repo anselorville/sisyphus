@@ -8,7 +8,7 @@ describe("MailConfirmationGate", () => {
     gate.noteUserUtterance("给张三发邮件");
     const pending = gate.prepare("send:a", "send to a", "mail");
 
-    expect(gate.consume(pending.id, "send:a")).toEqual({ ok: false, reason: expect.stringContaining("has not answered") });
+    expect(gate.consume(pending.id, "send:a")).toEqual({ ok: false, reason: expect.stringContaining("has not said yes") });
   });
 
   it("confirms once the user has spoken since, and only once", () => {
@@ -19,6 +19,48 @@ describe("MailConfirmationGate", () => {
 
     expect(gate.consume(pending.id, "send:a")).toEqual({ ok: true });
     expect(gate.consume(pending.id, "send:a").ok).toBe(false);
+  });
+
+  it("does not treat just any later utterance as consent", () => {
+    const gate = new MailConfirmationGate();
+    const pending = gate.prepare("send:a", "send to a", "mail");
+
+    gate.noteUserUtterance("今天天气怎么样");
+    gate.noteUserUtterance("好像要下雨");
+    gate.noteUserUtterance("嗯……让我想想");
+
+    expect(gate.consume(pending.id, "send:a").ok).toBe(false);
+    expect(gate.pendingRoleId()).toBe("mail");
+  });
+
+  it("unlocks only on a recorded confirm; unrelated and unclear answers change nothing", () => {
+    const gate = new MailConfirmationGate();
+    const pending = gate.prepare("send:a", "send to a", "mail");
+
+    gate.recordAnswer("unrelated");
+    gate.recordAnswer("unclear");
+    expect(gate.consume(pending.id, "send:a").ok).toBe(false);
+
+    gate.recordAnswer("confirm");
+    expect(gate.consume(pending.id, "send:a").ok).toBe(true);
+  });
+
+  it("a confirm recorded BEFORE the action was prepared does not count", () => {
+    const gate = new MailConfirmationGate();
+    gate.recordAnswer("confirm");
+    const pending = gate.prepare("send:a", "send to a", "mail");
+
+    expect(gate.consume(pending.id, "send:a").ok).toBe(false);
+  });
+
+  it("exposes the pending question for the decision layer, and drops it on a decline", () => {
+    const gate = new MailConfirmationGate();
+    expect(gate.pendingQuestion()).toBeUndefined();
+    gate.prepare("send:a", "send 'hi' to a@b.com", "mail");
+
+    expect(gate.pendingQuestion()).toEqual({ summary: "send 'hi' to a@b.com", roleId: "mail" });
+    gate.recordAnswer("decline");
+    expect(gate.pendingQuestion()).toBeUndefined();
   });
 
   it("treats different arguments as a different action", () => {
