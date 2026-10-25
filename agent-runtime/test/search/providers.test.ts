@@ -198,6 +198,13 @@ describe("GLM MCP search provider", () => {
     await expect(new GlmMcpSearchProvider(http).search(REQUEST, 1000)).rejects.toMatchObject({ kind: "quota" });
   });
 
+  it("classifies the weekly/monthly plan cap as quota even though it arrives as a 429", async () => {
+    const text = 'MCP error -429: {"error":{"code":"1310","message":"您已达到每周/每月使用上限，您的限额将在 2026-11-18 16:46:41 重置。"}}';
+    const http = scripted(() => ({ isError: true, content: [{ type: "text", text }] }));
+
+    await expect(new GlmMcpSearchProvider(http).search(REQUEST, 1000)).rejects.toMatchObject({ kind: "quota" });
+  });
+
   it("limits results to the requested count", async () => {
     const items = Array.from({ length: 10 }, (_, i) => ({ title: `t${i}`, link: `https://x.example/${i}`, content: "c" }));
     const http = scripted(() => ({ content: [{ type: "text", text: toolText(items) }] }));

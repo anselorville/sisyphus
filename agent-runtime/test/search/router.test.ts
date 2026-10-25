@@ -197,6 +197,27 @@ describe("SearchRouter: fan-out", () => {
     expect(trace.contributors.sort()).toEqual(["deepseek", "tavily"]);
   });
 
+  it("lets DeepSeek's first choice stand against a single weaker provider's different first choice", async () => {
+    const deepseek = new FakeProvider("deepseek", { hits: ["https://d-first.example", "https://d-second.example"] });
+    const tavily = new FakeProvider("tavily", { hits: ["https://t-first.example", "https://t-second.example"] });
+    const { router: r } = router([deepseek, tavily, new FakeProvider("brave")]);
+
+    const { hits } = await r.search(HARD, { count: 2 });
+
+    expect(hits.map((h) => h.url)).toEqual(["https://d-first.example", "https://d-second.example"]);
+  });
+
+  it("uses equal trust when the caller supplies no weight for a provider", async () => {
+    const a = new FakeProvider("deepseek", { hits: ["https://a-first.example"] });
+    const b = new FakeProvider("tavily", { hits: ["https://t-first.example"] });
+    const { router: r } = router([a, b, new FakeProvider("brave")], { weights: { deepseek: 1, tavily: 1 } });
+
+    const { hits } = await r.search(HARD, { count: 2 });
+
+    expect(hits).toHaveLength(2);
+    expect(hits[0]!.fusedScore).toBeCloseTo(hits[1]!.fusedScore, 10);
+  });
+
   it("does not wait for a slow second source beyond the grace window", async () => {
     const fast = new FakeProvider("deepseek");
     const slow = new FakeProvider("tavily", { delayMs: 400 });

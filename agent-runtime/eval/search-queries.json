@@ -1,0 +1,492 @@
+[
+ {
+  "id": 1,
+  "category": "zh_realtime",
+  "query": "今天上海天气怎么样"
+ },
+ {
+  "id": 2,
+  "category": "zh_realtime",
+  "query": "北京明天会下雨吗"
+ },
+ {
+  "id": 3,
+  "category": "zh_realtime",
+  "query": "现在黄金价格多少一克"
+ },
+ {
+  "id": 4,
+  "category": "zh_realtime",
+  "query": "今天人民币兑美元汇率"
+ },
+ {
+  "id": 5,
+  "category": "zh_realtime",
+  "query": "昨晚NBA比赛结果"
+ },
+ {
+  "id": 6,
+  "category": "zh_realtime",
+  "query": "今天沪深300收盘多少点"
+ },
+ {
+  "id": 7,
+  "category": "zh_realtime",
+  "query": "现在北京空气质量pm2.5"
+ },
+ {
+  "id": 8,
+  "category": "zh_realtime",
+  "query": "今天国际油价多少"
+ },
+ {
+  "id": 9,
+  "category": "zh_realtime",
+  "query": "比特币现在价格"
+ },
+ {
+  "id": 10,
+  "category": "zh_realtime",
+  "query": "苹果公司股价今天多少"
+ },
+ {
+  "id": 11,
+  "category": "zh_realtime",
+  "query": "今天杭州限行尾号"
+ },
+ {
+  "id": 12,
+  "category": "zh_realtime",
+  "query": "今天广州天气和空气质量"
+ },
+ {
+  "id": 13,
+  "category": "zh_realtime",
+  "query": "今天A股大盘怎么样"
+ },
+ {
+  "id": 14,
+  "category": "zh_realtime",
+  "query": "现在纳斯达克指数多少"
+ },
+ {
+  "id": 15,
+  "category": "en_tech_doc",
+  "query": "Node.js 22 LTS release date"
+ },
+ {
+  "id": 16,
+  "category": "en_tech_doc",
+  "query": "Python 3.14 what's new"
+ },
+ {
+  "id": 17,
+  "category": "en_tech_doc",
+  "query": "React 19 useActionState docs"
+ },
+ {
+  "id": 18,
+  "category": "en_tech_doc",
+  "query": "PostgreSQL 17 release notes"
+ },
+ {
+  "id": 19,
+  "category": "en_tech_doc",
+  "query": "Kubernetes 1.34 release date"
+ },
+ {
+  "id": 20,
+  "category": "en_tech_doc",
+  "query": "TypeScript 5.9 new features"
+ },
+ {
+  "id": 21,
+  "category": "en_tech_doc",
+  "query": "Docker Compose watch mode"
+ },
+ {
+  "id": 22,
+  "category": "en_tech_doc",
+  "query": "FastAPI websocket authentication example"
+ },
+ {
+  "id": 23,
+  "category": "en_tech_doc",
+  "query": "Redis 8 vector sets"
+ },
+ {
+  "id": 24,
+  "category": "en_tech_doc",
+  "query": "pnpm workspace catalog"
+ },
+ {
+  "id": 25,
+  "category": "en_tech_doc",
+  "query": "Vite 7 migration guide"
+ },
+ {
+  "id": 26,
+  "category": "en_tech_doc",
+  "query": "SQLite WAL mode checkpoint"
+ },
+ {
+  "id": 27,
+  "category": "en_tech_doc",
+  "query": "Pipecat SmallWebRTC transport documentation"
+ },
+ {
+  "id": 28,
+  "category": "en_tech_doc",
+  "query": "Rust async fn in traits stabilization"
+ },
+ {
+  "id": 29,
+  "category": "zh_tech",
+  "query": "Linux 怎么查看端口被谁占用"
+ },
+ {
+  "id": 30,
+  "category": "zh_tech",
+  "query": "Python asyncio 和 threading 的区别"
+ },
+ {
+  "id": 31,
+  "category": "zh_tech",
+  "query": "Docker 容器无法联网怎么排查"
+ },
+ {
+  "id": 32,
+  "category": "zh_tech",
+  "query": "Git rebase 和 merge 的区别"
+ },
+ {
+  "id": 33,
+  "category": "zh_tech",
+  "query": "MySQL 索引失效的常见原因"
+ },
+ {
+  "id": 34,
+  "category": "zh_tech",
+  "query": "Nginx 反向代理 WebSocket 配置"
+ },
+ {
+  "id": 35,
+  "category": "zh_tech",
+  "query": "Redis 缓存穿透怎么解决"
+ },
+ {
+  "id": 36,
+  "category": "zh_tech",
+  "query": "React useEffect 依赖数组导致无限循环"
+ },
+ {
+  "id": 37,
+  "category": "zh_tech",
+  "query": "Kubernetes Pod 一直 Pending 的原因"
+ },
+ {
+  "id": 38,
+  "category": "zh_tech",
+  "query": "FFmpeg 把视频转成 gif"
+ },
+ {
+  "id": 39,
+  "category": "zh_tech",
+  "query": "macOS 怎么关闭 SIP"
+ },
+ {
+  "id": 40,
+  "category": "zh_tech",
+  "query": "TLS 握手为什么慢"
+ },
+ {
+  "id": 41,
+  "category": "zh_tech",
+  "query": "CUDA out of memory 怎么解决"
+ },
+ {
+  "id": 42,
+  "category": "zh_tech",
+  "query": "Rust 所有权和借用入门"
+ },
+ {
+  "id": 43,
+  "category": "news_recent",
+  "query": "最近有什么科技新闻"
+ },
+ {
+  "id": 44,
+  "category": "news_recent",
+  "query": "这周 AI 领域有哪些重大发布"
+ },
+ {
+  "id": 45,
+  "category": "news_recent",
+  "query": "近期新能源汽车销量排行"
+ },
+ {
+  "id": 46,
+  "category": "news_recent",
+  "query": "OpenAI 最新发布了什么"
+ },
+ {
+  "id": 47,
+  "category": "news_recent",
+  "query": "2026 年诺贝尔物理学奖得主"
+ },
+ {
+  "id": 48,
+  "category": "news_recent",
+  "query": "最近半导体行业新闻"
+ },
+ {
+  "id": 49,
+  "category": "news_recent",
+  "query": "谷歌最近发布了什么"
+ },
+ {
+  "id": 50,
+  "category": "news_recent",
+  "query": "最近国内 AI 监管新规"
+ },
+ {
+  "id": 51,
+  "category": "news_recent",
+  "query": "tech layoffs this week"
+ },
+ {
+  "id": 52,
+  "category": "news_recent",
+  "query": "latest Anthropic announcement"
+ },
+ {
+  "id": 53,
+  "category": "news_recent",
+  "query": "英伟达最新财报 营收"
+ },
+ {
+  "id": 54,
+  "category": "news_recent",
+  "query": "特斯拉最新季度交付量"
+ },
+ {
+  "id": 55,
+  "category": "news_recent",
+  "query": "华为最新发布会"
+ },
+ {
+  "id": 56,
+  "category": "news_recent",
+  "query": "最近有什么重要的开源项目发布"
+ },
+ {
+  "id": 57,
+  "category": "factual_lookup",
+  "query": "珠穆朗玛峰海拔多少米"
+ },
+ {
+  "id": 58,
+  "category": "factual_lookup",
+  "query": "《三体》的作者是谁"
+ },
+ {
+  "id": 59,
+  "category": "factual_lookup",
+  "query": "2024 年巴黎奥运会是哪个国家举办的"
+ },
+ {
+  "id": 60,
+  "category": "factual_lookup",
+  "query": "太阳系有几颗行星"
+ },
+ {
+  "id": 61,
+  "category": "factual_lookup",
+  "query": "莫扎特出生于哪一年"
+ },
+ {
+  "id": 62,
+  "category": "factual_lookup",
+  "query": "世界上最深的海沟是哪个"
+ },
+ {
+  "id": 63,
+  "category": "factual_lookup",
+  "query": "谁发明了万维网"
+ },
+ {
+  "id": 64,
+  "category": "factual_lookup",
+  "query": "光在真空中的速度是多少"
+ },
+ {
+  "id": 65,
+  "category": "factual_lookup",
+  "query": "boiling point of ethanol"
+ },
+ {
+  "id": 66,
+  "category": "factual_lookup",
+  "query": "who wrote Pride and Prejudice"
+ },
+ {
+  "id": 67,
+  "category": "factual_lookup",
+  "query": "capital of Australia"
+ },
+ {
+  "id": 68,
+  "category": "factual_lookup",
+  "query": "how many bones in the adult human body"
+ },
+ {
+  "id": 69,
+  "category": "factual_lookup",
+  "query": "when did the Berlin Wall fall"
+ },
+ {
+  "id": 70,
+  "category": "factual_lookup",
+  "query": "长江全长多少公里"
+ },
+ {
+  "id": 71,
+  "category": "comparison_research",
+  "query": "PostgreSQL 和 MySQL 的区别与优缺点"
+ },
+ {
+  "id": 72,
+  "category": "comparison_research",
+  "query": "Kafka 和 RabbitMQ 怎么选"
+ },
+ {
+  "id": 73,
+  "category": "comparison_research",
+  "query": "固态电池的技术路线对比"
+ },
+ {
+  "id": 74,
+  "category": "comparison_research",
+  "query": "React 和 Vue 的优缺点比较"
+ },
+ {
+  "id": 75,
+  "category": "comparison_research",
+  "query": "Rust 和 Go 在后端开发中的取舍"
+ },
+ {
+  "id": 76,
+  "category": "comparison_research",
+  "query": "RAG 和微调的区别与适用场景"
+ },
+ {
+  "id": 77,
+  "category": "comparison_research",
+  "query": "混合检索 BM25 与向量检索怎么融合"
+ },
+ {
+  "id": 78,
+  "category": "comparison_research",
+  "query": "Mamba 与 Transformer 的对比"
+ },
+ {
+  "id": 79,
+  "category": "comparison_research",
+  "query": "WebRTC vs WebSocket for voice streaming"
+ },
+ {
+  "id": 80,
+  "category": "comparison_research",
+  "query": "monorepo vs polyrepo trade-offs"
+ },
+ {
+  "id": 81,
+  "category": "comparison_research",
+  "query": "microservices vs monolith when to choose"
+ },
+ {
+  "id": 82,
+  "category": "comparison_research",
+  "query": "how does Raft consensus handle leader election"
+ },
+ {
+  "id": 83,
+  "category": "comparison_research",
+  "query": "大模型量化 GPTQ 和 AWQ 的区别"
+ },
+ {
+  "id": 84,
+  "category": "comparison_research",
+  "query": "electric vs hybrid cars total cost of ownership"
+ },
+ {
+  "id": 85,
+  "category": "local_life_zh",
+  "query": "上海迪士尼门票多少钱"
+ },
+ {
+  "id": 86,
+  "category": "local_life_zh",
+  "query": "北京到上海高铁最快几个小时"
+ },
+ {
+  "id": 87,
+  "category": "local_life_zh",
+  "query": "感冒发烧吃什么药"
+ },
+ {
+  "id": 88,
+  "category": "local_life_zh",
+  "query": "北京故宫开放时间"
+ },
+ {
+  "id": 89,
+  "category": "local_life_zh",
+  "query": "护照换发怎么办理"
+ },
+ {
+  "id": 90,
+  "category": "local_life_zh",
+  "query": "个税专项附加扣除怎么申报"
+ },
+ {
+  "id": 91,
+  "category": "local_life_zh",
+  "query": "杭州西湖周边有什么好吃的"
+ },
+ {
+  "id": 92,
+  "category": "local_life_zh",
+  "query": "日本旅游签证需要什么材料"
+ },
+ {
+  "id": 93,
+  "category": "local_life_zh",
+  "query": "美国 B2 签证怎么申请"
+ },
+ {
+  "id": 94,
+  "category": "local_life_zh",
+  "query": "新手养猫要注意什么"
+ },
+ {
+  "id": 95,
+  "category": "local_life_zh",
+  "query": "厦门三天两夜行程推荐"
+ },
+ {
+  "id": 96,
+  "category": "local_life_zh",
+  "query": "微信支付限额怎么调整"
+ },
+ {
+  "id": 97,
+  "category": "local_life_zh",
+  "query": "广州地铁运营时间"
+ },
+ {
+  "id": 98,
+  "category": "local_life_zh",
+  "query": "成都火锅推荐"
+ }
+]

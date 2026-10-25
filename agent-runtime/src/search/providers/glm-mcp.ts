@@ -131,7 +131,8 @@ export class GlmMcpSearchProvider implements SearchProvider {
     // That says nothing about the provider's health, so it must not bench it.
     if (/-?400\b|contentFilter|敏感|违规/i.test(message) || code === 400) return new SearchError(this.id, "bad_request", message);
     if (/-?401|api key|unauthor/i.test(message) || code === 401) return new SearchError(this.id, "auth", message);
-    if (/1113|余额|资源包|quota|balance/i.test(message)) return new SearchError(this.id, "quota", message);
+    // 1310 = weekly/monthly plan cap, which only resets on a date days or weeks away; it also arrives as a 429.
+    if (/1113|1310|余额|资源包|使用上限|quota|balance/i.test(message)) return new SearchError(this.id, "quota", message);
     if (/429|rate|频率|限流/i.test(message)) return new SearchError(this.id, "rate_limit", message);
     return new SearchError(this.id, "server", message);
   }

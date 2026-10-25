@@ -20,7 +20,7 @@
  */
 
 import { SearchHealth, type ProviderHealthSnapshot } from "./health.js";
-import { fuse, type FusedHit, type RankedList } from "./fuse.js";
+import { DEFAULT_FUSION_WEIGHTS, fuse, type FusedHit, type RankedList } from "./fuse.js";
 import { planByRules, type SearchPlan, type SearchPlanInput } from "./planner.js";
 import { SearchError, type SearchHit, type SearchProvider, type SearchRequest } from "./types.js";
 
@@ -69,7 +69,7 @@ export interface SearchRouterOptions {
   /** After the first fan-out answer, how long to wait for the others. */
   readonly fanoutGraceMs?: number;
   readonly keepAliveIntervalMs?: number;
-  /** Trust in each provider's ordering when fusing; default 1. */
+  /** Trust in each provider's ordering when fusing; defaults to DEFAULT_FUSION_WEIGHTS, and 1 for a provider not listed. */
   readonly weights?: Readonly<Record<string, number>>;
   readonly onSearch?: (trace: SearchTrace) => void;
 }
@@ -154,7 +154,7 @@ export class SearchRouter {
     const absorb = (results: readonly AttemptResult[]): void => {
       for (const r of results) {
         attempts.push(r.attempt);
-        if (r.hits.length > 0) lists.push({ provider: r.provider, hits: r.hits, weight: this.options.weights?.[r.provider] });
+        if (r.hits.length > 0) lists.push({ provider: r.provider, hits: r.hits, weight: (this.options.weights ?? DEFAULT_FUSION_WEIGHTS)[r.provider] });
       }
     };
 

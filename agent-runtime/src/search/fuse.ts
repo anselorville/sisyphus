@@ -24,6 +24,16 @@ export interface FusedHit extends SearchHit {
 }
 
 const RRF_K = 60;
+
+/**
+ * Trust in each provider's own ordering, measured on 96 labelled queries (docs/web-search.md,
+ * "Fusion weights"): with equal weights the fused top five scored 0.02-0.07 nDCG@5 below
+ * DeepSeek alone, because DeepSeek's result ordering is far better than Tavily's or Brave's.
+ * These weights remove that penalty. Agreement still lifts a page, but no single weaker
+ * provider outvotes DeepSeek's first choice; two of them agreeing on another page can.
+ */
+export const DEFAULT_FUSION_WEIGHTS: Readonly<Record<string, number>> = { deepseek: 3, brave: 2, tavily: 1, glm: 0.5 };
+
 const TRACKING_PARAMS = /^(utm_|fbclid$|gclid$|spm$|from$|ref$|share)/i;
 
 /** Same page, different spelling: scheme, `www.`, fragment, trailing slash and tracking parameters are ignored. */
