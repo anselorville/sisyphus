@@ -14,6 +14,7 @@
   align-items: center;
   gap: var(--ds-space-2);
   min-width: 0;
+  overflow: hidden;
   color: var(--ds-color-text-primary);
 }
 
@@ -67,6 +68,45 @@
 .connectButton:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.settingsButton {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ds-color-text-secondary);
+  cursor: pointer;
+}
+
+.settingsButton:hover {
+  background: var(--ds-color-bg-hover, var(--ds-color-bg-app));
+  color: var(--ds-color-text-primary);
+}
+
+.settingsButton:focus-visible {
+  outline: 2px solid var(--ds-color-primary-strong);
+  outline-offset: 2px;
+}
+
+.ecologyChip {
+  flex: none;
+  display: flex;
+}
+
+/* Phone width: the strip can't fit everything on one line. The ecology chip
+   goes first -- EcologyPanel below shows the same band in full -- so the
+   connect and settings controls always stay on screen. */
+@media (max-width: 479px) {
+  .ecologyChip {
+    display: none;
+  }
 }
 
 .spin {

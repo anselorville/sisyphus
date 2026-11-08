@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Activity, Loader2, Mic, Moon, Volume2 } from "lucide-react";
+import { Activity, Loader2, Mic, Moon, Settings, Volume2 } from "lucide-react";
 import { Badge, type BadgeTone } from "../../primitives/Badge";
 import { ConnectionStatusBadge } from "../ConnectionStatusBadge";
 import type { ConnectionState } from "../../../hooks/useAgentConnection";
@@ -31,6 +31,8 @@ export interface AgentStatusStripProps {
   /** Toggles the WebRTC connection. Passed by the parent; hidden while connecting. */
   onConnect: () => void;
   onDisconnect: () => void;
+  /** Opens the Settings screen. The gear button is hidden when omitted. */
+  onOpenSettings?: () => void;
 }
 
 const ACTIVITY_ICON: Record<AgentActivityState, ReactNode> = {
@@ -79,6 +81,7 @@ export function AgentStatusStrip({
   ecologyBand,
   onConnect,
   onDisconnect,
+  onOpenSettings,
 }: AgentStatusStripProps) {
   const isConnected = connectionState === "connected";
   return (
@@ -99,7 +102,14 @@ export function AgentStatusStrip({
           {isConnected ? "Disconnect" : "Connect"}
         </button>
       )}
-      <Badge tone={ECOLOGY_TONE[ecologyBand]}>{ECOLOGY_LABEL[ecologyBand]}</Badge>
+      <span className={styles.ecologyChip}>
+        <Badge tone={ECOLOGY_TONE[ecologyBand]}>{ECOLOGY_LABEL[ecologyBand]}</Badge>
+      </span>
+      {onOpenSettings && (
+        <button type="button" className={styles.settingsButton} onClick={onOpenSettings} aria-label="Settings">
+          <Settings size={18} strokeWidth={2} />
+        </button>
+      )}
     </div>
   );
 }

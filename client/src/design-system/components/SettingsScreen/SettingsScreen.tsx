@@ -80,7 +80,7 @@ export function SettingsScreen({
           <section className={styles.section}>
             <h3 className={styles.sectionTitle}>Engine status</h3>
             <p className={styles.sectionHint}>
-              Shows which backend is currently translating. Cloud, offline (Pi-portable), and local
+              Shows which speech backend the server is running. Cloud, offline (Pi-portable), and local
               (Mac dev) modes are all supported -- this reflects whichever the server is running.
             </p>
             <EngineStatusChip mode={engineMode} />
@@ -131,8 +131,7 @@ export function SettingsScreen({
           <section className={styles.section}>
             <h3 className={styles.sectionTitle}>Model Tuning</h3>
             <p className={styles.sectionHint}>
-              Tune the ASR, LLM, and TTS models directly -- including the LLM's persona, since that's what decides
-              whether this product stays a translator or becomes something else entirely.
+              Tune the ASR, LLM, and TTS models directly, including the LLM's persona.
             </p>
             <Button variant="secondary" icon={<FlaskConical size={18} />} onClick={onOpenModelLab}>
               Open Model Lab

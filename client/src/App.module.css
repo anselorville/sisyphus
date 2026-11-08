@@ -3,3 +3,10 @@
   height: 100%;
   background: var(--ds-color-bg-app);
 }
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  background: var(--ds-color-bg-app);
+}

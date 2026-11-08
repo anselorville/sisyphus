@@ -7,6 +7,7 @@ const meta: Meta<typeof AgentStatusStrip> = {
   args: {
     connectionState: "connected",
     ecologyBand: "prosperous",
+    onOpenSettings: () => {},
   },
 };
 

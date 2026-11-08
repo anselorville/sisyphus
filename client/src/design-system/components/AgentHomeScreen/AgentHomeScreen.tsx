@@ -20,6 +20,7 @@ export interface AgentHomeScreenProps {
   // Connection toggle (status strip) -- independent of the mic.
   onConnect: () => void;
   onDisconnect: () => void;
+  onOpenSettings?: () => void;
 
   // Status strip
   activity: AgentActivityState;
@@ -59,6 +60,7 @@ export function AgentHomeScreen({
   micLevel,
   onConnect,
   onDisconnect,
+  onOpenSettings,
   micOpen,
   onToggleMic,
   activity,
@@ -81,6 +83,7 @@ export function AgentHomeScreen({
         ecologyBand={ecology}
         onConnect={onConnect}
         onDisconnect={onDisconnect}
+        onOpenSettings={onOpenSettings}
       />
 
       <main className={styles.content}>

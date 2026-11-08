@@ -1,13 +1,20 @@
 import { useEffect, useState } from "react";
 import { AgentHomeScreen } from "./design-system/components/AgentHomeScreen";
+import { ModelLabScreen } from "./design-system/components/ModelLabScreen";
+import { ModelProviderScreen } from "./design-system/components/ModelProviderScreen";
+import { SettingsScreen } from "./design-system/components/SettingsScreen";
 import type { AgentActivityState } from "./design-system/components/AgentStatusStrip";
 import type { ElevationRequest } from "./design-system/components/ElevationDialog";
 import type { TranscriptEntry } from "./design-system/components/TranscriptPanel";
 import { useAgentConnection } from "./hooks/useAgentConnection";
 import { useAgentTasks } from "./hooks/useAgentTasks";
 import { useEcologyStatus } from "./hooks/useEcologyStatus";
+import { useEngineMode } from "./hooks/useEngineMode";
 import { useMicLevel } from "./hooks/useMicLevel";
 import styles from "./App.module.css";
+
+/** Screens layered over the home screen; "home" means none is open. */
+type Screen = "home" | "settings" | "model-lab" | "model-provider";
 
 const ACTIVE_TASK_STATUSES = new Set(["assigned", "running", "blocked"]);
 let transcriptSeq = 0;
@@ -39,6 +46,8 @@ function App() {
   const ecologyApi = useEcologyStatus(conn.serverAddress);
   const [elevationRequest, setElevationRequest] = useState<ElevationRequest | null>(null);
   const [transcriptEntries, setTranscriptEntries] = useState<TranscriptEntry[]>([]);
+  const [screen, setScreen] = useState<Screen>("home");
+  const engineMode = useEngineMode(conn.serverAddress, screen === "settings");
 
   // Fans the connection's most recent realtime event out to the task and
   // ecology reducers, plus this component's own small elevation-request
@@ -94,6 +103,7 @@ function App() {
         micLevel={micLevel}
         onConnect={conn.connect}
         onDisconnect={conn.disconnect}
+        onOpenSettings={() => setScreen("settings")}
         micOpen={conn.micOpen}
         onToggleMic={() => conn.setMicOpen(!conn.micOpen)}
         activity={activity}
@@ -113,6 +123,31 @@ function App() {
           setElevationRequest(null);
         }}
       />
+
+      {/* Sub-screens cover the home screen instead of replacing it, so the
+          live session (connection, transcript, tasks) keeps running
+          underneath. The elevation dialog (z-index 100) stays above them. */}
+      {screen !== "home" && (
+        <div className={styles.overlay}>
+          {screen === "settings" && (
+            <SettingsScreen
+              serverAddress={conn.serverAddress}
+              onServerAddressChange={conn.setServerAddress}
+              connectionState={conn.connectionState}
+              engineMode={engineMode}
+              onClose={() => setScreen("home")}
+              onOpenModelLab={() => setScreen("model-lab")}
+              onOpenModelProvider={() => setScreen("model-provider")}
+            />
+          )}
+          {screen === "model-lab" && (
+            <ModelLabScreen serverAddress={conn.serverAddress} onClose={() => setScreen("settings")} />
+          )}
+          {screen === "model-provider" && (
+            <ModelProviderScreen serverAddress={conn.serverAddress} onClose={() => setScreen("settings")} />
+          )}
+        </div>
+      )}
     </div>
   );
 }
