@@ -10,13 +10,15 @@ export interface TranscriptEntry {
 
 export interface TranscriptPanelProps {
   entries: readonly TranscriptEntry[];
+  /** Interim text of the user's current turn; shown faded after the entries until the final arrives. */
+  pendingUserText?: string;
 }
 
 /**
  * Real-time subtitle stream: user STT transcripts (input) and agent speech
  * (output) appended as they happen, auto-scrolled to the newest entry.
  */
-export function TranscriptPanel({ entries }: TranscriptPanelProps) {
+export function TranscriptPanel({ entries, pendingUserText }: TranscriptPanelProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
@@ -24,7 +26,7 @@ export function TranscriptPanel({ entries }: TranscriptPanelProps) {
     if (autoScroll && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [entries, autoScroll]);
+  }, [entries, pendingUserText, autoScroll]);
 
   return (
     <section className={styles.panel} aria-label="实时字幕">
@@ -47,13 +49,19 @@ export function TranscriptPanel({ entries }: TranscriptPanelProps) {
           if (atBottom !== autoScroll) setAutoScroll(atBottom);
         }}
       >
-        {entries.length === 0 && <div className={styles.empty}>说话后，这里会显示双向字幕</div>}
+        {entries.length === 0 && !pendingUserText && <div className={styles.empty}>说话后，这里会显示双向字幕</div>}
         {entries.map((entry) => (
           <div key={entry.id} className={`${styles.entry} ${entry.speaker === "user" ? styles.user : styles.agent}`}>
             <span className={styles.speaker}>{entry.speaker === "user" ? "你" : "Agent"}</span>
             <span className={styles.text}>{entry.text}</span>
           </div>
         ))}
+        {pendingUserText && (
+          <div className={`${styles.entry} ${styles.user} ${styles.pending}`} aria-live="polite">
+            <span className={styles.speaker}>你</span>
+            <span className={styles.text}>{pendingUserText}</span>
+          </div>
+        )}
       </div>
     </section>
   );

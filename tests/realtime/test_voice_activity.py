@@ -45,13 +45,32 @@ def test_barge_in_publishes_cancel_before_user_started_only_while_bot_speaks() -
     assert [e.type for e in quiet] == ["voice.user.started"]
 
     interrupting = _run([BotStartedSpeakingFrame(), UserStartedSpeakingFrame()])
-    assert [e.type for e in interrupting] == ["voice.speech.cancel", "voice.user.started"]
-    assert interrupting[0].payload == {"reason": "barge_in"}
+    assert [e.type for e in interrupting] == ["voice.agent.started", "voice.speech.cancel", "voice.user.started"]
+    assert interrupting[1].payload == {"reason": "barge_in"}
 
     after_bot_done = _run(
         [BotStartedSpeakingFrame(), BotStoppedSpeakingFrame(), UserStartedSpeakingFrame()]
     )
-    assert [e.type for e in after_bot_done] == ["voice.user.started"]
+    assert [e.type for e in after_bot_done] == ["voice.agent.started", "voice.agent.stopped", "voice.user.started"]
+
+
+def test_agent_speech_boundaries_are_published_once_per_change() -> None:
+    # Bot-speaking frames can reach the processor from both directions; a
+    # repeated frame must not produce a second event.
+    events = _run(
+        [
+            BotStartedSpeakingFrame(),
+            BotStartedSpeakingFrame(),
+            BotStoppedSpeakingFrame(),
+            BotStoppedSpeakingFrame(),
+        ]
+    )
+
+    assert [e.type for e in events] == ["voice.agent.started", "voice.agent.stopped"]
+
+
+def test_a_stop_without_a_start_publishes_nothing() -> None:
+    assert _run([BotStoppedSpeakingFrame()]) == []
 
 
 def test_partial_transcripts_are_published_once_per_change() -> None:

@@ -39,6 +39,7 @@ from pipecat.frames.frames import (
     InterruptionFrame,
     StartFrame,
     TTSAudioRawFrame,
+    TTSStoppedFrame,
     UserStartedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
@@ -71,6 +72,9 @@ class PreSynthQueueProcessor(FrameProcessor):
         self._pending: dict[int, list[TTSAudioRawFrame]] = {}
         self._chunk_condition = asyncio.Condition()
         self._closed = False
+        # Requests a worker has taken but not finished synthesizing: more
+        # audio is on its way while this is non-zero.
+        self._in_flight = 0
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -93,6 +97,7 @@ class PreSynthQueueProcessor(FrameProcessor):
                 self._playback_task = None
             self._pending.clear()
             self._next_seq = 0
+            self._in_flight = 0
             await self._queue.cancel_current("barge_in")
             # Dropping our own unplayed audio is not enough: chunks already
             # handed downstream sit in the transport's output buffer and would
@@ -133,6 +138,7 @@ class PreSynthQueueProcessor(FrameProcessor):
                     return
                 seq = self._next_seq
                 self._next_seq += 1
+                self._in_flight += 1
                 try:
                     chunks: list[TTSAudioRawFrame] = []
                     async for frame in tts.run_tts(request.text, str(seq)):
@@ -148,6 +154,8 @@ class PreSynthQueueProcessor(FrameProcessor):
                     async with self._chunk_condition:
                         self._pending[seq] = []
                         self._chunk_condition.notify_all()
+                finally:
+                    self._in_flight = max(0, self._in_flight - 1)
         finally:
             await tts.stop(None)
 
@@ -164,5 +172,13 @@ class PreSynthQueueProcessor(FrameProcessor):
                 next_to_play += 1
                 for chunk in chunks:
                     await self.push_frame(chunk)
+                # Nothing else is ready or being synthesized: this was the
+                # last sentence of the reply. The output transport ends the
+                # bot's speaking turn on TTSStoppedFrame right after the
+                # audio before it has played; without it, it only notices
+                # after a 3 s silence fallback, which keeps the client
+                # showing "speaking" long after the agent went quiet.
+                if chunks and next_to_play not in self._pending and self._in_flight == 0:
+                    await self.push_frame(TTSStoppedFrame())
         except asyncio.CancelledError:
             return

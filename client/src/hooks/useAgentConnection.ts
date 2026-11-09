@@ -78,12 +78,14 @@ export interface AgentServerStatus {
  *   carries into voice-herald.ts's buildElevationRequestText() template --
  *   "准备执行{action}，可能影响{impact}，是否允许？")
  *
- * Speech (best-effort "is the agent currently speaking" signal -- the
- * sidecar's RealtimeEventType vocabulary has no explicit "playback finished"
- * marker, only enqueue/cancel, so this is necessarily approximate; see
- * isSpeaking below):
- *   {"type":"voice.speech.enqueue", "timestamp":iso}
- *   {"type":"voice.speech.cancel",  "timestamp":iso}
+ * Turn-taking (published by the media plane itself, see
+ * app/realtime/browser_wire.py; consumed by useVoiceSession.ts):
+ *   {"type":"voice.user.started",       "timestamp":iso}
+ *   {"type":"voice.user.stopped",       "timestamp":iso}
+ *   {"type":"voice.transcript.partial", "timestamp":iso, "text":str}
+ *   {"type":"voice.agent.started",      "timestamp":iso}  agent audio began playing
+ *   {"type":"voice.agent.stopped",      "timestamp":iso}  agent audio finished
+ *   {"type":"voice.speech.cancel",      "timestamp":iso, "reason"?:str}  barge-in
  *
  * Outbound (browser -> Python -> sidecar), sent via sendControl() below:
  *   {"type":"mic", "open":bool}                                  (existing)
@@ -124,10 +126,12 @@ export interface ElevationWireEvent {
   readonly timestamp?: string;
 }
 
-export interface SpeechWireEvent {
-  readonly type: "voice.speech.enqueue" | "voice.speech.cancel";
-  readonly timestamp?: string;
-}
+/** Turn-taking signals from the media plane -- see the wire-shape comment above. */
+export type VoiceWireEvent =
+  | { readonly type: "voice.user.started" | "voice.user.stopped"; readonly timestamp?: string }
+  | { readonly type: "voice.agent.started" | "voice.agent.stopped"; readonly timestamp?: string }
+  | { readonly type: "voice.transcript.partial"; readonly text?: string; readonly timestamp?: string }
+  | { readonly type: "voice.speech.cancel"; readonly reason?: string; readonly timestamp?: string };
 
 /** Real-time subtitle stream events: user STT in, agent speech out. */
 export interface TranscriptWireEvent {
@@ -137,7 +141,7 @@ export interface TranscriptWireEvent {
   readonly timestamp?: string;
 }
 
-export type AgentWireEvent = TaskWireEvent | EcologyWireEvent | ElevationWireEvent | SpeechWireEvent | TranscriptWireEvent;
+export type AgentWireEvent = TaskWireEvent | EcologyWireEvent | ElevationWireEvent | VoiceWireEvent | TranscriptWireEvent;
 
 /** Outbound control messages this hook can send -- see sendControl() below. */
 export type AgentControlMessage =
@@ -158,7 +162,11 @@ const AGENT_WIRE_EVENT_TYPES = new Set<string>([
   "budget.updated",
   "diplomacy.elevation.requested",
   "diplomacy.elevation.resolved",
-  "voice.speech.enqueue",
+  "voice.user.started",
+  "voice.user.stopped",
+  "voice.transcript.partial",
+  "voice.agent.started",
+  "voice.agent.stopped",
   "voice.speech.cancel",
   "user.transcript",
   "agent.transcript",
@@ -199,6 +207,8 @@ export interface UseAgentConnectionResult {
   serverAddress: string;
   setServerAddress: (value: string) => void;
   localStream: MediaStream | null;
+  /** The agent's incoming audio track, or `null` before it arrives. */
+  remoteStream: MediaStream | null;
   serverStatus: AgentServerStatus | null;
   /** Opens the WebRTC session and POSTs the SDP offer to /api/offer. No language pair or mode -- the server itself no longer takes either (see AgentServerStatus's doc comment). */
   connect: () => Promise<void>;
@@ -207,29 +217,29 @@ export interface UseAgentConnectionResult {
   micOpen: boolean;
   /** Manual turn mode: open/close the mic; also notifies the server over the data channel ({"type":"mic","open":...}). No-op unless connected. */
   setMicOpen: (open: boolean) => void;
-  /**
-   * Most recently received recognized realtime event, or `null` before the
-   * first one arrives this session. A fresh object every time (even for
-   * back-to-back messages with identical content), so a consumer effect
-   * keyed on this value fires once per message, including duplicates --
-   * deduplication is the reducer's job (see useAgentTasks.ts/
-   * useEcologyStatus.ts), not the transport's.
-   */
-  lastEvent: AgentWireEvent | null;
-  /** Best-effort "the agent is currently speaking" signal -- see the SpeechWireEvent doc comment above for why this is approximate. */
-  isSpeaking: boolean;
   /** Sends a control message to the sidecar over the data channel. No-op if not connected. */
   sendControl: (message: AgentControlMessage) => void;
 }
 
-export function useAgentConnection(): UseAgentConnectionResult {
+/**
+ * `onEvent` is called once for every recognized realtime event, in arrival
+ * order, straight from the data channel handler. It is a callback rather
+ * than a "latest event" state value because React may batch several
+ * back-to-back messages into one render, and a state value would then only
+ * expose the last of them -- a dropped `voice.agent.stopped` would leave the
+ * UI stuck in "speaking". Deduplication is the consumers' job (see
+ * useAgentTasks.ts / useEcologyStatus.ts / useVoiceSession.ts). The latest
+ * callback is always used; it need not be memoized.
+ */
+export function useAgentConnection(onEvent?: (event: AgentWireEvent) => void): UseAgentConnectionResult {
+  const onEventRef = useRef(onEvent);
+  onEventRef.current = onEvent;
   const [connectionState, setConnectionState] = useState<ConnectionState>("disconnected");
   const [serverAddress, setServerAddressState] = useState<string>(() => getServerAddress());
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [serverStatus, setServerStatus] = useState<AgentServerStatus | null>(null);
   const [micOpen, setMicOpenState] = useState(false);
-  const [lastEvent, setLastEvent] = useState<AgentWireEvent | null>(null);
-  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
 
   // "manual" unless the server explicitly says "auto" -- matches the
   // server-side default (app/config.py TURN_MODE) and errs toward the safer
@@ -258,7 +268,7 @@ export function useAgentConnection(): UseAgentConnectionResult {
       return null;
     });
     setMicOpenState(false);
-    setIsSpeaking(false);
+    setRemoteStream(null);
   }, []);
 
   const connect = useCallback(async () => {
@@ -294,6 +304,7 @@ export function useAgentConnection(): UseAgentConnectionResult {
         remoteAudioRef.current.autoplay = true;
       }
       remoteAudioRef.current.srcObject = event.streams[0];
+      setRemoteStream(event.streams[0]);
       remoteAudioRef.current.play().catch(() => {});
     };
 
@@ -309,9 +320,7 @@ export function useAgentConnection(): UseAgentConnectionResult {
       if (typeof event.data !== "string") return;
       const parsed = parseAgentWireEvent(event.data);
       if (!parsed) return;
-      setLastEvent(parsed);
-      if (parsed.type === "voice.speech.enqueue") setIsSpeaking(true);
-      else if (parsed.type === "voice.speech.cancel") setIsSpeaking(false);
+      onEventRef.current?.(parsed);
     };
 
     pc.onconnectionstatechange = () => {
@@ -402,13 +411,12 @@ export function useAgentConnection(): UseAgentConnectionResult {
     serverAddress,
     setServerAddress,
     localStream,
+    remoteStream,
     serverStatus,
     connect,
     disconnect,
     micOpen,
     setMicOpen,
-    lastEvent,
-    isSpeaking,
     sendControl,
   };
 }

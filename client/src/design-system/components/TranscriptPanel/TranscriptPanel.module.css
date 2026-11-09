@@ -72,3 +72,8 @@
   min-width: 0;
   word-break: break-word;
 }
+
+/* Interim STT text: still changing, so visibly provisional. */
+.pending .text {
+  color: var(--ds-color-text-secondary);
+}

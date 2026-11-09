@@ -13,6 +13,10 @@ speaking and when a barge-in happened. Those facts only exist in this process
   instantly by ``SpeechQueueProcessor`` / ``PreSynthQueueProcessor``; this
   event only lets the sidecar stop its own pending filler and lets the HCI log
   count interruptions.
+- ``voice.agent.started`` / ``voice.agent.stopped``: Marcus's own audio
+  actually started / stopped playing. Browser-only (see
+  ``app/realtime/browser_wire.py``): the client needs them to show a
+  "speaking" state, the sidecar protocol does not define them.
 
 Frames are always passed through unchanged; publishing is best-effort and a
 failing sink never interrupts audio.
@@ -58,10 +62,16 @@ class VoiceActivityEventProcessor(FrameProcessor):
         await super().process_frame(frame, direction)
         # Bot-speaking frames travel upstream from the output transport and
         # downstream from some services; either direction updates the flag.
+        # Publish only on an actual change, so a frame seen in both
+        # directions still yields one event.
         if isinstance(frame, BotStartedSpeakingFrame):
-            self._bot_speaking = True
+            if not self._bot_speaking:
+                self._bot_speaking = True
+                await self._publish("voice.agent.started", {})
         elif isinstance(frame, BotStoppedSpeakingFrame):
-            self._bot_speaking = False
+            if self._bot_speaking:
+                self._bot_speaking = False
+                await self._publish("voice.agent.stopped", {})
         elif isinstance(frame, UserStartedSpeakingFrame):
             self._last_partial = ""
             if self._bot_speaking:

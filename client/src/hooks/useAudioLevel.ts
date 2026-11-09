@@ -4,7 +4,16 @@ import { useEffect, useState } from "react";
 // typical speech are quiet relative to the 0-1 byte range AnalyserNode uses).
 const GAIN = 4;
 
-export function useMicLevel(stream: MediaStream | null): number {
+// Levels are rounded to this step before being stored, so a steady signal
+// doesn't re-render the consumer on every animation frame.
+const LEVEL_STEP = 0.02;
+
+/**
+ * Live 0-1 loudness of an audio stream: the local mic, or the agent's
+ * remote track (which must also be playing through a media element for the
+ * browser to deliver its samples).
+ */
+export function useAudioLevel(stream: MediaStream | null): number {
   const [level, setLevel] = useState(0);
 
   useEffect(() => {
@@ -14,6 +23,9 @@ export function useMicLevel(stream: MediaStream | null): number {
     }
 
     const audioContext = new AudioContext();
+    // Created outside the click that started the call, so it may begin
+    // suspended; the page already has user activation by now.
+    void audioContext.resume().catch(() => {});
     const source = audioContext.createMediaStreamSource(stream);
     const analyser = audioContext.createAnalyser();
     analyser.fftSize = 512;
@@ -30,7 +42,7 @@ export function useMicLevel(stream: MediaStream | null): number {
         sumSquares += normalized * normalized;
       }
       const rms = Math.sqrt(sumSquares / data.length);
-      setLevel(Math.min(1, rms * GAIN));
+      setLevel(Math.round(Math.min(1, rms * GAIN) / LEVEL_STEP) * LEVEL_STEP);
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);

@@ -93,7 +93,10 @@ export interface UseEcologyStatusResult extends EcologyState {
   readonly dispatch: (event: EcologyWireEvent) => void;
 }
 
-const POLL_INTERVAL_MS = 10_000;
+// Live ecology events (forwarded by app/realtime/browser_wire.py) are the
+// primary source; polling only seeds the first reading and catches up after
+// a missed event or a reconnect.
+const POLL_INTERVAL_MS = 30_000;
 
 /**
  * Tracks the swarm's ecology (compute/system) and food (budget) bands.

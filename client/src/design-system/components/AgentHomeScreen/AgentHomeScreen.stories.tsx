@@ -19,6 +19,8 @@ const meta: Meta<typeof AgentHomeScreen> = {
     onToggleMic: () => {},
     statusDetail: undefined,
     tasks: [],
+    transcriptEntries: [],
+    onOpenSettings: () => {},
     ecology: "prosperous",
     food: "prosperous",
     sidecarConnected: true,
@@ -40,6 +42,29 @@ type Story = StoryObj<typeof AgentHomeScreen>;
 
 export const Idle: Story = {
   args: { activity: "idle" },
+};
+
+export const Thinking: Story = {
+  args: {
+    activity: "thinking",
+    transcriptEntries: [{ id: 1, speaker: "user", text: "明天上海天气怎么样", timestamp: Date.now() }],
+  },
+};
+
+export const ListeningWithPartialText: Story = {
+  args: { activity: "listening", micOpen: true, micLevel: 0.5, pendingUserText: "帮我查一下明天" },
+};
+
+export const AgentSpeaking: Story = {
+  args: {
+    activity: "speaking",
+    agentSpeaking: true,
+    micLevel: 0.6,
+    transcriptEntries: [
+      { id: 1, speaker: "user", text: "明天上海天气怎么样", timestamp: Date.now() },
+      { id: 2, speaker: "agent", text: "明天上海多云，最高 18 度。", timestamp: Date.now() },
+    ],
+  },
 };
 
 export const Listening: Story = {

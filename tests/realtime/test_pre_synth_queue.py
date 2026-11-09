@@ -1,5 +1,11 @@
 import pytest
-from pipecat.frames.frames import EndFrame, InterruptionFrame, TTSAudioRawFrame, UserStartedSpeakingFrame
+from pipecat.frames.frames import (
+    EndFrame,
+    InterruptionFrame,
+    TTSAudioRawFrame,
+    TTSStoppedFrame,
+    UserStartedSpeakingFrame,
+)
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.tests.utils import SleepFrame, run_test
 
@@ -66,3 +72,32 @@ async def test_barge_in_flushes_audio_already_handed_to_the_transport() -> None:
 
     # Without an InterruptionFrame the output transport keeps playing its buffer.
     assert any(isinstance(frame, InterruptionFrame) for frame in processor.emitted)
+
+
+class ConcurrentCapturingProcessor(CapturingPreSynthQueueProcessor):
+    def __init__(self, queue: SpeechQueue) -> None:
+        PreSynthQueueProcessor.__init__(self, queue, tts_factory=FakeTTS, concurrency=3)
+        self.emitted = []
+
+
+@pytest.mark.asyncio
+async def test_the_last_sentence_of_a_reply_ends_with_tts_stopped() -> None:
+    queue = SpeechQueue(capacity=8)
+    processor = ConcurrentCapturingProcessor(queue)
+    await queue.enqueue(SpeechRequest("第一句", "final", "task-1", 50))
+    await queue.enqueue(SpeechRequest("第二句", "final", "task-1", 50))
+
+    await run_test(processor, frames_to_send=[SleepFrame(0.05), EndFrame()])
+
+    kinds = [type(frame).__name__ for frame in processor.emitted if isinstance(frame, (TTSAudioRawFrame, TTSStoppedFrame))]
+    # One stop for the whole reply, after all of its audio -- not one per sentence.
+    assert kinds == ["TTSAudioRawFrame", "TTSAudioRawFrame", "TTSStoppedFrame"]
+
+
+@pytest.mark.asyncio
+async def test_no_tts_stopped_without_audio() -> None:
+    processor = CapturingPreSynthQueueProcessor(SpeechQueue(capacity=8))
+
+    await run_test(processor, frames_to_send=[SleepFrame(0.02), EndFrame()])
+
+    assert not any(isinstance(frame, TTSStoppedFrame) for frame in processor.emitted)

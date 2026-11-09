@@ -114,6 +114,26 @@
   border-color: var(--ds-color-border);
 }
 
+/* Agent speaking (mic closed): same "ready" surface, but the glow breathes
+   with the agent's voice in sage -- the agent's color -- so the user can see
+   who holds the turn. */
+.button[data-state="agent-speaking"] {
+  background: var(--ds-color-bg-surface);
+  color: var(--ds-color-primary);
+  border: 2px solid var(--ds-color-primary);
+}
+
+.button[data-state="agent-speaking"] .ring {
+  border-color: var(--ds-color-secondary-subtle);
+}
+
+.button[data-state="agent-speaking"] .glow {
+  opacity: 1;
+  box-shadow: 0 0 0 4px var(--ds-color-secondary-subtle), 0 0 18px 2px var(--ds-color-secondary);
+  transform: scale(calc(1 + var(--ds-talk-level, 0) * 0.45));
+  transition: transform 90ms linear, opacity var(--ds-duration-base) var(--ds-ease-standard);
+}
+
 @keyframes pulse-ring {
   0%,
   100% {

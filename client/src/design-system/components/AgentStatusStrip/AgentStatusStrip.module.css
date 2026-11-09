@@ -109,6 +109,25 @@
   }
 }
 
+.pulse {
+  animation: pulse var(--ds-duration-spin) var(--ds-ease-standard) infinite alternate;
+}
+
+@keyframes pulse {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse {
+    animation: none;
+  }
+}
+
 .spin {
   animation: spin 1s linear infinite;
 }

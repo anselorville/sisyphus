@@ -13,7 +13,10 @@ export interface AgentHomeScreenProps {
   // Talk control (mirrors TalkButton's own prop needs -- see that
   // component, reused here unmodified).
   connectionState: ConnectionState;
+  /** Loudness driving the talk button's glow: the user's mic, or the agent's voice while it speaks. */
   micLevel: number;
+  /** The agent's audio is playing; the talk button glows in the agent's color. */
+  agentSpeaking?: boolean;
   micOpen: boolean;
   onToggleMic: () => void;
 
@@ -31,6 +34,8 @@ export interface AgentHomeScreenProps {
 
   // Live subtitles (user STT in, agent speech out)
   transcriptEntries: readonly TranscriptEntry[];
+  /** Interim text of the user's current turn, shown until the final arrives. */
+  pendingUserText?: string;
 
   // Ecology / budget
   ecology: FoodBand;
@@ -58,6 +63,7 @@ export interface AgentHomeScreenProps {
 export function AgentHomeScreen({
   connectionState,
   micLevel,
+  agentSpeaking = false,
   onConnect,
   onDisconnect,
   onOpenSettings,
@@ -67,6 +73,7 @@ export function AgentHomeScreen({
   statusDetail,
   tasks,
   transcriptEntries,
+  pendingUserText,
   ecology,
   food,
   sidecarConnected,
@@ -88,7 +95,7 @@ export function AgentHomeScreen({
 
       <main className={styles.content}>
         <TaskNestPanel tasks={tasks} />
-        <TranscriptPanel entries={transcriptEntries} />
+        <TranscriptPanel entries={transcriptEntries} pendingUserText={pendingUserText} />
         <EcologyPanel ecology={ecology} food={food} sidecarConnected={sidecarConnected} />
       </main>
 
@@ -96,6 +103,7 @@ export function AgentHomeScreen({
         <TalkButton
           connectionState={connectionState}
           level={micLevel}
+          agentSpeaking={agentSpeaking}
           onConnect={onConnect}
           micOpen={micOpen}
           onToggleMic={onToggleMic}

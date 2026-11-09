@@ -68,6 +68,11 @@ from app.model_settings import (
     save_model_settings,
 )
 from app.providers import select_engine, stt_provider_name, tts_provider_name
+from app.realtime.browser_wire import (
+    BROWSER_ONLY_EVENT_TYPES,
+    browser_message_for_media_event,
+    browser_message_for_sidecar_event,
+)
 from app.realtime.event_bridge import SidecarEventBridge
 from app.realtime.queueing import priority_for_event
 from app.realtime.speech_queue import SpeechQueue, speech_request_from_directive
@@ -918,7 +923,15 @@ async def run_bot(
                 })
             except Exception:
                 pass
-        if bridge is not None:
+        # Turn-taking signals (user/agent speaking, partial text, barge-in)
+        # drive the client's live voice state.
+        browser_message = browser_message_for_media_event(event)
+        if browser_message is not None:
+            try:
+                webrtc_connection.send_app_message(browser_message)
+            except Exception:
+                pass
+        if bridge is not None and event.type not in BROWSER_ONLY_EVENT_TYPES:
             await bridge.send(event, priority_for_event(event))
 
     speech_queue_holder: list[SpeechQueue] = []
@@ -954,27 +967,10 @@ async def run_bot(
                                 })
                             except Exception:
                                 pass
-                    # Forward task lifecycle events to the browser over the
-                    # WebRTC data channel for streaming transcript display.
-                    if event.type in ("task.created", "task.assigned", "task.progress", "task.completed", "task.failed", "task.cancelled", "session.topics.updated"):
-                        wire = {
-                            "type": event.type,
-                            "timestamp": event.timestamp,
-                        }
-                        if event.type != "session.topics.updated":
-                            wire["task_id"] = event.task_id
-                        if event.type == "task.created" and event.payload.get("goal"):
-                            wire["goal"] = event.payload["goal"]
-                        if event.type == "task.assigned" and event.payload.get("role_id"):
-                            wire["role_id"] = event.payload["role_id"]
-                        if event.type == "task.progress" and event.payload.get("text"):
-                            wire["text"] = event.payload["text"]
-                        if event.type == "task.completed" and event.payload.get("summary"):
-                            wire["summary"] = event.payload["summary"]
-                        if event.type == "task.failed" and event.payload.get("reason"):
-                            wire["reason"] = event.payload["reason"]
-                        if event.type == "session.topics.updated" and "topics" in event.payload:
-                            wire["topics"] = event.payload["topics"]
+                    # Task lifecycle, topic and ecology events drive the
+                    # client's task list and status; see browser_wire.py.
+                    wire = browser_message_for_sidecar_event(event)
+                    if wire is not None:
                         try:
                             webrtc_connection.send_app_message(wire)
                         except Exception:

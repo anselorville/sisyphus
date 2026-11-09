@@ -17,6 +17,8 @@ export interface TalkButtonProps {
   micOpen?: boolean;
   /** Toggle the mic open/closed. */
   onToggleMic?: () => void;
+  /** The agent is speaking: the glow follows `level` in the agent's color. */
+  agentSpeaking?: boolean;
 }
 
 const CONNECT_LABEL: Record<ConnectionState, string> = {
@@ -40,6 +42,7 @@ export function TalkButton({
   onConnect,
   micOpen = false,
   onToggleMic,
+  agentSpeaking = false,
 }: TalkButtonProps) {
   const isConnected = connectionState === "connected";
   const isConnecting = connectionState === "connecting";
@@ -49,7 +52,11 @@ export function TalkButton({
   // "ready" (mic closed) vs "connected" (mic open). The connection state
   // itself lives in the header switch, so the talk button's own state is
   // always "what will tapping do to the mic".
-  const visualState = isConnected && !micOpen ? "ready" : connectionState;
+  const visualState = (() => {
+    if (!isConnected) return connectionState;
+    if (micOpen) return "connected";
+    return agentSpeaking ? "agent-speaking" : "ready";
+  })();
 
   const label = (() => {
     if (!isConnected) return CONNECT_LABEL[connectionState];

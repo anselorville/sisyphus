@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Activity, Loader2, Mic, Moon, Settings, Volume2 } from "lucide-react";
+import { Activity, Brain, Loader2, Mic, Moon, Settings, Volume2 } from "lucide-react";
 import { Badge, type BadgeTone } from "../../primitives/Badge";
 import { ConnectionStatusBadge } from "../ConnectionStatusBadge";
 import type { ConnectionState } from "../../../hooks/useAgentConnection";
@@ -15,7 +15,7 @@ import styles from "./AgentStatusStrip.module.css";
  * tasks can keep running while the user is mid-conversation); "idle" is the
  * fallback when nothing else applies.
  */
-export type AgentActivityState = "idle" | "listening" | "speaking" | "working" | "hibernating";
+export type AgentActivityState = "idle" | "listening" | "thinking" | "speaking" | "working" | "hibernating";
 
 export interface AgentStatusStripProps {
   connectionState: ConnectionState;
@@ -38,6 +38,7 @@ export interface AgentStatusStripProps {
 const ACTIVITY_ICON: Record<AgentActivityState, ReactNode> = {
   idle: <Activity size={16} strokeWidth={2} />,
   listening: <Mic size={16} strokeWidth={2} />,
+  thinking: <Brain size={16} strokeWidth={2} className={styles.pulse} />,
   speaking: <Volume2 size={16} strokeWidth={2} />,
   working: <Loader2 size={16} strokeWidth={2} className={styles.spin} />,
   hibernating: <Moon size={16} strokeWidth={2} />,
@@ -46,6 +47,7 @@ const ACTIVITY_ICON: Record<AgentActivityState, ReactNode> = {
 const ACTIVITY_LABEL: Record<AgentActivityState, string> = {
   idle: "Idle",
   listening: "Listening",
+  thinking: "Thinking",
   speaking: "Speaking",
   working: "Working",
   hibernating: "Hibernating",
