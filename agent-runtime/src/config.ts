@@ -64,6 +64,14 @@ export interface AgentRuntimeConfig {
   readonly jevMode: DecisionMode;
   /** Jev model name or alias (JEV_MODEL); `jev-latest` follows TypeSafe's current release. */
   readonly jevModel: string;
+  /**
+   * The ack gate (D6: whether "let me check" is said before the answer, see
+   * ./voice/ack-gate.ts), rolled out on its own switch: `off` = the old
+   * unconditional 700 ms ack, `shadow` = act on the rule (no ack for greetings
+   * and questions about Marcus) while logging Jev's reading beside it, `live` =
+   * act on Jev's reading when it is confident. Set via AGENT_RUNTIME_ACK_GATE.
+   */
+  readonly ackGateMode: DecisionMode;
 }
 
 function readPositiveInt(name: string, fallback: number): number {
@@ -143,6 +151,7 @@ export const config: AgentRuntimeConfig = Object.freeze({
   networkId: readString("AGENT_RUNTIME_NETWORK_ID", "default"),
   jevMode: readDecisionMode("AGENT_RUNTIME_JEV_MODE", "live"),
   jevModel: readString("JEV_MODEL", "jev-latest"),
+  ackGateMode: readDecisionMode("AGENT_RUNTIME_ACK_GATE", "shadow"),
   modelClassRouting: Object.freeze({
     fast: parseModelRef("AGENT_RUNTIME_MODEL_FAST", DEEPSEEK_FLASH),
     balanced: parseModelRef("AGENT_RUNTIME_MODEL_BALANCED", DEEPSEEK_FLASH),

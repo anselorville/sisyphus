@@ -243,19 +243,20 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
     // client warms its connection in the background; until it is warm every
     // decision is simply the rule's.
     const jev = new JevClient({ apiKey: process.env["TYPESAFE_API_KEY"], model: runtimeConfig.jevModel });
+    const recordDecision = (record: DecisionRecord): void => {
+      eventRecorder.record({
+        event_id: randomUUID(),
+        sequence: nextSequence(),
+        source: "system",
+        type: "decision.made",
+        timestamp: new Date().toISOString(),
+        payload: { ...record },
+      });
+    };
     const decisionEngine = new DecisionEngine({
       client: jev,
       mode: runtimeConfig.jevMode,
-      onRecord: (record: DecisionRecord): void => {
-        eventRecorder.record({
-          event_id: randomUUID(),
-          sequence: nextSequence(),
-          source: "system",
-          type: "decision.made",
-          timestamp: new Date().toISOString(),
-          payload: { ...record },
-        });
-      },
+      onRecord: recordDecision,
     });
     jev.start();
     rollbacks.push(async () => jev.stop());
@@ -409,7 +410,12 @@ export async function createAgentRuntime(options: CreateAgentRuntimeOptions = {}
       onTerminal: () => pokeScribe(),
       eventLog: (event) => eventRecorder.record(event),
       confirmation: mailConfirmation,
-      turnDecider: new TurnDecider({ engine: decisionEngine, reflex: reflexRouter }),
+      turnDecider: new TurnDecider({
+        engine: decisionEngine,
+        reflex: reflexRouter,
+        ackMode: runtimeConfig.ackGateMode,
+        onAckRecord: recordDecision,
+      }),
       nextSequence,
     });
 

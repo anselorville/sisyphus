@@ -26,7 +26,7 @@
  */
 
 import type { SpeechDirective } from "./voice-herald.js";
-import { AckGenerator } from "./ack-generator.js";
+import type { AckAction, AckGenerator } from "./ack-generator.js";
 
 export interface TrafficTaskSnapshot {
   readonly taskId: string;
@@ -42,6 +42,8 @@ export interface TrafficTaskSnapshot {
   readonly finalTranscriptAtMs?: number;
   /** The user's original transcript, used to build a context-aware receipt ack. */
   readonly transcript?: string;
+  /** What the agent is about to do, so the ack's verb matches it (see ./ack-gate.ts). Default: neutral wording. */
+  readonly ackAction?: AckAction;
   /**
    * The real, speakable phase/status label for the task's current state
    * (e.g. "running tests"), current as of `phaseChangedAtMs`. Must reflect
@@ -141,7 +143,7 @@ export class TrafficCommander {
 
     book.ackedFinalTranscriptAtMs = snapshot.finalTranscriptAtMs;
     const text = snapshot.transcript !== undefined && this.ackGenerator
-      ? this.ackGenerator.build(snapshot.transcript)
+      ? this.ackGenerator.build(snapshot.transcript, snapshot.ackAction)
       : this.receiptText;
     return { kind: "receipt", text, taskId: snapshot.taskId };
   }

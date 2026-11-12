@@ -42,6 +42,10 @@ transcript ──► ReflexRouter（规则，同步，<1ms）
   取消/停止说话 ≥0.85，纠正/追加 ≥0.75，新请求 ≥0.6，选角色 ≥0.6，**同意 ≥0.9**，拒绝 ≥0.6。
 - 配置：`TYPESAFE_API_KEY`（没有就等于 `off`）、`AGENT_RUNTIME_JEV_MODE=off|shadow|live`
   （默认 `live`）、`JEV_MODEL`（默认 `jev-latest`）。启动日志打印 `[jev] mode=...`。
+- 应答门（D6）是同一次请求里多出的 `ack` 问题（immediate / quick / long，阈值 ≥0.6），
+  但有自己的开关 `AGENT_RUNTIME_ACK_GATE=off|shadow|live`（默认 `shadow`）：`shadow` 按规则
+  执行（`src/voice/ack-gate.ts` 的 `classifyAckByRule`），Jev 的判断另记一条
+  `decision.made`（`decision=ack_gate`）；`live` 才采用 Jev 的判断。
 
 ## 3. 连接：为什么要预热和保活
 

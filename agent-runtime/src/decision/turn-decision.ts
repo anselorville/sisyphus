@@ -11,6 +11,11 @@
  *                      the roles that exist right now, by their routingHint.
  *   pending_answer  -- only when the runtime is waiting for a yes/no (a drafted
  *                      email): is this utterance that answer?
+ *   ack             -- D6, the ack gate: can Marcus answer right away, after one
+ *                      quick lookup, or only after long work? Decides whether a
+ *                      "let me check" is spoken first (../voice/ack-gate.ts). It
+ *                      has its own off/shadow/live switch, so it can be
+ *                      calibrated while the routing questions stay live.
  *
  * The deterministic ReflexRouter stays in charge of two things: explicit
  * stop/cancel commands ("取消", "闭嘴") are obeyed instantly without asking
@@ -25,7 +30,8 @@
 
 import type { RouteDecision, RouteState } from "../routing/reflex-router.js";
 import { ReflexRouter } from "../routing/reflex-router.js";
-import type { DecisionEngine, DecisionSpec } from "./decision-engine.js";
+import { classifyAckByRule, type AckNeed } from "../voice/ack-gate.js";
+import type { DecisionEngine, DecisionMode, DecisionRecord, DecisionSpec } from "./decision-engine.js";
 import type { JevQuestion, JevResponse } from "./jev-client.js";
 
 export type AnswerKind = "confirm" | "decline" | "unrelated" | "unclear";
@@ -54,6 +60,10 @@ export interface TurnOutcome {
   readonly route: RouteDecision;
   /** Present only when a confirmation was pending. */
   readonly answer?: AnswerKind;
+  /** Jev's reading of how soon the turn can be answered; set only when the outcome came from Jev. */
+  readonly jevAck?: AckNeed;
+  /** The ack need the caller should act on, after the ack gate's own mode is applied (see TurnDecider). */
+  readonly ack?: AckNeed;
 }
 
 /** Probability the top option must reach before Jev may override the rule, per outcome. */
@@ -71,7 +81,27 @@ export const TURN_THRESHOLDS = {
   confirm: 0.9,
   decline: 0.6,
   unrelated: 0.6,
+  /** How soon the turn can be answered (D6). Below this the 700 ms rule applies. */
+  ack: 0.6,
 } as const;
+
+const ACK_CRITERIA: Record<string, string> = {
+  immediate:
+    "Marcus can answer right away from conversation or general knowledge: a greeting, small talk, thanks, an opinion, an explanation, a question about Marcus himself.",
+  quick:
+    "Marcus must first do one quick thing that takes a few seconds: one web search (weather, a price, a fact), check the inbox, check a service's status.",
+  long:
+    "Marcus needs extended work before answering: research across several sources, a multi-step task, writing or summarizing something long -- tens of seconds or more.",
+};
+
+/** Jev's answer to the ack question, or undefined when it is not sure enough. */
+function interpretAck(response: JevResponse): AckNeed | undefined {
+  const ack = response.choices["ack"];
+  if (!ack) return undefined;
+  const top = topOf(ack.probabilities);
+  if (top.p < TURN_THRESHOLDS.ack) return undefined;
+  return top.name === "immediate" || top.name === "quick" || top.name === "long" ? top.name : undefined;
+}
 
 // A confirmation must be nothing BUT agreement. Matching only a prefix would
 // read "好像要下雨" ("looks like rain") as consent, so every clause of the
@@ -134,7 +164,8 @@ function intentCriteria(hasActiveTask: boolean): Record<string, string> {
 
 export const turnDecisionSpec: DecisionSpec<TurnInput, TurnOutcome> = {
   name: "turn",
-  version: "1",
+  // 2: added the D6 `ack` question.
+  version: "2",
   budgetMs: 700,
 
   buildRequest(input) {
@@ -154,6 +185,11 @@ export const turnDecisionSpec: DecisionSpec<TurnInput, TurnOutcome> = {
         instructions: "If this is a request, which specialist is best placed to handle it?",
         criteria: Object.fromEntries(input.roles.map((role) => [role.roleId, role.hint])),
       },
+    };
+    questions["ack"] = {
+      type: "choice",
+      instructions: "How soon can Marcus start giving a real answer to this utterance?",
+      criteria: ACK_CRITERIA,
     };
     if (input.pending) {
       questions["pending_answer"] = {
@@ -197,7 +233,7 @@ export const turnDecisionSpec: DecisionSpec<TurnInput, TurnOutcome> = {
         matchedCapability: "pending_confirmation",
         reason: `jev: utterance ${answer === "confirm" ? "confirms" : "declines"} the pending question for role "${input.pending.roleId}"`,
       };
-      return { value: { route, answer }, confidence: pendingAnswer?.probabilities[answer] ?? 0 };
+      return { value: { route, answer, jevAck: interpretAck(response) }, confidence: pendingAnswer?.probabilities[answer] ?? 0 };
     }
 
     const top = topOf(intent.probabilities);
@@ -236,7 +272,7 @@ export const turnDecisionSpec: DecisionSpec<TurnInput, TurnOutcome> = {
               };
       }
     }
-    return { value: { route: routeAnswerToAsker(route, answer, input.pending), answer }, confidence };
+    return { value: { route: routeAnswerToAsker(route, answer, input.pending), answer, jevAck: interpretAck(response) }, confidence };
   },
 
   describe(outcome) {
@@ -247,15 +283,31 @@ export const turnDecisionSpec: DecisionSpec<TurnInput, TurnOutcome> = {
 export interface TurnDeciderOptions {
   readonly engine: DecisionEngine;
   readonly reflex?: ReflexRouter;
+  /**
+   * The ack gate's own rollout switch, independent of the routing decision's:
+   * `off` keeps the old unconditional 700 ms ack ("unknown"), `shadow` acts on
+   * the rule (classifyAckByRule) while Jev's reading is logged next to it,
+   * `live` acts on Jev's reading when it gave a confident one. Default `off`.
+   */
+  readonly ackMode?: DecisionMode;
+  /** Receives one audit record per turn for the ack gate (decision "ack_gate"). */
+  readonly onAckRecord?: (record: DecisionRecord) => void;
 }
+
+export const ACK_GATE_DECISION = "ack_gate";
+export const ACK_GATE_VERSION = "1";
 
 export class TurnDecider {
   private readonly engine: DecisionEngine;
   private readonly reflex: ReflexRouter;
+  private readonly ackMode: DecisionMode;
+  private readonly onAckRecord: (record: DecisionRecord) => void;
 
   constructor(options: TurnDeciderOptions) {
     this.engine = options.engine;
     this.reflex = options.reflex ?? new ReflexRouter();
+    this.ackMode = options.ackMode ?? "off";
+    this.onAckRecord = options.onAckRecord ?? ((): void => {});
   }
 
   async decide(input: TurnInput, routeState: RouteState): Promise<TurnOutcome> {
@@ -268,6 +320,34 @@ export class TurnDecider {
     }
 
     const baseline: TurnOutcome = { route: routeAnswerToAsker(rule, ruleAnswer, input.pending), answer: ruleAnswer };
-    return this.engine.decide(turnDecisionSpec, input, baseline);
+    const outcome = await this.engine.decide(turnDecisionSpec, input, baseline);
+    return { ...outcome, ack: this.gateAck(input.transcript, outcome.jevAck) };
+  }
+
+  /** Applies the ack gate's mode to the rule's and Jev's readings, and audits the choice. */
+  private gateAck(transcript: string, jevAck: AckNeed | undefined): AckNeed {
+    if (this.ackMode === "off") return "unknown";
+    const ruleAck = classifyAckByRule(transcript);
+    const useJev = this.ackMode === "live" && jevAck !== undefined;
+    const chosen = useJev ? jevAck : ruleAck;
+    try {
+      this.onAckRecord({
+        decision: ACK_GATE_DECISION,
+        version: ACK_GATE_VERSION,
+        mode: this.ackMode,
+        source: useJev ? "jev" : this.ackMode === "live" ? "rule_fallback" : "rule",
+        chosen,
+        baseline: ruleAck,
+        agreed: jevAck === undefined ? undefined : jevAck === ruleAck,
+        jev: jevAck,
+        confidence: undefined,
+        latencyMs: undefined,
+        // The routing decision's own record carries Jev's latency and any fallback reason.
+        fallbackReason: jevAck === undefined ? "no_jev_reading" : undefined,
+      });
+    } catch {
+      // Auditing must never disturb the decision it describes.
+    }
+    return chosen;
   }
 }

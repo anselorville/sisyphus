@@ -61,6 +61,7 @@ export const REALTIME_EVENT_TYPES = [
   "role.retired",
   "decision.made",
   "search.made",
+  "turn.trace",
 ] as const;
 export type RealtimeEventType = (typeof REALTIME_EVENT_TYPES)[number];
 

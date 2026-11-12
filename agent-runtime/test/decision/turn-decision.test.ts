@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DecisionEngine } from "../../src/decision/decision-engine.js";
+import { DecisionEngine, type DecisionRecord } from "../../src/decision/decision-engine.js";
 import { JevClient, parseResponse, type JevTransport } from "../../src/decision/jev-client.js";
 import {
   TURN_THRESHOLDS,
@@ -178,12 +178,19 @@ class JevStub implements JevTransport {
   close(): void {}
 }
 
-async function decider(reply: object, mode: "off" | "live") {
+async function decider(reply: object, mode: "off" | "live", ackMode: "off" | "shadow" | "live" = "off") {
   const transport = new JevStub(reply);
   const client = new JevClient({ transport, onWarn: () => {}, keepAliveIntervalMs: 3_600_000 });
   client.start();
   await client.whenWarm();
-  return { transport, decider: new TurnDecider({ engine: new DecisionEngine({ client, mode }), reflex: new ReflexRouter() }) };
+  const ackRecords: DecisionRecord[] = [];
+  const d = new TurnDecider({
+    engine: new DecisionEngine({ client, mode }),
+    reflex: new ReflexRouter(),
+    ackMode,
+    onAckRecord: (r) => ackRecords.push(r),
+  });
+  return { transport, decider: d, ackRecords };
 }
 
 const MAIL_REPLY = {
@@ -227,5 +234,51 @@ describe("TurnDecider", () => {
     const out = await d.decide(input({ transcript: "好，发吧", pending: { summary: "send hi", roleId: "mail" } }), {});
 
     expect(out).toMatchObject({ answer: "confirm", route: { roleId: "mail" } });
+  });
+});
+
+const GENERAL_REPLY = (ack: Record<string, number>) => ({
+  answers: {
+    intent: { type: "choice", choice: "new_request", confidence: 1, probabilities: { new_request: 0.99, stop_speaking: 0.01 } },
+    role: { type: "choice", choice: "general", confidence: 1, probabilities: { general: 0.97, web: 0.03 } },
+    ack: { type: "choice", choice: Object.keys(ack)[0], confidence: 1, probabilities: ack },
+  },
+});
+
+describe("ack gate (D6)", () => {
+  it("asks the ack question in the same request as routing", () => {
+    const { questions } = turnDecisionSpec.buildRequest(input());
+    expect(Object.keys(questions["ack"]!.criteria ?? {})).toEqual(["immediate", "quick", "long"]);
+  });
+
+  it("reads Jev's ack only above its threshold", () => {
+    const sure = turnDecisionSpec.interpret(parseResponse(JSON.stringify(GENERAL_REPLY({ quick: 0.9, immediate: 0.05, long: 0.05 })), 5), input());
+    expect(sure?.value.jevAck).toBe("quick");
+    const unsure = turnDecisionSpec.interpret(parseResponse(JSON.stringify(GENERAL_REPLY({ quick: 0.4, immediate: 0.35, long: 0.25 })), 5), input());
+    expect(unsure?.value.jevAck).toBeUndefined();
+    expect(unsure?.value.route.roleId).toBe("general"); // routing is unaffected
+  });
+
+  it("off: always the old unconditional ack, and nothing is recorded", async () => {
+    const { decider: d, ackRecords } = await decider(GENERAL_REPLY({ immediate: 0.95, quick: 0.03, long: 0.02 }), "live", "off");
+    expect((await d.decide(input({ transcript: "你好" }), {})).ack).toBe("unknown");
+    expect(ackRecords).toHaveLength(0);
+  });
+
+  it("shadow: acts on the rule and logs Jev's reading beside it", async () => {
+    const { decider: d, ackRecords } = await decider(GENERAL_REPLY({ quick: 0.95, immediate: 0.03, long: 0.02 }), "live", "shadow");
+    const out = await d.decide(input({ transcript: "你好" }), {});
+    expect(out.ack).toBe("immediate");
+    expect(ackRecords[0]).toMatchObject({ decision: "ack_gate", mode: "shadow", source: "rule", chosen: "immediate", baseline: "immediate", jev: "quick", agreed: false });
+  });
+
+  it("live: acts on a confident Jev reading, and on the rule when there is none", async () => {
+    const live = await decider(GENERAL_REPLY({ immediate: 0.95, quick: 0.03, long: 0.02 }), "live", "live");
+    expect((await live.decider.decide(input({ transcript: "讲讲相对论" }), {})).ack).toBe("immediate");
+    expect(live.ackRecords[0]).toMatchObject({ source: "jev", chosen: "immediate", baseline: "unknown" });
+
+    const noJev = await decider(GENERAL_REPLY({ immediate: 0.95, quick: 0.03, long: 0.02 }), "off", "live");
+    expect((await noJev.decider.decide(input({ transcript: "你好" }), {})).ack).toBe("immediate");
+    expect(noJev.ackRecords[0]).toMatchObject({ source: "rule_fallback", fallbackReason: "no_jev_reading" });
   });
 });

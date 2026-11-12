@@ -15,6 +15,8 @@
 #   scripts/query-hci-events.sh --summary        # 只输出 HCI 指标汇总
 #   scripts/query-hci-events.sh --decisions      # Jev 决策层：规则 vs Jev 的一致率、回落原因、延迟
 #   scripts/query-hci-events.sh --search         # 网页搜索：各搜索源的调用/失败/延迟、模式分布、最近的搜索
+#   scripts/query-hci-events.sh --trace          # 每轮时间账（turn.trace）：决策/排队/建任务/LLM 首字/首句/结束各节点耗时
+#   scripts/query-hci-events.sh --tools          # 工具耗时分布：每个工具的次数、失败率、p50/p90/最大耗时
 #
 # 数据库路径: 默认 <repo>/agent-runtime/data/agent-runtime.sqlite3
 #            可用环境变量 AGENT_RUNTIME_DB_PATH 覆盖。
@@ -38,7 +40,7 @@ N=20
 INTERACTION_ID=""
 TASK_ID=""
 OUTPUT_MODE="table"   # table | csv
-MODE="events"         # events | latency | summary | decisions | search
+MODE="events"         # events | latency | summary | decisions | search | trace | tools
 
 usage() {
   sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
@@ -55,6 +57,8 @@ while [[ $# -gt 0 ]]; do
     --summary)        MODE="summary"; shift ;;
     --decisions)      MODE="decisions"; shift ;;
     --search)         MODE="search"; shift ;;
+    --trace)          MODE="trace"; shift ;;
+    --tools)          MODE="tools"; shift ;;
     -h|--help)        usage ;;
     *) echo "未知参数: $1" >&2; usage ;;
   esac
@@ -182,6 +186,88 @@ if [[ "$MODE" == "search" ]]; then
            replace(replace(json_extract(payload,'$.contributors'),'[',''),']','') AS from_,
            substr(json_extract(payload,'$.query'),1,40) AS query
     FROM events WHERE type='search.made' ORDER BY rowid DESC LIMIT ${N};
+  "
+  exit 0
+fi
+
+# --- 模式: trace（每轮时间账） ---
+# turn.trace 由 sidecar 在每轮任务结束时写入（agent-runtime/src/telemetry/turn-trace.ts），
+# 各节点均为"最终转写到达 sidecar"之后的毫秒数。
+if [[ "$MODE" == "trace" ]]; then
+  echo "=== 最近 ${N} 轮的时间账（ms，自最终转写到达起）==="
+  sqlite3 -header -column "$DB_PATH" "
+    SELECT strftime('%m-%d %H:%M:%S', received_at) AS time,
+           json_extract(payload,'$.role') AS role,
+           json_extract(payload,'$.ack') AS ack,
+           json_extract(payload,'$.marks.decided') AS decided,
+           json_extract(payload,'$.marks.queued') AS queued,
+           json_extract(payload,'$.marks.task_started') AS started,
+           json_extract(payload,'$.marks.first_text') AS first_text,
+           json_extract(payload,'$.marks.first_speech') AS first_speech,
+           json_extract(payload,'$.speech.receipt') AS receipt,
+           json_extract(payload,'$.marks.ended') AS ended,
+           json_array_length(payload,'$.tools') AS tools,
+           json_extract(payload,'$.outcome') AS outcome
+    FROM events WHERE type='turn.trace'
+    ORDER BY rowid DESC LIMIT ${N};
+  "
+  echo
+  echo "=== 汇总（最近 ${N} 轮，中位数 ms）==="
+  sqlite3 -header -column "$DB_PATH" "
+    WITH recent AS (SELECT payload FROM events WHERE type='turn.trace' ORDER BY rowid DESC LIMIT ${N}),
+    nodes AS (
+      SELECT 'decided' AS node, CAST(json_extract(payload,'$.marks.decided') AS INTEGER) AS ms FROM recent
+      UNION ALL SELECT 'task_started', CAST(json_extract(payload,'$.marks.task_started') AS INTEGER) FROM recent
+      UNION ALL SELECT 'prompt_sent', CAST(json_extract(payload,'$.marks.prompt_sent') AS INTEGER) FROM recent
+      UNION ALL SELECT 'first_text', CAST(json_extract(payload,'$.marks.first_text') AS INTEGER) FROM recent
+      UNION ALL SELECT 'first_speech', CAST(json_extract(payload,'$.marks.first_speech') AS INTEGER) FROM recent
+      UNION ALL SELECT 'ended', CAST(json_extract(payload,'$.marks.ended') AS INTEGER) FROM recent
+    ),
+    ranked AS (
+      SELECT node, ms, ROW_NUMBER() OVER (PARTITION BY node ORDER BY ms) AS rn, COUNT(*) OVER (PARTITION BY node) AS n
+      FROM nodes WHERE ms IS NOT NULL
+    )
+    SELECT node, MAX(n) AS turns, MAX(CASE WHEN rn = (n + 1) / 2 THEN ms END) AS p50_ms, MAX(ms) AS max_ms
+    FROM ranked GROUP BY node
+    ORDER BY CASE node WHEN 'decided' THEN 1 WHEN 'task_started' THEN 2 WHEN 'prompt_sent' THEN 3
+                       WHEN 'first_text' THEN 4 WHEN 'first_speech' THEN 5 ELSE 6 END;
+  "
+  echo
+  echo "=== 首句是确认语的比例（按 ack 判定）==="
+  sqlite3 -header -column "$DB_PATH" "
+    WITH recent AS (SELECT payload FROM events WHERE type='turn.trace' ORDER BY rowid DESC LIMIT ${N})
+    SELECT json_extract(payload,'$.ack') AS ack, COUNT(*) AS turns,
+           SUM(json_extract(payload,'$.speech.receipt') IS NOT NULL) AS with_receipt
+    FROM recent GROUP BY 1 ORDER BY turns DESC;
+  "
+  exit 0
+fi
+
+# --- 模式: tools（工具耗时分布） ---
+# 来源：tool.completed / tool.failed 事件里的 duration_ms（task-executor 记录，不广播）。
+# 这是计时官 ETA 与"比平时慢"判断的数据基础（docs/spec/duplex-voice-architecture.md §6）。
+if [[ "$MODE" == "tools" ]]; then
+  echo "=== 工具耗时分布（全部记录）==="
+  sqlite3 -header -column "$DB_PATH" "
+    WITH calls AS (
+      SELECT json_extract(payload,'$.tool_name') AS tool,
+             CAST(json_extract(payload,'$.duration_ms') AS INTEGER) AS ms,
+             type = 'tool.failed' AS failed
+      FROM events
+      WHERE type IN ('tool.completed','tool.failed') AND json_extract(payload,'$.duration_ms') IS NOT NULL
+    ),
+    ranked AS (
+      SELECT tool, ms, failed,
+             ROW_NUMBER() OVER (PARTITION BY tool ORDER BY ms) AS rn,
+             COUNT(*) OVER (PARTITION BY tool) AS n
+      FROM calls
+    )
+    SELECT tool, MAX(n) AS calls,
+           printf('%.0f%%', 100.0 * SUM(failed) / MAX(n)) AS failed,
+           MAX(CASE WHEN rn = (n + 1) / 2 THEN ms END) AS p50_ms,
+           MAX(CASE WHEN rn = MAX(1, CAST(0.9 * n + 0.999 AS INTEGER)) THEN ms END) AS p90_ms,
+           MAX(ms) AS max_ms
+    FROM ranked GROUP BY tool ORDER BY calls DESC;
   "
   exit 0
 fi

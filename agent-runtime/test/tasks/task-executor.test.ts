@@ -384,11 +384,13 @@ describe("Three-level acknowledgement flow", () => {
   });
 
   it("logs tool lifecycle events to the HCI event log without broadcasting them", async () => {
-    const logged: RealtimeEvent[] = [];
-    const { db, executor, captured } = await makeHarness(new SlowToolPiSession(), 30, 5_000, 10_000, (e) => logged.push(e));
+    const all: RealtimeEvent[] = [];
+    const { db, executor, captured } = await makeHarness(new SlowToolPiSession(), 30, 5_000, 10_000, (e) => all.push(e));
 
     await executor.onVoiceTranscript("帮我查一下天气", "conv-tool-log", "evt-tool-log");
     await delay(150);
+    const traces = all.filter((e) => e.type === "turn.trace");
+    const logged = all.filter((e) => e.type.startsWith("tool."));
 
     expect(logged.map((e) => e.type)).toEqual(["tool.started", "tool.completed"]);
     expect(logged[0]?.payload).toMatchObject({ tool_call_id: "tool-call-1", tool_name: "web_search", args: "{}" });
@@ -397,6 +399,19 @@ describe("Three-level acknowledgement flow", () => {
     expect(logged[1]?.payload["duration_ms"] as number).toBeGreaterThanOrEqual(60);
     expect(logged.every((e) => e.task_id === logged[0]?.task_id && e.interaction_id === "conv-tool-log")).toBe(true);
     expect(captured.some((e) => e.type.startsWith("tool."))).toBe(false);
+
+    // One turn.trace for the turn, recorded but never broadcast.
+    expect(traces).toHaveLength(1);
+    expect(captured.some((e) => e.type === "turn.trace")).toBe(false);
+    const trace = traces[0]!.payload as { marks: Record<string, number>; tools: Array<Record<string, unknown>>; speech: Record<string, number> };
+    expect(traces[0]!.payload).toMatchObject({ route: "capability_match", role: "web", outcome: "completed" });
+    for (const mark of ["decided", "task_started", "prompt_sent", "first_speech", "ended"]) {
+      expect(typeof trace.marks[mark]).toBe("number");
+    }
+    expect(trace.marks["decided"]!).toBeLessThanOrEqual(trace.marks["ended"]!);
+    expect(trace.tools).toEqual([expect.objectContaining({ name: "web_search", ok: true })]);
+    expect(trace.tools[0]!["duration_ms"] as number).toBeGreaterThanOrEqual(60);
+    expect(typeof trace.speech["receipt"]).toBe("number");
 
     await db.close();
   });
@@ -416,7 +431,7 @@ describe("Three-level acknowledgement flow", () => {
     await executor.onVoiceTranscript("帮我查一下天气", "conv-tool-clip", "evt-tool-clip");
     await delay(100);
 
-    expect(logged.map((e) => e.type)).toEqual(["tool.started", "tool.failed"]);
+    expect(logged.filter((e) => e.type.startsWith("tool.")).map((e) => e.type)).toEqual(["tool.started", "tool.failed"]);
     expect((logged[0]?.payload["args"] as string).length).toBeLessThanOrEqual(301);
     expect((logged[1]?.payload["error"] as string).length).toBeLessThanOrEqual(301);
 

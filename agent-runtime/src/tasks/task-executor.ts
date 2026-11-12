@@ -28,6 +28,8 @@ import { JevClient } from "../decision/jev-client.js";
 import { TurnDecider, type AnswerKind, type RoleMenuItem } from "../decision/turn-decision.js";
 import { LongTaskFillerScheduler } from "../voice/long-task-filler-scheduler.js";
 import { ToolAckGenerator } from "../voice/tool-ack-generator.js";
+import { planAck, type AckNeed } from "../voice/ack-gate.js";
+import { TurnTrace } from "../telemetry/turn-trace.js";
 
 const DEFAULT_ACK_GRACE_MS = 700;
 const DEFAULT_GENERAL_ROLE_ID = "general";
@@ -40,7 +42,18 @@ interface ActiveTaskInfo {
   readonly interactionId: string;
   /** The request being worked on, so the decision layer can tell a correction from a new request. */
   readonly goal: string;
+  /** How soon the turn can be answered, per the ack gate; decides whether and how the receipt ack is spoken. */
+  readonly ack: AckNeed;
+  readonly trace: TurnTrace;
   cancelled: boolean;
+}
+
+interface QueuedTurn {
+  readonly text: string;
+  readonly interactionId: string;
+  readonly sourceEventId?: string;
+  /** The turn's trace, started when the transcript first arrived, so queueing time shows up in it. */
+  readonly trace: TurnTrace;
 }
 
 export interface TaskExecutorOptions {
@@ -81,6 +94,8 @@ export interface TaskExecutorOptions {
   /** Assigns each emitted event's `sequence`. Default: this executor's own EventSequencer; production passes the process-wide one (see ../protocol/sequence.ts). */
   readonly nextSequence?: () => number;
   readonly ackGraceMs?: number;
+  /** For a turn the ack gate says can be answered right away: the silence tolerated before a neutral "嗯，稍等". Default 2500 ms. */
+  readonly immediateAckSafetyMs?: number;
   readonly toolAckGenerator?: ToolAckGenerator;
   readonly fillerStartMs?: number;
   readonly fillerIntervalMs?: number;
@@ -88,7 +103,6 @@ export interface TaskExecutorOptions {
 
 export class TaskExecutor {
   private readonly taskNest: TaskNest;
-  private readonly reflexRouter: ReflexRouter;
   private readonly sessionManager: PiRoleSessionManager;
   private readonly voiceHerald: VoiceHerald;
   private readonly trafficCommander: TrafficCommander;
@@ -101,17 +115,17 @@ export class TaskExecutor {
   private readonly turnDecider: TurnDecider;
   private readonly onTerminal: (() => void) | undefined;
   private readonly ackGraceMs: number;
+  private readonly immediateAckSafetyMs: number | undefined;
   private readonly toolAckGenerator: ToolAckGenerator;
   private readonly fillerStartMs: number;
   private readonly fillerIntervalMs: number;
   private readonly nextSequence: () => number;
   private activeTask: ActiveTaskInfo | undefined;
   private activeFillerScheduler: LongTaskFillerScheduler | undefined;
-  private readonly pendingQueue: Array<{ text: string; interactionId: string; sourceEventId?: string }> = [];
+  private readonly pendingQueue: QueuedTurn[] = [];
 
   constructor(options: TaskExecutorOptions) {
     this.taskNest = options.taskNest;
-    this.reflexRouter = options.reflexRouter;
     this.sessionManager = options.sessionManager;
     this.voiceHerald = options.voiceHerald;
     this.trafficCommander = options.trafficCommander;
@@ -126,6 +140,7 @@ export class TaskExecutor {
     const ownSequencer = new EventSequencer();
     this.nextSequence = options.nextSequence ?? ((): number => ownSequencer.next());
     this.ackGraceMs = options.ackGraceMs ?? DEFAULT_ACK_GRACE_MS;
+    this.immediateAckSafetyMs = options.immediateAckSafetyMs;
     this.toolAckGenerator = options.toolAckGenerator ?? new ToolAckGenerator();
     this.fillerStartMs = options.fillerStartMs ?? DEFAULT_FILLER_START_MS;
     this.fillerIntervalMs = options.fillerIntervalMs ?? DEFAULT_FILLER_INTERVAL_MS;
@@ -145,11 +160,20 @@ export class TaskExecutor {
     // ("你的话好像没说完？"). Ignore very short utterances entirely.
     if (!text || text.length < 2) return;
     console.log(`[task-executor] inbound transcript "${text.slice(0, 60)}" (event ${event.event_id})`);
-    await this.onVoiceTranscript(text, event.interaction_id ?? connectionId, event.event_id);
+    await this.onVoiceTranscript(text, event.interaction_id ?? connectionId, event.event_id, new TurnTrace({ transcriptAt: event.timestamp }));
   };
 
-  /** Routes a final transcript, cancels/steers, or creates + runs a task. */
-  async onVoiceTranscript(text: string, interactionId: string, sourceEventId?: string): Promise<string | undefined> {
+  /**
+   * Routes a final transcript, cancels/steers, or creates + runs a task.
+   * `trace` is the turn's timing record; a queued turn passes the one it
+   * started with when it first arrived.
+   */
+  async onVoiceTranscript(
+    text: string,
+    interactionId: string,
+    sourceEventId?: string,
+    trace: TurnTrace = new TurnTrace(),
+  ): Promise<string | undefined> {
     this.activeFillerScheduler?.stop();
     const pending = this.confirmation?.pendingQuestion();
     const outcome = await this.turnDecider.decide(
@@ -167,6 +191,8 @@ export class TaskExecutor {
       this.confirmation?.recordAnswer(outcome.answer);
     }
     const decision = outcome.route;
+    trace.mark("decided");
+    trace.set({ route: decision.kind, ack: outcome.ack ?? "unknown" });
     // The decision may have taken a moment; act on the task state as it is now.
     const active = this.activeTask;
 
@@ -188,7 +214,8 @@ export class TaskExecutor {
     // process it after the active task reaches a terminal state.
     if (active) {
       console.log(`[task-executor] task ${active.taskId} busy, queuing "${text.slice(0, 40)}" (queue=${this.pendingQueue.length + 1})`);
-      this.pendingQueue.push({ text, interactionId, sourceEventId });
+      trace.mark("queued");
+      this.pendingQueue.push({ text, interactionId, sourceEventId, trace });
       return;
     }
 
@@ -207,7 +234,9 @@ export class TaskExecutor {
     console.log(`[task-executor] assigned task ${task.id}`);
     this.server.broadcast(this.buildEvent("task.assigned", task.id, interactionId, { role_id: roleId }));
 
-    this.startTask(task.id, roleId, interactionId, text);
+    trace.set({ role: roleId });
+    trace.mark("task_started");
+    this.startTask(task.id, roleId, interactionId, text, outcome.ack ?? "unknown", trace);
     return task.id;
   }
 
@@ -229,8 +258,8 @@ export class TaskExecutor {
     };
   }
 
-  private startTask(taskId: string, roleId: string, interactionId: string, text: string): void {
-    const taskInfo: ActiveTaskInfo = { taskId, roleId, interactionId, goal: text, cancelled: false };
+  private startTask(taskId: string, roleId: string, interactionId: string, text: string, ack: AckNeed, trace: TurnTrace): void {
+    const taskInfo: ActiveTaskInfo = { taskId, roleId, interactionId, goal: text, ack, trace, cancelled: false };
     this.activeTask = taskInfo;
     console.log(`[task-executor] START task ${taskId} role=${roleId} goal="${text.slice(0, 50)}"`);
 
@@ -246,36 +275,35 @@ export class TaskExecutor {
     });
   }
 
-  /** Starts the next queued transcript once the active task is terminal. */
+  /**
+   * Starts the next queued transcript once the active task is terminal. It
+   * goes through the same decision path as a fresh one: what the utterance
+   * means may have changed now that the task it arrived during is over, and
+   * the turn needs its ack-gate reading and lifecycle events like any other.
+   */
   private drainQueue(): void {
     if (this.activeTask) return;
     const next = this.pendingQueue.shift();
     if (!next) return;
     console.log(`[task-executor] DRAIN queue -> "${next.text.slice(0, 40)}" (remaining=${this.pendingQueue.length})`);
-    const decision = this.reflexRouter.route(next.text, this.buildRouteState(undefined));
-    if (decision.kind === "cancel" || decision.kind === "stop_speech") {
-      void this.handleCancel(next.interactionId).catch(() => {});
-      return;
-    }
-    const roleId = decision.roleId ?? DEFAULT_GENERAL_ROLE_ID;
-    void (async () => {
-      try {
-        const task = await this.taskNest.create({
-          goal: next.text,
-          interactionId: next.interactionId,
-          metadata: next.sourceEventId ? { sourceEventId: next.sourceEventId } : {},
-        });
-        await this.taskNest.assign(task.id, roleId);
-        this.startTask(task.id, roleId, next.interactionId, next.text);
-      } catch {
-        return;
-      }
-    })();
+    void this.onVoiceTranscript(next.text, next.interactionId, next.sourceEventId, next.trace).then(
+      (taskId) => {
+        // The turn started no task (e.g. it now reads as "stop"): nothing will
+        // reach a terminal state to drain the rest, so move on to the next one.
+        if (taskId === undefined) this.drainQueue();
+      },
+      (error: unknown) => {
+        const reason = error instanceof Error ? error.message : String(error);
+        console.warn(`[task-executor] queued turn "${next.text.slice(0, 40)}" failed to start: ${reason}`);
+        this.drainQueue();
+      },
+    );
   }
 
   /** Drives running → terminal. Subscribes before prompt so no event is missed. */
   private async runTask(taskInfo: ActiveTaskInfo, text: string): Promise<void> {
-    const { taskId, roleId, interactionId } = taskInfo;
+    const { taskId, roleId, interactionId, trace } = taskInfo;
+    let outcome: "completed" | "failed" | "cancelled" = "failed";
 
     let ackTimer: ReturnType<typeof setTimeout> | undefined;
     let unsubscribe: (() => void) | undefined;
@@ -288,7 +316,7 @@ export class TaskExecutor {
       onSpeak: (fillerText) => {
         const directive = this.voiceHerald.acceptLocalSpeech(fillerText, "progress", taskId);
         if (directive) {
-          this.deliverSpeech(directive, taskId, interactionId);
+          this.deliverSpeech(directive, taskId, interactionId, trace);
         }
       },
     });
@@ -301,17 +329,18 @@ export class TaskExecutor {
       await this.taskNest.transition(taskId, "running");
 
       const finalTranscriptAtMs = Date.now();
+      const ackPlan = planAck(taskInfo.ack, roleId, { graceMs: this.ackGraceMs, immediateSafetyMs: this.immediateAckSafetyMs });
       ackTimer = setTimeout(() => {
         if (receiptDelivered || taskInfo.cancelled) return;
         const directive = this.trafficCommander.evaluate(
-          { taskId, running: true, finalTranscriptAtMs, transcript: text },
+          { taskId, running: true, finalTranscriptAtMs, transcript: text, ackAction: ackPlan.action },
           Date.now(),
         );
         if (directive) {
           receiptDelivered = true;
-          this.deliverSpeech(directive, taskId, interactionId);
+          this.deliverSpeech(directive, taskId, interactionId, trace);
         }
-      }, this.ackGraceMs);
+      }, ackPlan.delayMs);
 
       const manifest = this.roleRegistry.get(roleId);
       if (!manifest) throw new Error(`TaskExecutor: unknown role "${roleId}"`);
@@ -323,12 +352,17 @@ export class TaskExecutor {
 
         if (update.type === "tool.started" || update.type === "tool.completed" || update.type === "tool.failed") {
           this.logToolEvent(update, taskId, interactionId, toolStartedAtMs);
+          const toolName = readString(update.payload["tool_name"]) ?? "tool";
+          const toolCallId = readString(update.payload["tool_call_id"]) ?? toolName;
+          if (update.type === "tool.started") trace.toolStarted(toolCallId, toolName);
+          else trace.toolEnded(toolCallId, update.type === "tool.completed");
         }
 
         // Accumulate text delta for summary construction. Progress text is
         // already speech-normalized (newlines collapsed) by PiEventAdapter.
         if (update.type === "task.progress" && typeof update.payload["text"] === "string") {
           accumulatedText += update.payload["text"] as string;
+          trace.markOnce("first_text");
         }
 
         if (update.type === "tool.started") {
@@ -347,7 +381,7 @@ export class TaskExecutor {
               taskId,
             );
             if (directive) {
-              this.deliverSpeech(directive, taskId, interactionId);
+              this.deliverSpeech(directive, taskId, interactionId, trace);
             }
           }
           return;
@@ -386,7 +420,7 @@ export class TaskExecutor {
           if (directive.kind === "progress" && update.type === "task.progress") {
             fillerScheduler.touch();
           }
-          const delivered = this.deliverSpeech(directive, taskId, interactionId);
+          const delivered = this.deliverSpeech(directive, taskId, interactionId, trace);
           if (delivered && directive.kind === "progress" && update.type === "task.progress") {
             deliveredProgressText += directive.text;
           }
@@ -397,6 +431,7 @@ export class TaskExecutor {
       });
 
       const injectedText = await this.buildPromptWithMemories(text);
+      trace.mark("prompt_sent");
       await this.sessionManager.prompt(roleId, taskId, injectedText);
       if (taskInfo.cancelled) return;
 
@@ -407,15 +442,19 @@ export class TaskExecutor {
       const summary = accumulatedText.trim();
       const payload: Record<string, unknown> = summary.length > 0 ? { summary } : {};
       await this.taskNest.transition(taskId, "completed");
-      this.emitTerminal("task.completed", taskId, interactionId, payload, deliveredProgressText);
+      outcome = "completed";
+      this.emitTerminal("task.completed", taskId, interactionId, payload, deliveredProgressText, trace);
     } catch (error) {
       if (taskInfo.cancelled) return;
       const reason = error instanceof Error ? error.message : String(error);
       // Transition may fail if already terminal — swallow.
       try { await this.taskNest.transition(taskId, "failed"); } catch { /* ok */ }
-      this.emitTerminal("task.failed", taskId, interactionId, { reason });
+      this.emitTerminal("task.failed", taskId, interactionId, { reason }, undefined, trace);
     } finally {
       if (ackTimer) clearTimeout(ackTimer);
+      trace.mark("ended");
+      trace.set({ outcome: taskInfo.cancelled ? "cancelled" : outcome });
+      this.recordTrace(trace, taskId, interactionId);
       fillerScheduler.stop();
       if (this.activeFillerScheduler === fillerScheduler) this.activeFillerScheduler = undefined;
       this.trafficCommander.forget(taskId);
@@ -451,6 +490,7 @@ export class TaskExecutor {
     interactionId: string,
     payload: Record<string, unknown>,
     deliveredProgressText?: string,
+    trace?: TurnTrace,
   ): void {
     const event = this.buildEvent(type, taskId, interactionId, payload);
     const directive = this.voiceHerald.accept(event);
@@ -468,7 +508,7 @@ export class TaskExecutor {
     );
     console.log(`[task-executor] emitTerminal ${type} directive=${directive?.kind ?? "none"} skipSpeech=${skip} already=${deliveredProgressText?.length ?? 0}chars`);
     if (directive && !skip && !suppressUnrepeatedCompletion) {
-      this.deliverSpeech(directive, taskId, interactionId);
+      this.deliverSpeech(directive, taskId, interactionId, trace);
     }
     try { this.server.broadcast(event); } catch { /* server closed */ }
     this.onTerminal?.();
@@ -505,8 +545,19 @@ export class TaskExecutor {
     }
   }
 
-  private deliverSpeech(directive: SpeechDirective, taskId: string, interactionId: string): boolean {
+  /** Records the turn's timing into the HCI event log as `turn.trace` (never broadcast). */
+  private recordTrace(trace: TurnTrace, taskId: string, interactionId: string): void {
+    if (!this.eventLog) return;
+    try {
+      this.eventLog(this.buildEvent("turn.trace", taskId, interactionId, trace.toPayload()));
+    } catch {
+      // The HCI log is best-effort; it must never disturb task execution.
+    }
+  }
+
+  private deliverSpeech(directive: SpeechDirective, taskId: string, interactionId: string, trace?: TurnTrace): boolean {
     console.log(`[task-executor] SPEECH kind=${directive.kind} "${directive.text.slice(0, 60)}"`);
+    trace?.speech(directive.kind);
     const event = this.buildEvent("voice.speech.enqueue", taskId, interactionId, {
       text: directive.text,
       kind: directive.kind,

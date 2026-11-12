@@ -24,6 +24,7 @@ import { MailConfirmationGate } from "../../src/tools/mail/mail-confirmation.js"
 import { TaskExecutor } from "../../src/tasks/task-executor.js";
 import { TaskNest } from "../../src/tasks/task-nest.js";
 import { TrafficCommander } from "../../src/voice/traffic-commander.js";
+import { AckGenerator } from "../../src/voice/ack-generator.js";
 import { VoiceHerald } from "../../src/voice/voice-herald.js";
 import type { RuntimeWebSocketServer } from "../../src/transport/websocket-server.js";
 
@@ -169,6 +170,110 @@ describe("TaskExecutor + decision layer", () => {
     await executor.onVoiceTranscript("好，发吧", "conv-5");
     expect(gate.consume(pending.id, "send:a")).toEqual({ ok: true });
     client.stop();
+    await db.close();
+  });
+});
+
+/** Answers after `ms` with one sentence, saying nothing before that. */
+class SlowAnswerSession extends QuietSession {
+  prompts: string[] = [];
+  constructor(private readonly ms: number) {
+    super();
+  }
+  override async prompt(text?: unknown): Promise<void> {
+    this.prompts.push(String(text));
+    const emit = (e: object) => (this as unknown as { listeners: Set<(e: AgentSessionEvent) => void> }).listeners.forEach((l) => l(e as AgentSessionEvent));
+    emit({ type: "agent_start" });
+    await new Promise((r) => setTimeout(r, this.ms));
+    emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "我是 Marcus。" } });
+    emit({ type: "agent_end", willRetry: false });
+  }
+}
+
+async function ackHarness(session: SlowAnswerSession) {
+  const db = await DatabaseClient.open(join(tempDir, `${randomUUID()}.sqlite3`));
+  const registry = new RoleManifestRegistry();
+  for (const m of [GENERAL_ROLE_MANIFEST, WEB_ROLE_MANIFEST, MAIL_ROLE_MANIFEST]) registry.register(m);
+  const sessionManager = new PiRoleSessionManager({ registry, provider: async () => session, flushIntervalMs: 2 });
+  const captured: RealtimeEvent[] = [];
+  const logged: RealtimeEvent[] = [];
+  const server = { broadcast: (e: RealtimeEvent) => captured.push(e) } as unknown as RuntimeWebSocketServer;
+  const client = new JevClient({ onWarn: () => {} });
+  const reflexRouter = new ReflexRouter();
+  const executor = new TaskExecutor({
+    taskNest: new TaskNest({ db }),
+    reflexRouter,
+    sessionManager,
+    voiceHerald: new VoiceHerald(),
+    trafficCommander: new TrafficCommander({ ackGraceMs: 30, ackGenerator: new AckGenerator() }),
+    server,
+    roleRegistry: registry,
+    ackGraceMs: 30,
+    immediateAckSafetyMs: 150,
+    eventLog: (e) => logged.push(e),
+    turnDecider: new TurnDecider({ engine: new DecisionEngine({ client, mode: "off" }), reflex: reflexRouter, ackMode: "shadow" }),
+  });
+  const receipts = () => captured.filter((e) => e.type === "voice.speech.enqueue" && e.payload["kind"] === "receipt").map((e) => e.payload["text"] as string);
+  return { db, executor, captured, logged, receipts };
+}
+
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+async function until(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition() && Date.now() < deadline) await wait(10);
+}
+
+describe("TaskExecutor + ack gate", () => {
+  it("says no 'let me check' before answering a greeting", async () => {
+    const { db, executor, receipts, logged } = await ackHarness(new SlowAnswerSession(80));
+
+    await executor.onVoiceTranscript("请用一句话介绍你自己。", "conv-a1");
+    await wait(140);
+
+    expect(receipts()).toEqual([]);
+    expect(logged.find((e) => e.type === "turn.trace")?.payload).toMatchObject({ ack: "immediate" });
+    await db.close();
+  });
+
+  it("still breaks a long silence on a greeting with a neutral ack", async () => {
+    const { db, executor, receipts } = await ackHarness(new SlowAnswerSession(260));
+
+    await executor.onVoiceTranscript("你好", "conv-a2");
+    await wait(320);
+
+    expect(receipts()).toEqual(["嗯，稍等。"]);
+    await db.close();
+  });
+
+  it("words the ack for a lookup as a lookup", async () => {
+    const { db, executor, receipts } = await ackHarness(new SlowAnswerSession(80));
+
+    await executor.onVoiceTranscript("帮我查一下明天上海的天气", "conv-a3");
+    await wait(140);
+
+    expect(receipts()).toHaveLength(1);
+    expect(receipts()[0]).toMatch(/查|搜/);
+    await db.close();
+  });
+
+  it("a turn queued behind a running task goes through the decision path when it starts", async () => {
+    const session = new SlowAnswerSession(60);
+    const { db, executor, captured, logged } = await ackHarness(session);
+
+    await executor.onVoiceTranscript("帮我查一下明天上海的天气", "conv-q");
+    await executor.onVoiceTranscript("再介绍一下你自己", "conv-q");
+    await until(() => logged.filter((e) => e.type === "turn.trace").length >= 2);
+
+    // Both turns were announced as tasks (the queued one used to skip task.created).
+    expect(captured.filter((e) => e.type === "task.created").map((e) => e.payload["goal"])).toEqual([
+      "帮我查一下明天上海的天气",
+      "再介绍一下你自己",
+    ]);
+    const traces = logged.filter((e) => e.type === "turn.trace").map((e) => e.payload as { marks: Record<string, number>; ack: string });
+    expect(traces).toHaveLength(2);
+    expect(typeof traces[1]!.marks["queued"]).toBe("number");
+    expect(traces[1]!.marks["task_started"]!).toBeGreaterThan(traces[1]!.marks["queued"]!);
+    expect(traces[1]!.ack).toBe("immediate");
     await db.close();
   });
 });
