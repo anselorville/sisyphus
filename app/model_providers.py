@@ -39,6 +39,7 @@ from typing import Any, Literal
 from loguru import logger
 
 from app.config import Settings
+from app.minimax_stt_services import MINIMAX_ASR_MODEL
 from app.voxcpm_tts_services import VOXCPM2_CUDA_DEFAULT_MODEL, VOXCPM2_CUDA_PROVIDER
 from app.zhipu_services import ZHIPU_ASR_DEFAULT_MODEL
 
@@ -69,7 +70,7 @@ AVAILABLE_LOCAL_ENGINES: tuple[str, ...] = ("omlx",)
 CAPABILITY_PROVIDERS: dict[ModelCapability, tuple[str, ...]] = {
     "text": ("deepseek", "anthropic", "openrouter"),
     "speech": ("minimax", "edge_tts", "cartesia", "openrouter", VOXCPM2_CUDA_PROVIDER),
-    "transcription": ("zhipu", "assemblyai", "deepgram", "openrouter"),
+    "transcription": ("zhipu", "minimax", "assemblyai", "deepgram", "openrouter"),
     "omni": (),
 }
 
@@ -425,6 +426,8 @@ def available_models(settings: Settings, capability: ModelCapability, provider: 
         return [DEEPGRAM_DEFAULT_MODEL]
     if provider == "assemblyai" and capability == "transcription":
         return [ASSEMBLYAI_DEFAULT_MODEL]
+    if provider == "minimax" and capability == "transcription":
+        return [MINIMAX_ASR_MODEL]
     if provider == "zhipu" and capability == "transcription":
         return [ZHIPU_ASR_DEFAULT_MODEL]
     if provider == "openrouter":

@@ -41,3 +41,26 @@
   border-top: 1px solid var(--ds-color-border);
   background: var(--ds-color-bg-surface);
 }
+
+/* Keep subtitles and the talk control side by side on small landscape displays. */
+@media (max-height: 400px) and (min-aspect-ratio: 4/3) {
+  .screen {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .screen > :first-child {
+    grid-column: 1 / -1;
+  }
+
+  .content {
+    padding: var(--ds-space-2);
+  }
+
+  .footer {
+    padding: var(--ds-space-4);
+    border-top: none;
+    border-left: 1px solid var(--ds-color-border);
+  }
+}

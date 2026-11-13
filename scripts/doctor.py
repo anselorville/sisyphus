@@ -31,6 +31,7 @@ ICON = {OK: "✓", WARN: "!", FAIL: "✗"}
 
 # provider id -> (human label, env var that must be set). None = needs no key.
 ASR_KEYS = {
+    "minimax": ("MiniMax ASR", "MINIMAX_API_KEY"),
     "zhipu": ("Zhipu GLM ASR", "GLM_API_KEY"),
     "assemblyai": ("AssemblyAI", "ASSEMBLYAI_API_KEY"),
     "deepgram": ("Deepgram", "DEEPGRAM_API_KEY"),

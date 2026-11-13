@@ -328,3 +328,18 @@ LLM。
 - 蜂群治理层（Queen/Population/GeneBank/PheromoneMap）是刻意停放的：它
   接在组合根上，但不参与路由决策；见 `CONTEXT.md` 和
   `docs/adr/0001-*.md`。
+
+## 树莓派触屏开机启动
+
+在已开启桌面自动登录的 64 位 Raspberry Pi OS 上，以登录桌面的普通用户运行下列命令。需要 Chromium、curl、uv 和 Node.js（仓库使用的最低版本见 `agent-runtime/package.json`）。前端和 agent-runtime 的 `dist` 也可以先在开发机上编译再复制到派上，`agent-runtime` 的运行依赖仍须在 ARM64 上安装。
+
+```sh
+uv sync --frozen --no-dev --python /usr/bin/python3
+npm --prefix agent-runtime ci && npm --prefix agent-runtime run build
+npm --prefix client ci && npm --prefix client run build
+scripts/raspberry-pi/install-kiosk.sh
+```
+
+启动前在项目的 `.env` 中配置所用供应商的密钥，设置 `ENGINE=cloud`、`WEBRTC_HOST=127.0.0.1` 和 `WEBRTC_PORT=7860`。桌面登录后 Chromium 会全屏打开本机应用。可在 Settings → Model Provider → Cloud → Listening 选择 `minimax` 和 `asr-1.0`，识别与合成都使用 `MINIMAX_API_KEY`。语音输入需要系统可见的麦克风。
+
+用 `journalctl --user -b -u 'sisyphus-*'` 查看本次启动日志。要恢复普通桌面，删除 `~/.config/autostart/sisyphus-kiosk.desktop`，然后运行 `systemctl --user stop sisyphus-kiosk`。如需同时停用后台服务，运行 `systemctl --user disable --now sisyphus-{backend,runtime,screen}.service`。

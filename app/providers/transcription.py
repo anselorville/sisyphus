@@ -10,6 +10,7 @@ from pipecat.transcriptions.language import Language
 from app.config import Settings
 from app.connectivity import has_internet_connection
 from app.local_services import build_local_stt
+from app.minimax_stt_services import MINIMAX_ASR_MODEL, MiniMaxSTTService
 from app.mlx_services import build_mlx_stt
 from app.model_adapters import omlx_config_model_type
 from app.model_providers import (
@@ -79,6 +80,13 @@ def _build_cloud_stt(settings: Settings, cloud: CloudProviderConfig) -> STTServi
         return build_stt_from_manifest(
             settings,
             model=_openrouter_model_or_first(settings, cloud.transcription.model, "transcription"),
+            language_hint=language_hint,
+        )
+    if provider == "minimax":
+        _require(settings.minimax_api_key, "MINIMAX_API_KEY", provider)
+        return MiniMaxSTTService(
+            api_key=settings.minimax_api_key,
+            model=cloud.transcription.model or MINIMAX_ASR_MODEL,
             language_hint=language_hint,
         )
     if provider == "assemblyai":
