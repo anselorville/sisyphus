@@ -64,3 +64,14 @@
     border-left: 1px solid var(--ds-color-border);
   }
 }
+
+@media (max-width: 480px) and (orientation: portrait), (device-width: 320px) and (device-height: 480px) {
+  .content {
+    padding: var(--ds-space-2);
+    gap: var(--ds-space-2);
+  }
+
+  .footer {
+    padding: var(--ds-space-3);
+  }
+}

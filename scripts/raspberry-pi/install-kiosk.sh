@@ -10,6 +10,13 @@ done
 units="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 autostart="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
 mkdir -p "$units" "$autostart"
+# Raspberry Pi OS runs kanshi on each desktop login.
+outputs="${XDG_CONFIG_HOME:-$HOME/.config}/kanshi/config"
+if [[ ! -s "$outputs" ]] && compgen -G "/sys/class/drm/card*-SPI-1/status" >/dev/null; then
+  mkdir -p "$(dirname "$outputs")"
+  printf 'profile {\n  output SPI-1 transform 90\n}\n' > "$outputs"
+  pkill -HUP -u "$UID" -x kanshi || true
+fi
 
 write_service() {
   local name=$1
@@ -43,7 +50,7 @@ PartOf=graphical-session.target
 
 [Service]
 ExecStartPre=/bin/sh -c 'until curl -fsS -o /dev/null http://127.0.0.1:1420/; do sleep 1; done'
-ExecStart="$chromium" --ozone-platform=wayland --password-store=basic --force-device-scale-factor=0.9 --user-data-dir=%h/.local/share/sisyphus-chromium --no-first-run --disable-session-crashed-bubble --kiosk http://127.0.0.1:1420/
+ExecStart="$chromium" --ozone-platform=wayland --password-store=basic --force-device-scale-factor=1 --user-data-dir=%h/.local/share/sisyphus-chromium --no-first-run --disable-session-crashed-bubble --kiosk http://127.0.0.1:1420/?display=pi-portrait
 Restart=on-failure
 RestartSec=3
 UNIT

@@ -10,3 +10,9 @@
   z-index: 10;
   background: var(--ds-color-bg-app);
 }
+
+/* Chromium's minimum kiosk window can exceed the physical touchscreen. */
+.portraitKiosk {
+  max-width: 320px;
+  container-type: inline-size;
+}

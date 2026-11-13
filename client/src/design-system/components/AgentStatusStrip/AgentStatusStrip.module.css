@@ -140,3 +140,8 @@
     transform: rotate(360deg);
   }
 }
+
+@container (max-width: 320px) {
+  .ecologyChip { display: none; }
+  .strip { gap: var(--ds-space-1); padding-inline: var(--ds-space-1); }
+}

@@ -87,7 +87,7 @@ function App() {
   const statusDetail = activeTaskCount > 0 ? `${activeTaskCount} task${activeTaskCount === 1 ? "" : "s"} running` : undefined;
 
   return (
-    <div className={styles.root}>
+    <div className={new URLSearchParams(window.location.search).get("display") === "pi-portrait" ? `${styles.root} ${styles.portraitKiosk}` : styles.root}>
       <AgentHomeScreen
         connectionState={conn.connectionState}
         micLevel={phase === "speaking" ? agentLevel : micLevel}
